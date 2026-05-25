@@ -21,9 +21,9 @@ FastAPI Backend
       ↓
 ┌─────────────────────────────────┐
 │  RAG Pipeline                   │
-│  1. Embed query (OpenAI)        │
+│  1. Embed query (OpenRouter)    │
 │  2. pgvector similarity search  │
-│  3. Claude/GPT answers with     │
+│  3. Claude Haiku answers with   │
 │     retrieved context           │
 └─────────────────────────────────┘
       ↓
@@ -34,27 +34,31 @@ PostgreSQL + pgvector
 
 - **Backend:** Python 3.11, FastAPI, SQLAlchemy async
 - **Bot:** python-telegram-bot 21.x
-- **AI:** OpenRouter (Claude Haiku / GPT-4o-mini)
-- **Embeddings:** OpenAI text-embedding-3-small
+- **AI:** OpenRouter — `anthropic/claude-haiku-4.5` for answers, `openai/text-embedding-3-small` for embeddings
 - **Vector DB:** PostgreSQL + pgvector extension
 - **Containerization:** Docker + docker-compose
+
+> All AI calls (LLM + embeddings) go through a single `OPENROUTER_API_KEY`. No separate OpenAI key needed.
 
 ## 🚀 Quick Start
 
 ```bash
 # 1. Clone and configure
 cp .env.example .env
-# Fill in your API keys in .env
+# Fill in OPENROUTER_API_KEY and TELEGRAM_BOT_TOKEN in .env
 
-# 2. Run everything
-docker-compose up -d
+# 2. Start all services (postgres → api → bot, in health-checked order)
+docker compose up -d
 
-# 3. Upload a document
+# 3. Seed with demo data (Acme Gym FAQ)
+docker compose exec api python scripts/seed_demo.py
+
+# 4. Upload your own document
 curl -X POST http://localhost:8000/upload \
   -F "file=@your_document.pdf" \
   -F "namespace=my_company"
 
-# 4. Start chatting on Telegram
+# 5. Start chatting on Telegram
 # Find your bot and send /start
 ```
 
@@ -62,18 +66,49 @@ curl -X POST http://localhost:8000/upload \
 
 ```
 ├── src/
-│   ├── main.py          # FastAPI app + upload endpoint
+│   ├── main.py          # FastAPI app — /upload, /health, /stats, /namespace
 │   ├── bot.py           # Telegram bot handlers
 │   ├── rag.py           # RAG pipeline (embed, search, answer)
 │   ├── db.py            # Database models + pgvector setup
 │   └── config.py        # Settings from .env
-├── documents/           # Sample PDFs for testing
+├── documents/           # Place PDFs here for manual upload
 ├── scripts/
-│   └── seed_demo.py     # Seeds DB with sample data
+│   └── seed_demo.py     # Seeds DB with Acme Gym sample data
+├── tests/
+│   └── test_rag_pipeline.py  # Unit + integration smoke tests
 ├── docker-compose.yml
 ├── Dockerfile
 └── requirements.txt
 ```
+
+## 🔑 Environment Variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `OPENROUTER_API_KEY` | Yes | OpenRouter key — covers both LLM and embeddings |
+| `TELEGRAM_BOT_TOKEN` | Yes | From [@BotFather](https://t.me/BotFather) |
+| `DATABASE_URL` | Yes | Use `@postgres:5432` inside Docker, `@localhost:5432` for local dev |
+| `LLM_MODEL` | No | Default: `anthropic/claude-haiku-4.5` |
+| `EMBEDDING_MODEL` | No | Default: `openai/text-embedding-3-small` (via OpenRouter) |
+
+## 🧪 Tests
+
+```bash
+# Unit tests (no external services needed)
+docker compose exec api python -m pytest tests/ -v -k "not integration"
+
+# Integration tests (requires running services + valid API keys)
+docker compose exec api python -m pytest tests/ -v
+```
+
+## 🤖 Bot Commands
+
+| Command | Description |
+|---|---|
+| `/start` | Welcome message + instructions |
+| `/sources` | List indexed documents |
+| `/clear` | Reset conversation history |
+| `/help` | Show help |
 
 ## 💼 Use Cases (for clients)
 
@@ -85,5 +120,5 @@ curl -X POST http://localhost:8000/upload \
 ## 📊 Performance
 
 - Embedding: ~200ms per query
-- Vector search: ~50ms (pgvector IVFFLAT index)
+- Vector search: ~50ms (pgvector cosine similarity)
 - Total response time: ~1.5-2.5s end-to-end
