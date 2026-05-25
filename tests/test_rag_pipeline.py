@@ -62,7 +62,7 @@ async def test_generate_answer_no_context():
     """Returns fallback message without making any API call."""
     from rag import generate_answer
     result = await generate_answer([], "What hours are you open?", [])
-    assert "couldn't find" in result.lower()
+    assert "no encontré" in result.lower()
 
 
 # ─── Unit: index_chunks with empty list ──────────────────────────────────────

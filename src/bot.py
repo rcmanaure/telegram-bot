@@ -2,12 +2,10 @@
 Telegram bot — the interface clients see in the demo.
 
 Commands:
-  /start    → welcome + instructions
-  /clear    → reset conversation history
-  /sources  → show indexed documents
-  /help     → show help
-
-Any other message → RAG query
+  /start    → bienvenida + instrucciones
+  /clear    → resetear historial de conversación
+  /sources  → mostrar documentos indexados
+  /help     → mostrar ayuda
 """
 import asyncio
 import httpx
@@ -32,14 +30,14 @@ def get_namespace(user_id: int) -> str:
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     text = (
-        f"👋 Hi {user.first_name}!\n\n"
-        "I'm a document assistant. I can answer questions about any document "
-        "that has been uploaded to my knowledge base.\n\n"
-        "Just send me your question and I'll search the documents for the answer.\n\n"
-        "Commands:\n"
-        "• /sources — see what documents I know about\n"
-        "• /clear — reset our conversation\n"
-        "• /help — show this message again"
+        f"👋 ¡Hola {user.first_name}!\n\n"
+        "Soy un asistente de documentos. Puedo responder preguntas sobre cualquier "
+        "documento que haya sido cargado a mi base de conocimiento.\n\n"
+        "Envíame tu pregunta y buscaré la respuesta en los documentos.\n\n"
+        "Comandos:\n"
+        "• /sources — ver qué documentos conozco\n"
+        "• /clear — resetear nuestra conversación\n"
+        "• /help — mostrar este mensaje de nuevo"
     )
     await update.message.reply_text(text)
 
@@ -63,13 +61,13 @@ async def cmd_sources(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
             if not ns_docs:
                 await update.message.reply_text(
-                    "📭 No documents indexed yet. Upload a PDF via the API to get started."
+                    "📭 No hay documentos indexados aún. Cargá un PDF vía la API para comenzar."
                 )
                 return
 
-            lines = ["📚 *Documents I know about:*\n"]
+            lines = ["📚 *Documentos que conozco:*\n"]
             for doc in ns_docs:
-                lines.append(f"• {doc['source']} ({doc['chunks']} chunks)")
+                lines.append(f"• {doc['source']} ({doc['chunks']} fragmentos)")
 
             await update.message.reply_text(
                 "\n".join(lines),
@@ -77,7 +75,7 @@ async def cmd_sources(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
         except Exception as e:
             print(f"cmd_sources error: {e}")
-            await update.message.reply_text("Could not fetch document list.")
+            await update.message.reply_text("No se pudo obtener la lista de documentos.")
 
 
 # ─── /clear ──────────────────────────────────────────────────────────────────
@@ -95,7 +93,7 @@ async def cmd_clear(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await db.commit()
 
     await update.message.reply_text(
-        "🗑️ Conversation cleared. Fresh start!"
+        "🗑️ Conversación borrada. ¡Empezamos de cero!"
     )
 
 
@@ -121,7 +119,7 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         # Add source references if we found relevant chunks
         if chunks and chunks[0]["similarity"] > 0.75:
             sources = list({c["source"] for c in chunks[:2]})
-            source_note = f"\n\n📎 _Sources: {', '.join(sources)}_"
+            source_note = f"\n\n📎 _Fuentes: {', '.join(sources)}_"
             full_reply = answer + source_note
         else:
             full_reply = answer
@@ -136,7 +134,7 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         print(f"Error in handle_message: {e}")
         await update.message.reply_text(
-            "Sorry, I ran into an issue processing your question. Please try again."
+            "Lo siento, tuve un problema procesando tu pregunta. Por favor intentá de nuevo."
         )
 
 
@@ -156,5 +154,5 @@ def build_bot():
 
 if __name__ == "__main__":
     bot = build_bot()
-    print("🤖 Telegram bot started...")
+    print("🤖 Telegram bot iniciado...")
     bot.run_polling(drop_pending_updates=True)

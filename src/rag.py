@@ -163,14 +163,14 @@ async def retrieve_context(
 
 # ─── Generation ──────────────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """You are a helpful assistant that answers questions strictly based on the provided document context.
+SYSTEM_PROMPT = """Eres un asistente útil que responde preguntas estrictamente basándose en el contexto de documentos proporcionado.
 
-Rules:
-- ONLY use information from the provided context. Never make up information.
-- If the context doesn't contain enough information to answer, say so clearly.
-- Cite which document/section you're referencing (e.g. "According to [filename], page X...")
-- Be concise and direct. Use bullet points when listing multiple items.
-- Respond in the same language the user is writing in (English or Spanish).
+Reglas:
+- USA ÚNICAMENTE la información del contexto provisto. Nunca inventes información.
+- Si el contexto no contiene suficiente información para responder, indícalo claramente.
+- Cita el documento o sección que estás referenciando (ej. "Según [nombre de archivo], página X...")
+- Sé conciso y directo. Usa viñetas al listar varios elementos.
+- Responde en español por defecto. Si el usuario escribe en otro idioma, responde en ese idioma.
 """
 
 async def generate_answer(
@@ -184,8 +184,8 @@ async def generate_answer(
     """
     if not context_chunks:
         return (
-            "I couldn't find relevant information in the documents to answer your question. "
-            "Try rephrasing or ask about a different topic covered in the uploaded documents."
+            "No encontré información relevante en los documentos para responder tu pregunta. "
+            "Intentá reformularla o preguntá sobre otro tema cubierto en los documentos cargados."
         )
 
     # Format context for the prompt
