@@ -262,6 +262,9 @@ async def get_history(
     return [{"role": r.role, "content": r.content} for r in rows]
 
 
+HISTORY_ROW_CAP = 50  # max rows per user per namespace (~25 turns)
+
+
 async def save_turn(
     db: AsyncSession,
     telegram_user_id: str,
@@ -281,6 +284,22 @@ async def save_turn(
         role="assistant",
         content=assistant_msg,
     ))
+    await db.commit()
+
+    # Trim old rows, keeping only the most recent HISTORY_ROW_CAP entries
+    await db.execute(
+        text("""
+            DELETE FROM conversations
+            WHERE telegram_user_id = :uid AND namespace = :ns
+            AND id NOT IN (
+                SELECT id FROM conversations
+                WHERE telegram_user_id = :uid AND namespace = :ns
+                ORDER BY created_at DESC
+                LIMIT :cap
+            )
+        """),
+        {"uid": telegram_user_id, "ns": namespace, "cap": HISTORY_ROW_CAP},
+    )
     await db.commit()
 
 

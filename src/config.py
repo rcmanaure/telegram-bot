@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     database_url_sync: str
 
     # Models
-    llm_model: str = "anthropic/claude-haiku-4.5"
+    llm_model: str = "openrouter/owl-alpha"
     embedding_model: str = "openai/text-embedding-3-small"
     embedding_dim: int = 1536
 
