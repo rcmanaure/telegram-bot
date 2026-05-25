@@ -5,6 +5,7 @@ FastAPI backend:
 - GET  /stats    → show indexed docs per namespace
 """
 import io
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,17 +15,22 @@ from db import init_db, get_db, DocumentChunk
 from rag import chunk_text, index_chunks
 from config import settings
 
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_db()
+    print(f"🚀 RAG Bot API running on port {settings.app_port}")
+    yield
+
+
 app = FastAPI(
     title="RAG Bot API",
     description="Upload documents, query them via Telegram bot",
     version="1.0.0",
+    lifespan=lifespan,
 )
-
-
-@app.on_event("startup")
-async def startup():
-    await init_db()
-    print(f"🚀 RAG Bot API running on port {settings.app_port}")
 
 
 @app.get("/health")
@@ -41,14 +47,17 @@ async def upload_document(
     """
     Upload a PDF and index it for RAG queries.
 
-    - **file**: PDF file to upload
+    - **file**: PDF file to upload (max 10 MB)
     - **namespace**: logical grouping (e.g. company name). Defaults to DEFAULT_NAMESPACE.
     """
-    if not file.filename.endswith(".pdf"):
+    if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "Only PDF files are supported")
 
     namespace = namespace or settings.default_namespace
     content = await file.read()
+
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, "File too large. Maximum size is 10MB.")
 
     # Parse PDF
     try:

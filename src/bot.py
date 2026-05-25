@@ -75,7 +75,8 @@ async def cmd_sources(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "\n".join(lines),
                 parse_mode="Markdown"
             )
-        except Exception:
+        except Exception as e:
+            print(f"cmd_sources error: {e}")
             await update.message.reply_text("Could not fetch document list.")
 
 

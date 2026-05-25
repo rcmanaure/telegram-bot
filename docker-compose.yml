@@ -32,6 +32,7 @@ services:
       start_period: 15s
     volumes:
       - ./src:/app/src
+      - ./tests:/app/tests
       - ./documents:/app/documents
 
   bot:
