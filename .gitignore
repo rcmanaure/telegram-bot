@@ -12,3 +12,4 @@ wheels/
 uv.lock
 pyproject.toml
 .env
+.claude
