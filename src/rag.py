@@ -20,6 +20,8 @@ openai_client = AsyncOpenAI(
     timeout=30.0,
 )
 
+http_client = httpx.AsyncClient(timeout=60)
+
 
 # ─── Chunking ────────────────────────────────────────────────────────────────
 
@@ -210,34 +212,33 @@ async def generate_answer(
     # Add current question
     messages.append({"role": "user", "content": question})
 
-    async with httpx.AsyncClient(timeout=60) as client:
-        try:
-            response = await client.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.openrouter_api_key}",
-                    "HTTP-Referer": "https://github.com/ruben-portfolio",
-                },
-                json={
-                    "model": settings.llm_model,
-                    "messages": messages,
-                    "max_tokens": 800,
-                    "temperature": 0.1,
-                }
-            )
-            response.raise_for_status()
-            data = response.json()
-            return data["choices"][0]["message"]["content"]
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 429:
-                raise RuntimeError("LLM service is rate-limited. Please try again in a moment.")
-            body = e.response.json() if e.response.headers.get("content-type", "").startswith("application/json") else e.response.text
-            msg = body.get("error", {}).get("message", str(body)) if isinstance(body, dict) else body
-            raise RuntimeError(f"LLM service error ({e.response.status_code}): {msg}")
-        except httpx.TimeoutException:
-            raise RuntimeError("LLM service timed out. Please try again.")
-        except (KeyError, IndexError):
-            raise RuntimeError("Unexpected response from LLM service.")
+    try:
+        response = await http_client.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {settings.openrouter_api_key}",
+                "HTTP-Referer": "https://github.com/ruben-portfolio",
+            },
+            json={
+                "model": settings.llm_model,
+                "messages": messages,
+                "max_tokens": 800,
+                "temperature": 0.1,
+            }
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data["choices"][0]["message"]["content"]
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 429:
+            raise RuntimeError("LLM service is rate-limited. Please try again in a moment.")
+        body = e.response.json() if e.response.headers.get("content-type", "").startswith("application/json") else e.response.text
+        msg = body.get("error", {}).get("message", str(body)) if isinstance(body, dict) else body
+        raise RuntimeError(f"LLM service error ({e.response.status_code}): {msg}")
+    except httpx.TimeoutException:
+        raise RuntimeError("LLM service timed out. Please try again.")
+    except (KeyError, IndexError):
+        raise RuntimeError("Unexpected response from LLM service.")
 
 
 # ─── Conversation History ─────────────────────────────────────────────────────

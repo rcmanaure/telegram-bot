@@ -1,6 +1,10 @@
 from pydantic_settings import BaseSettings
+from pydantic import ConfigDict
+
 
 class Settings(BaseSettings):
+    model_config = ConfigDict(env_file=".env")
+
     # API Keys
     openrouter_api_key: str
     telegram_bot_token: str
@@ -10,8 +14,8 @@ class Settings(BaseSettings):
     database_url_sync: str
 
     # Models
-    llm_model: str = "anthropic/claude-haiku-4-5-20251001"
-    embedding_model: str = "text-embedding-3-small"
+    llm_model: str = "anthropic/claude-haiku-4.5"
+    embedding_model: str = "openai/text-embedding-3-small"
     embedding_dim: int = 1536
 
     # RAG
@@ -24,7 +28,5 @@ class Settings(BaseSettings):
     app_port: int = 8000
     default_namespace: str = "demo"
 
-    class Config:
-        env_file = ".env"
 
 settings = Settings()
