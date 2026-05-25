@@ -13,7 +13,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db import DocumentChunk, Conversation
 from config import settings
 
-openai_client = AsyncOpenAI(api_key=settings.openai_api_key)
+openai_client = AsyncOpenAI(
+    api_key=settings.openrouter_api_key,
+    base_url="https://openrouter.ai/api/v1",
+    max_retries=2,
+    timeout=30.0,
+)
 
 
 # ─── Chunking ────────────────────────────────────────────────────────────────
@@ -48,20 +53,27 @@ def chunk_text(text_content: str, source: str, page: int = 0) -> list[dict]:
 
 async def embed_texts(texts: list[str]) -> list[list[float]]:
     """
-    Embed a list of texts using OpenAI's embedding model.
-    Returns list of 1536-dim vectors.
-    Batched for efficiency (max 100 texts per call).
+    Embed a list of texts via OpenRouter.
+    Returns list of 1536-dim vectors. Batched max 100 per call.
     """
+    from openai import APIError, APITimeoutError, RateLimitError
     all_embeddings = []
     batch_size = 100
 
     for i in range(0, len(texts), batch_size):
         batch = texts[i:i + batch_size]
-        response = await openai_client.embeddings.create(
-            model=settings.embedding_model,
-            input=batch,
-        )
-        all_embeddings.extend([item.embedding for item in response.data])
+        try:
+            response = await openai_client.embeddings.create(
+                model=settings.embedding_model,
+                input=batch,
+            )
+            all_embeddings.extend([item.embedding for item in response.data])
+        except RateLimitError:
+            raise RuntimeError("Embedding service is rate-limited. Try again in a moment.")
+        except APITimeoutError:
+            raise RuntimeError("Embedding service timed out. Check your OpenRouter API key and quota.")
+        except APIError as e:
+            raise RuntimeError(f"Embedding failed: {e.message}")
 
     return all_embeddings
 
@@ -122,10 +134,10 @@ async def retrieve_context(
     result = await db.execute(
         text("""
             SELECT content, source, page,
-                   1 - (embedding <=> :query_vec::vector) AS similarity
+                   1 - (embedding <=> CAST(:query_vec AS vector)) AS similarity
             FROM document_chunks
             WHERE namespace = :namespace
-            ORDER BY embedding <=> :query_vec::vector
+            ORDER BY embedding <=> CAST(:query_vec AS vector)
             LIMIT :top_k
         """),
         {
@@ -199,21 +211,33 @@ async def generate_answer(
     messages.append({"role": "user", "content": question})
 
     async with httpx.AsyncClient(timeout=60) as client:
-        response = await client.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {settings.openrouter_api_key}",
-                "HTTP-Referer": "https://github.com/ruben-portfolio",
-            },
-            json={
-                "model": settings.llm_model,
-                "messages": messages,
-                "max_tokens": 800,
-                "temperature": 0.1,  # low temp = more factual, less creative
-            }
-        )
-        response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"]
+        try:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.openrouter_api_key}",
+                    "HTTP-Referer": "https://github.com/ruben-portfolio",
+                },
+                json={
+                    "model": settings.llm_model,
+                    "messages": messages,
+                    "max_tokens": 800,
+                    "temperature": 0.1,
+                }
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data["choices"][0]["message"]["content"]
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 429:
+                raise RuntimeError("LLM service is rate-limited. Please try again in a moment.")
+            body = e.response.json() if e.response.headers.get("content-type", "").startswith("application/json") else e.response.text
+            msg = body.get("error", {}).get("message", str(body)) if isinstance(body, dict) else body
+            raise RuntimeError(f"LLM service error ({e.response.status_code}): {msg}")
+        except httpx.TimeoutException:
+            raise RuntimeError("LLM service timed out. Please try again.")
+        except (KeyError, IndexError):
+            raise RuntimeError("Unexpected response from LLM service.")
 
 
 # ─── Conversation History ─────────────────────────────────────────────────────
