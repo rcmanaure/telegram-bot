@@ -3,10 +3,12 @@ Database models and connection setup.
 Uses pgvector for similarity search on document embeddings.
 """
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, Text, DateTime, Index
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import declarative_base, sessionmaker
+
 from pgvector.sqlalchemy import Vector
+from sqlalchemy import Column, DateTime, Index, Integer, String, Text
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import declarative_base, sessionmaker
+
 from config import settings
 
 Base = declarative_base()
@@ -25,7 +27,7 @@ class DocumentChunk(Base):
     page = Column(Integer, default=0)                            # page number in PDF
     content = Column(Text, nullable=False)                       # the actual text chunk
     embedding = Column(Vector(settings.embedding_dim))           # 1536-dim vector
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     # IVFFLAT index for fast approximate nearest-neighbor search
     # For production with >100k rows, switch to HNSW:
@@ -45,11 +47,12 @@ class Conversation(Base):
     namespace = Column(String(100), nullable=False)
     role = Column(String(20), nullable=False)    # "user" | "assistant"
     content = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
 # ─── Engine + Session ────────────────────────────────────────────────────────
-
+print("🔌 Setting up database connection...")
+print(f"   Database URL: {settings.database_url}")
 engine = create_async_engine(
     settings.database_url,
     echo=False,

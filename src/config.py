@@ -3,7 +3,6 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     # API Keys
     openrouter_api_key: str
-    openai_api_key: str
     telegram_bot_token: str
 
     # Database

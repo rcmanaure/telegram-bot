@@ -57,7 +57,7 @@ async def cmd_sources(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     async with httpx.AsyncClient() as client:
         try:
-            r = await client.get(f"http://localhost:{settings.app_port}/stats")
+            r = await client.get(f"http://api:{settings.app_port}/stats")
             docs = r.json().get("indexed_documents", [])
             ns_docs = [d for d in docs if d["namespace"] == namespace]
 
@@ -130,6 +130,8 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown",
         )
 
+    except RuntimeError as e:
+        await update.message.reply_text(str(e))
     except Exception as e:
         print(f"Error in handle_message: {e}")
         await update.message.reply_text(
