@@ -5,7 +5,10 @@ Uses pgvector for similarity search on document embeddings.
 from datetime import datetime, timezone
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Column, DateTime, Index, Integer, String, Text
+from sqlalchemy import (
+    Boolean, Column, DateTime, ForeignKey, Index,
+    Integer, String, Text, func,
+)
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
@@ -14,45 +17,57 @@ from config import settings
 Base = declarative_base()
 
 
+class Tenant(Base):
+    __tablename__ = "tenants"
+
+    id = Column(Integer, primary_key=True)
+    slug = Column(String(64), unique=True, nullable=False, index=True)
+    api_key_hash = Column(String(64), unique=True, nullable=False)
+    webhook_secret = Column(String(64), nullable=False)
+    bot_token = Column(String(128), unique=True, nullable=False)
+    plan = Column(String(32), default="free")
+    billing_id = Column(String(128), nullable=True)
+    expertise_area = Column(String(255), nullable=True, default="")
+    created_at = Column(DateTime, server_default=func.now())
+    active = Column(Boolean, default=True)
+
+
 class DocumentChunk(Base):
-    """
-    Stores text chunks from uploaded documents alongside their embeddings.
-    Each chunk is a ~500 char slice of the original document.
-    """
     __tablename__ = "document_chunks"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    namespace = Column(String(100), nullable=False, index=True)  # e.g. "acme_company"
-    source = Column(String(255), nullable=False)                 # original filename
-    page = Column(Integer, default=0)                            # page number in PDF
-    content = Column(Text, nullable=False)                       # the actual text chunk
-    embedding = Column(Vector(settings.embedding_dim))           # 1536-dim vector
+    namespace = Column(String(100), nullable=False, index=True)
+    source = Column(String(255), nullable=False)
+    page = Column(Integer, default=0)
+    content = Column(Text, nullable=False)
+    embedding = Column(Vector(settings.embedding_dim))
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
-    # IVFFLAT index for fast approximate nearest-neighbor search
-    # For production with >100k rows, switch to HNSW:
-    # __table_args__ = (Index("ix_embedding_hnsw", embedding, postgresql_using="hnsw",
-    #                         postgresql_with={"m": 16, "ef_construction": 64}),)
+    __table_args__ = (
+        Index(
+            "ix_embedding_hnsw",
+            embedding,
+            postgresql_using="hnsw",
+            postgresql_with={"m": 16, "ef_construction": 64},
+        ),
+    )
 
 
 class Conversation(Base):
-    """
-    Stores conversation history per Telegram user.
-    Used to maintain context across messages.
-    """
     __tablename__ = "conversations"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    telegram_user_id = Column(String(50), nullable=False, index=True)
-    namespace = Column(String(100), nullable=False)
-    role = Column(String(20), nullable=False)    # "user" | "assistant"
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True)
+    user_id = Column(String(64), nullable=False, index=True)
+    channel = Column(String(20), default="telegram")
+    namespace = Column(String(128), nullable=False)
+    role = Column(String(20), nullable=False)
     content = Column(Text, nullable=False)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 
 # ─── Engine + Session ────────────────────────────────────────────────────────
-print("🔌 Setting up database connection...")
-print(f"   Database URL: {settings.database_url}")
+
 engine = create_async_engine(
     settings.database_url,
     echo=False,
@@ -68,16 +83,10 @@ AsyncSessionLocal = sessionmaker(
 
 
 async def get_db():
-    """FastAPI dependency for DB sessions."""
     async with AsyncSessionLocal() as session:
         yield session
 
 
 async def init_db():
-    """Create tables and enable pgvector extension."""
     async with engine.begin() as conn:
-        # Enable pgvector
         await conn.execute(__import__("sqlalchemy").text("CREATE EXTENSION IF NOT EXISTS vector"))
-        # Create tables
-        await conn.run_sync(Base.metadata.create_all)
-    print("✅ Database initialized with pgvector")
