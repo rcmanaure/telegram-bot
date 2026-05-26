@@ -161,8 +161,9 @@ async def upload_document(
     db: AsyncSession = Depends(get_db),
     tenant: Tenant = Depends(require_tenant),
 ):
-    if not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(400, "Only PDF files are supported")
+    fname = file.filename.lower()
+    if not (fname.endswith(".pdf") or fname.endswith(".md") or fname.endswith(".txt")):
+        raise HTTPException(400, "Supported formats: PDF, Markdown (.md), plain text (.txt)")
 
     namespace = tenant.slug
     content = await file.read()
@@ -170,20 +171,31 @@ async def upload_document(
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(413, "File too large. Maximum size is 10MB.")
 
-    try:
-        reader = PdfReader(io.BytesIO(content))
-    except Exception as e:
-        raise HTTPException(400, f"Could not read PDF: {e}")
-
     all_chunks = []
-    for page_num, page in enumerate(reader.pages):
-        page_text = page.extract_text() or ""
-        if page_text.strip():
-            chunks = chunk_text(page_text, source=file.filename, page=page_num + 1)
-            all_chunks.extend(chunks)
+
+    if fname.endswith(".pdf"):
+        try:
+            reader = PdfReader(io.BytesIO(content))
+        except Exception as e:
+            raise HTTPException(400, f"Could not read PDF: {e}")
+        for page_num, page in enumerate(reader.pages):
+            page_text = page.extract_text() or ""
+            if page_text.strip():
+                chunks = chunk_text(page_text, source=file.filename, page=page_num + 1)
+                all_chunks.extend(chunks)
+        pages_processed = len(reader.pages)
+    else:
+        # Markdown / plain text — treat entire file as a single "page"
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError:
+            raise HTTPException(400, "File must be UTF-8 encoded")
+        if text.strip():
+            all_chunks = chunk_text(text, source=file.filename, page=1)
+        pages_processed = 1
 
     if not all_chunks:
-        raise HTTPException(400, "No text could be extracted from this PDF")
+        raise HTTPException(400, "No text could be extracted from this file")
 
     stored = await index_chunks(db, all_chunks, namespace)
 
@@ -191,7 +203,7 @@ async def upload_document(
         "status": "indexed",
         "namespace": namespace,
         "filename": file.filename,
-        "pages_processed": len(reader.pages),
+        "pages_processed": pages_processed,
         "chunks_stored": stored,
     }
 
