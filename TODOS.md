@@ -46,12 +46,30 @@
 - [x] `ENVIRONMENT=dev`
 - [ ] Eliminar de `.env`: `TELEGRAM_BOT_TOKEN=`, `DATABASE_URL_SYNC=`, `DEFAULT_NAMESPACE=` (removidos del modelo — no se usan)
 
+## Smart Chatbot v2 — Completado ✅
+
+- [x] **B-1** `/contactar` command + 4-category `_triage_response` (returns `tuple[str,str]`)
+- [x] **B-2** `UnansweredQuery` DB model + admin "Consultas sin respuesta" tab
+- [x] **CP-1** InlineKeyboard URL button + `contact_url` on Tenant (+ http/https validation)
+- [x] **CP-2** "¿Hay algo más?" post-process in `handle_message` (after save_turn, NOT in system prompt)
+- [x] **CP-3** `example_questions` on Tenant + richer `/start` numbered list
+- [x] **CP-4** APScheduler daily digest (AsyncIOScheduler, 8am UTC, frequency-sorted top 5) + `operator_chat_id` on Tenant
+- [x] **CP-5** Language-aware triage (`language_code` flows: handle_message → rag_query → _triage_response)
+- [x] **OPT-1** Pre-RAG regex shortcut for explicit escalation phrases (skip embed + pgvector)
+- [x] **OPT-2** Weekly UnansweredQuery cleanup job (DELETE WHERE created_at < 90 days ago)
+- [x] Alembic migration: 3 new Tenant columns + UnansweredQuery model + 2 indexes (`a1b2c3d4e5f6`)
+- [x] Fix 5 broken test mocks + 15 new tests — 62/62 passing
+
 ## Deferred (cuando haya > 10 clientes)
 
 - [ ] Dynamic tenant reload sin restart (`POST /admin/tenants/{slug}/activate`)
 - [ ] `slowapi` key_func usando `tenant.id` en vez de IP
 - [ ] Redis para estado compartido en multi-instancia (habilita `--workers > 1`)
 - [ ] Cambiar SHA-256 a `pbkdf2_hmac` si se permiten keys elegidas por el usuario (hoy usamos `secrets.token_urlsafe(32)`, no aplica)
+- [ ] APScheduler → Celery + Redis para multi-worker (evita digests duplicados con workers > 1)
+- [ ] Feedback thumbs up/down por respuesta
+- [ ] Integración CRM
+- [ ] Sugerencias proactivas de doc gaps ("¿Querés que agreguemos esta respuesta?")
 
 ## Validación de mercado (más importante que el código)
 

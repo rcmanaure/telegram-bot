@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Boolean, Column, DateTime, ForeignKey, Index,
-    Integer, String, Text, func,
+    Integer, JSON, String, Text, func,
 )
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -28,6 +28,9 @@ class Tenant(Base):
     plan = Column(String(32), default="free")
     billing_id = Column(String(128), nullable=True)
     expertise_area = Column(String(255), nullable=True, default="")
+    contact_url = Column(String(512), nullable=True)
+    example_questions = Column(JSON, nullable=True)
+    operator_chat_id = Column(String(64), nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     active = Column(Boolean, default=True)
 
@@ -50,6 +53,23 @@ class DocumentChunk(Base):
             postgresql_using="hnsw",
             postgresql_with={"m": 16, "ef_construction": 64},
         ),
+    )
+
+
+class UnansweredQuery(Base):
+    __tablename__ = "unanswered_queries"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True)
+    namespace = Column(String(128), nullable=False)
+    question = Column(Text, nullable=False)
+    user_id = Column(String(64), nullable=False)
+    intent_category = Column(String(64), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index("ix_unanswered_queries_tenant_created", "tenant_id", "created_at"),
+        Index("ix_unanswered_queries_created_at", "created_at"),
     )
 
 

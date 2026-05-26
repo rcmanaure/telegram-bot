@@ -7,10 +7,12 @@ import hmac
 import io
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 
 from logging_config import setup_logging
 setup_logging()
 
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import sentry_sdk
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
@@ -29,7 +31,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder
 
 from config import settings
-from db import init_db, get_db, DocumentChunk, Tenant
+from db import init_db, get_db, AsyncSessionLocal, DocumentChunk, Tenant, UnansweredQuery
 from rag import chunk_text, index_chunks
 
 logger = logging.getLogger(__name__)
@@ -58,6 +60,58 @@ async def require_tenant(
     if not tenant:
         raise HTTPException(status_code=401, detail="Invalid API key")
     return tenant
+
+
+# ─── Background jobs ─────────────────────────────────────────────────────────
+
+async def daily_digest_job():
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(Tenant).where(Tenant.active == True, Tenant.operator_chat_id != None)
+        )
+        tenants = result.scalars().all()
+
+    for tenant in tenants:
+        try:
+            tg_app = telegram_apps.get(tenant.bot_token)
+            if not tg_app:
+                continue
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(
+                    select(UnansweredQuery.question, func.count().label("cnt"))
+                    .where(
+                        UnansweredQuery.tenant_id == tenant.id,
+                        UnansweredQuery.created_at >= cutoff,
+                    )
+                    .group_by(UnansweredQuery.question)
+                    .order_by(text("cnt DESC"))
+                    .limit(5)
+                )
+                rows = result.fetchall()
+            if not rows:
+                continue
+            lines = ["📊 *Consultas sin respuesta (últimas 24h):*\n"]
+            for i, row in enumerate(rows, 1):
+                lines.append(f"{i}. {row.question} ({row.cnt}×)")
+            await tg_app.bot.send_message(
+                chat_id=tenant.operator_chat_id,
+                text="\n".join(lines),
+                parse_mode="Markdown",
+            )
+        except Exception:
+            logger.exception("daily_digest_job failed for tenant %s", tenant.slug)
+
+
+async def cleanup_job():
+    cutoff = datetime.now(timezone.utc) - timedelta(days=90)
+    async with AsyncSessionLocal() as db:
+        await db.execute(
+            text("DELETE FROM unanswered_queries WHERE created_at < :cutoff"),
+            {"cutoff": cutoff},
+        )
+        await db.commit()
+    logger.info("cleanup_job: deleted UnansweredQuery rows older than 90 days")
 
 
 # ─── ngrok URL discovery ──────────────────────────────────────────────────────
@@ -120,8 +174,15 @@ async def lifespan(app: FastAPI):
         except Exception:
             logger.exception("Failed to initialize tenant %s — skipping", tenant.slug)
 
+    scheduler = AsyncIOScheduler(timezone="UTC", misfire_grace_time=300)
+    scheduler.add_job(daily_digest_job, "cron", hour=8, minute=0, id="daily_digest")
+    scheduler.add_job(cleanup_job, "cron", day_of_week="sun", hour=0, minute=0, id="weekly_cleanup")
+    scheduler.start()
+
     logger.info("RAG Bot API ready — %d tenant(s) loaded", len(telegram_apps))
     yield
+
+    scheduler.shutdown()
 
     for tg_app in telegram_apps.values():
         try:
@@ -328,14 +389,19 @@ def _admin_html(tenants: list, message: str = "", error: str = "", new_api_key: 
           <td>{"✅ activo" if t.active else "❌ inactivo"}</td>
           <td>{t.plan}</td>
           <td>
-            <form method="post" action="/admin/tenant/{t.id}" style="display:flex;gap:8px;align-items:center">
-              <input name="expertise_area" value="{t.expertise_area or ''}"
-                     style="flex:1;padding:4px 8px;border:1px solid #ccc;border-radius:4px">
+            <form method="post" action="/admin/tenant/{t.id}" style="display:grid;gap:6px">
+              <input name="expertise_area" value="{t.expertise_area or ''}" placeholder="área de expertise"
+                     style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
+              <input name="contact_url" value="{t.contact_url or ''}" placeholder="https://... (URL contacto)"
+                     style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
+              <input name="operator_chat_id" value="{t.operator_chat_id or ''}" placeholder="chat_id operador"
+                     style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
               <button type="submit" style="padding:4px 12px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer">
                 Guardar
               </button>
             </form>
           </td>
+          <td><a href="/admin/queries/{t.id}" style="color:#2563eb;font-size:0.85rem">Ver consultas</a></td>
         </tr>"""
 
     msg_html = f'<div class="alert ok">{message}</div>' if message else ""
@@ -406,13 +472,31 @@ def _admin_html(tenants: list, message: str = "", error: str = "", new_api_key: 
           </select>
         </div>
       </div>
+      <div class="row">
+        <div class="field">
+          <label for="contact_url">URL de contacto <small>(http/https)</small></label>
+          <input type="text" id="contact_url" name="contact_url" placeholder="https://wa.me/549...">
+        </div>
+        <div class="field">
+          <label for="operator_chat_id">Chat ID del operador <small>(para digest diario)</small></label>
+          <input type="text" id="operator_chat_id" name="operator_chat_id" placeholder="123456789">
+        </div>
+      </div>
+      <div class="row">
+        <div class="field" style="flex:2">
+          <label for="example_questions">Preguntas de ejemplo <small>(una por línea, máx 5)</small></label>
+          <textarea id="example_questions" name="example_questions" rows="4"
+                    style="padding:6px 10px;border:1px solid #cbd5e1;border-radius:4px;width:100%;box-sizing:border-box"
+                    placeholder="¿Cuáles son los horarios?&#10;¿Qué planes tienen?&#10;¿Cómo me registro?"></textarea>
+        </div>
+      </div>
       <button type="submit" class="btn">Crear tenant</button>
     </form>
   </div>
 
   <h2>📋 Tenants existentes</h2>
   <table>
-    <thead><tr><th>ID</th><th>Slug</th><th>Estado</th><th>Plan</th><th>Área de expertise</th></tr></thead>
+    <thead><tr><th>ID</th><th>Slug</th><th>Estado</th><th>Plan</th><th>Configuración</th><th>Consultas</th></tr></thead>
     <tbody>{rows}</tbody>
   </table>
 </body>
@@ -461,12 +545,19 @@ async def admin_create_tenant(
     bot_token = (form.get("bot_token") or "").strip()
     expertise_area = (form.get("expertise_area") or "").strip()
     plan = (form.get("plan") or "free").strip()
+    contact_url = (form.get("contact_url") or "").strip() or None
+    operator_chat_id = (form.get("operator_chat_id") or "").strip() or None
+    raw_questions = (form.get("example_questions") or "").strip()
+    example_questions = [q.strip() for q in raw_questions.splitlines() if q.strip()][:5] or None
 
     if not slug or not bot_token:
         return _admin_html(await _all_tenants(db), error="Slug y Bot Token son obligatorios.")
 
     if plan not in VALID_PLANS:
         return _admin_html(await _all_tenants(db), error=f"Plan inválido '{plan}'. Opciones: {', '.join(VALID_PLANS)}.")
+
+    if contact_url and not contact_url.startswith(("http://", "https://")):
+        return _admin_html(await _all_tenants(db), error="URL de contacto debe empezar con http:// o https://")
 
     existing = await db.execute(select(Tenant).where(Tenant.slug == slug))
     if existing.scalar_one_or_none():
@@ -482,6 +573,9 @@ async def admin_create_tenant(
         webhook_secret=webhook_secret,
         bot_token=bot_token,
         expertise_area=expertise_area,
+        contact_url=contact_url,
+        example_questions=example_questions,
+        operator_chat_id=operator_chat_id,
         plan=plan,
         active=True,
     )
@@ -527,6 +621,13 @@ async def admin_update_tenant(
 ):
     form = await request.form()
     expertise_area = form.get("expertise_area", "")
+    contact_url = (form.get("contact_url") or "").strip() or None
+    operator_chat_id = (form.get("operator_chat_id") or "").strip() or None
+
+    if contact_url and not contact_url.startswith(("http://", "https://")):
+        result = await db.execute(select(Tenant).order_by(Tenant.id))
+        tenants = result.scalars().all()
+        return _admin_html(tenants, error="URL de contacto debe empezar con http:// o https://")
 
     result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
     tenant = result.scalar_one_or_none()
@@ -534,6 +635,8 @@ async def admin_update_tenant(
         raise HTTPException(404, "Tenant not found")
 
     tenant.expertise_area = expertise_area
+    tenant.contact_url = contact_url
+    tenant.operator_chat_id = operator_chat_id
     db.add(tenant)
     await db.commit()
     await db.refresh(tenant)
@@ -545,13 +648,67 @@ async def admin_update_tenant(
     return _admin_html(await _all_tenants(db), message=f"✓ Tenant '{tenant.slug}' actualizado.")
 
 
+@app.get("/admin/queries/{tenant_id}", response_class=HTMLResponse, include_in_schema=False)
+async def admin_queries(
+    tenant_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(_require_admin),
+):
+    result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+    tenant = result.scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(404, "Tenant not found")
+
+    result = await db.execute(
+        select(UnansweredQuery)
+        .where(UnansweredQuery.tenant_id == tenant_id)
+        .order_by(UnansweredQuery.created_at.desc())
+        .limit(100)
+    )
+    queries = result.scalars().all()
+
+    rows_html = ""
+    for q in queries:
+        ts = q.created_at.strftime("%Y-%m-%d %H:%M") if q.created_at else ""
+        rows_html += (
+            f"<tr><td>{ts}</td><td>{q.intent_category}</td>"
+            f"<td>{q.user_id}</td><td>{q.question}</td></tr>"
+        )
+
+    return f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>Consultas — {tenant.slug}</title>
+  <style>
+    body {{ font-family: system-ui, sans-serif; max-width: 1100px; margin: 40px auto; padding: 0 20px; color: #1e293b; }}
+    h1 {{ font-size: 1.4rem; margin-bottom: 4px; }}
+    a {{ color: #2563eb; }}
+    table {{ width: 100%; border-collapse: collapse; margin-top: 24px; }}
+    th {{ text-align: left; padding: 8px 12px; background: #f1f5f9; border-bottom: 2px solid #e2e8f0; }}
+    td {{ padding: 8px 12px; border-bottom: 1px solid #e2e8f0; vertical-align: top; word-break: break-word; }}
+    tr:hover td {{ background: #f8fafc; }}
+  </style>
+</head>
+<body>
+  <h1>Consultas sin respuesta — <em>{tenant.slug}</em></h1>
+  <a href="/admin">← Volver al panel</a>
+  <table>
+    <thead><tr><th>Fecha</th><th>Intent</th><th>User ID</th><th>Pregunta</th></tr></thead>
+    <tbody>{rows_html}</tbody>
+  </table>
+</body>
+</html>"""
+
+
 # ─── Bot handler registration (imported by lifespan) ──────────────────────────
 
 def _register_handlers(tg_app):
-    from bot import cmd_start, cmd_help, cmd_sources, cmd_clear, handle_message
+    from bot import cmd_start, cmd_help, cmd_sources, cmd_clear, cmd_contactar, handle_message
     from telegram.ext import CommandHandler, MessageHandler, filters
     tg_app.add_handler(CommandHandler("start", cmd_start))
     tg_app.add_handler(CommandHandler("help", cmd_help))
     tg_app.add_handler(CommandHandler("sources", cmd_sources))
     tg_app.add_handler(CommandHandler("clear", cmd_clear))
+    tg_app.add_handler(CommandHandler("contactar", cmd_contactar))
     tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))

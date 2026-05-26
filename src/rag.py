@@ -6,7 +6,9 @@ This is the core of the demo. Shows clients:
 2. How semantic search works (not keyword search)
 3. How the LLM answers ONLY from retrieved context (no hallucination)
 """
+import json
 import logging
+import re
 
 import httpx
 from openai import AsyncOpenAI
@@ -14,7 +16,7 @@ from openai import AsyncOpenAI
 logger = logging.getLogger(__name__)
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
-from db import DocumentChunk, Conversation
+from db import DocumentChunk, Conversation, UnansweredQuery
 from config import settings
 
 openai_client = AsyncOpenAI(
@@ -201,22 +203,38 @@ Formato para Telegram (OBLIGATORIO):
 - Código con `backticks` solo para datos técnicos exactos (precios, horarios puntuales).
 """
 
-async def _triage_response(question: str, expertise_area: str) -> str:
-    """No relevant context found — let the LLM decide how to respond.
-    Greetings/chitchat get a warm reply; off-topic questions get a redirect."""
+_ESCALATION_PATTERN = re.compile(
+    r'\b(operador|humano|persona real|hablar con alguien|quiero hablar|agente)\b',
+    re.IGNORECASE,
+)
+
+
+async def _triage_response(
+    question: str,
+    expertise_area: str,
+    language_code: str | None = None,
+) -> tuple[str, str]:
+    """Classify intent and generate fallback reply when no context found.
+    Returns (intent, reply_text). Intent: greeting | off_topic | needs_human | ambiguous."""
     area = expertise_area or "los temas cubiertos en los documentos"
+    lang_hint = ""
+    if language_code and not language_code.startswith("es"):
+        lang_hint = f"\nRespond in the user's language (language_code={language_code})."
     messages = [
         {
             "role": "system",
             "content": (
-                f"Sos un asistente especializado en: {area}.\n\n"
-                "El usuario te envió un mensaje pero no hay información relevante en tu base de conocimiento.\n"
-                "Reglas:\n"
-                "- Si es un saludo, agradecimiento o mensaje social → respondé de forma amigable "
-                "y ofrecé ayuda dentro de tu área de expertise.\n"
-                f"- Si es una pregunta fuera de tu área → decile brevemente que tu especialidad es {area} "
-                "y pedile que reformule su consulta.\n"
-                "- Máximo 2 oraciones. No inventes información técnica ni respondas preguntas fuera de tu área."
+                f"You are an assistant specialized in: {area}.\n"
+                "The user sent a message but there is no relevant information in your knowledge base.\n"
+                "Classify the intent and reply briefly (max 2 sentences).\n"
+                f"{lang_hint}\n"
+                "IMPORTANT: Respond with ONLY a JSON object, no markdown, no preamble:\n"
+                '{"intent": "<greeting|off_topic|needs_human|ambiguous>", "reply": "<your reply text>"}\n\n'
+                "Intent definitions:\n"
+                "- greeting: social message (hi, thanks, bye)\n"
+                "- off_topic: question outside your area of expertise\n"
+                "- needs_human: user explicitly wants to speak with a person\n"
+                "- ambiguous: unclear if related to your area"
             ),
         },
         {"role": "user", "content": question},
@@ -228,13 +246,15 @@ async def _triage_response(question: str, expertise_area: str) -> str:
                 "Authorization": f"Bearer {settings.openrouter_api_key}",
                 "HTTP-Referer": "https://github.com/ruben-portfolio",
             },
-            json={"model": settings.llm_model, "messages": messages, "max_tokens": 120, "temperature": 0.3},
+            json={"model": settings.llm_model, "messages": messages, "max_tokens": 150, "temperature": 0.2},
         )
         response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"]
+        raw = response.json()["choices"][0]["message"]["content"]
+        parsed = json.loads(raw)
+        return parsed["intent"], parsed["reply"]
     except Exception:
         area_clause = f" Mi área de expertise: {expertise_area}." if expertise_area else ""
-        return f"Eso está fuera de mi área de expertise.{area_clause} Consultá directamente con nosotros."
+        return "off_topic", f"Eso está fuera de mi área de expertise.{area_clause} Consultá directamente con nosotros."
 
 
 async def generate_answer(
@@ -248,9 +268,6 @@ async def generate_answer(
     Uses OpenRouter so we can swap models easily.
     """
     system_prompt = _build_system_prompt(expertise_area)
-
-    if not context_chunks:
-        return await _triage_response(question, expertise_area)
 
     # Format context for the prompt
     context_text = "\n\n---\n\n".join([
@@ -369,22 +386,62 @@ async def save_turn(
 
 # ─── Full RAG Query (entry point) ────────────────────────────────────────────
 
+async def _log_unanswered(
+    db: AsyncSession,
+    namespace: str,
+    question: str,
+    user_id: str,
+    intent: str,
+    tenant_id: int | None = None,
+) -> None:
+    try:
+        db.add(UnansweredQuery(
+            tenant_id=tenant_id,
+            namespace=namespace,
+            question=question,
+            user_id=user_id,
+            intent_category=intent,
+        ))
+        await db.commit()
+    except Exception as e:
+        logger.warning("Failed to log UnansweredQuery: %s", e)
+
+
 async def rag_query(
     db: AsyncSession,
     question: str,
     namespace: str,
     user_id: str,
     expertise_area: str = "",
-) -> tuple[str, list[dict]]:
+    language_code: str | None = None,
+    tenant_id: int | None = None,
+) -> tuple[str, list[dict], str | None]:
     """
     Full RAG pipeline: retrieve context → generate answer → save history.
-    Returns (answer, retrieved_chunks) for logging/debugging.
+    Returns (answer, retrieved_chunks, intent | None).
+    intent is None when answered from docs; otherwise the triage classification.
     """
+    # Pre-RAG: explicit escalation shortcut — skip vector search
+    if _ESCALATION_PATTERN.search(question):
+        area_clause = f" Mi área de expertise: {expertise_area}." if expertise_area else ""
+        answer = f"Entiendo que querés hablar con alguien.{area_clause} Contactanos directamente."
+        await save_turn(db, user_id, namespace, question, answer)
+        await _log_unanswered(db, namespace, question, user_id, "needs_human", tenant_id)
+        return answer, [], "needs_human"
+
     context = await retrieve_context(db, question, namespace)
     # Drop chunks that are too dissimilar — prevents off-topic questions from
     # reaching the LLM with unrelated context that the model might ignore.
     context = [c for c in context if c["similarity"] >= MIN_SIMILARITY]
     history = await get_history(db, user_id, namespace)
+
+    if not context:
+        intent, answer = await _triage_response(question, expertise_area, language_code)
+        await save_turn(db, user_id, namespace, question, answer)
+        if intent in {"off_topic", "needs_human"}:
+            await _log_unanswered(db, namespace, question, user_id, intent, tenant_id)
+        return answer, [], intent
+
     answer = await generate_answer(context, question, history, expertise_area)
     await save_turn(db, user_id, namespace, question, answer)
-    return answer, context
+    return answer, context, None
