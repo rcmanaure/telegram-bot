@@ -111,11 +111,21 @@ Save the API Key shown (only displayed once).
 
 ### 4. Upload documents
 
+Supported formats: **PDF**, **Markdown** (`.md`), **plain text** (`.txt`).
+
 ```bash
+# PDF
 curl -X POST https://your-ngrok-url/upload \
   -H "X-API-Key: YOUR_API_KEY" \
   -F "file=@your_document.pdf"
+
+# Markdown
+curl -X POST https://your-ngrok-url/upload \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -F "file=@documents/acme_fitness.md"
 ```
+
+A ready-to-use example is included at `documents/acme_fitness.md` (Acme Fitness Center FAQ).
 
 ### 5. Chat on Telegram
 
@@ -157,7 +167,7 @@ All endpoints (except `/health`, `/admin`, `/webhook/*`) require `X-API-Key` hea
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
 | GET | `/health` | — | Service health check |
-| POST | `/upload` | API Key | Upload a PDF (max 10 MB, 10 req/min) |
+| POST | `/upload` | API Key | Upload a PDF, Markdown or TXT file (max 10 MB, 10 req/min) |
 | GET | `/stats` | API Key | Indexed documents for this tenant |
 | DELETE | `/namespace` | API Key | Delete all documents for this tenant |
 | PATCH | `/tenant` | API Key | Update `expertise_area` |
