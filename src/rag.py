@@ -217,9 +217,6 @@ async def _triage_response(
     """Classify intent and generate fallback reply when no context found.
     Returns (intent, reply_text). Intent: greeting | off_topic | needs_human | ambiguous."""
     area = expertise_area or "los temas cubiertos en los documentos"
-    lang_hint = ""
-    if language_code and not language_code.startswith("es"):
-        lang_hint = f"\nRespond in the user's language (language_code={language_code})."
     messages = [
         {
             "role": "system",
@@ -227,7 +224,7 @@ async def _triage_response(
                 f"You are an assistant specialized in: {area}.\n"
                 "The user sent a message but there is no relevant information in your knowledge base.\n"
                 "Classify the intent and reply briefly (max 2 sentences).\n"
-                f"{lang_hint}\n"
+                "IMPORTANT: Always respond in the same language the user wrote in.\n"
                 "IMPORTANT: Respond with ONLY a JSON object, no markdown, no preamble:\n"
                 '{"intent": "<greeting|off_topic|needs_human|ambiguous>", "reply": "<your reply text>"}\n\n'
                 "Intent definitions:\n"
