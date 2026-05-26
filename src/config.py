@@ -3,15 +3,13 @@ from pydantic import ConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = ConfigDict(env_file=".env")
+    model_config = ConfigDict(env_file=".env", extra="ignore")
 
     # API Keys
     openrouter_api_key: str
-    telegram_bot_token: str
 
     # Database
     database_url: str
-    database_url_sync: str
 
     # Models
     llm_model: str = "openrouter/owl-alpha"
@@ -26,7 +24,14 @@ class Settings(BaseSettings):
     # App
     app_host: str = "0.0.0.0"
     app_port: int = 8000
-    default_namespace: str = "demo"
+    app_domain: str = "localhost:8000"
+
+    # Observability
+    sentry_dsn: str = ""
+    environment: str = "dev"
+
+    # Admin UI
+    admin_password: str = "changeme"
 
 
 settings = Settings()

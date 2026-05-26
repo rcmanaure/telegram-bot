@@ -6,8 +6,12 @@ This is the core of the demo. Shows clients:
 2. How semantic search works (not keyword search)
 3. How the LLM answers ONLY from retrieved context (no hallucination)
 """
+import logging
+
 import httpx
 from openai import AsyncOpenAI
+
+logger = logging.getLogger(__name__)
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from db import DocumentChunk, Conversation
@@ -163,35 +167,79 @@ async def retrieve_context(
 
 # ─── Generation ──────────────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """Sos un miembro del equipo que conoce bien el negocio. Respondés como lo haría una persona real: de forma cálida, directa y sin formalismos.
+MIN_SIMILARITY = 0.30  # chunks below this threshold are considered off-topic
+
+
+def _build_system_prompt(expertise_area: str) -> str:
+    area_clause = f" Mi área de expertise: {expertise_area}." if expertise_area else ""
+    off_topic_reply = f"Eso está fuera de mi área de expertise.{area_clause} Consultá directamente con nosotros."
+    return f"""Sos un asistente especializado exclusivamente en la información de los documentos cargados. Tu ÚNICA fuente de conocimiento es el contexto que se te proporciona.
+
+REGLAS INQUEBRANTABLES:
+- Si la pregunta no puede responderse con el contexto provisto, respondé exactamente: "{off_topic_reply}"
+- NUNCA uses conocimiento general. Matemáticas, programación, cocina, historia, ciencia — todo eso está fuera de tu alcance.
+- NUNCA inventes, supongas ni completes información que no esté en el contexto.
 
 Cómo hablar:
-- Usá un tono amigable y cercano, como si hablaras con un conocido. Nada de frases corporativas.
-- Respondé directo al punto. No repitas la pregunta ni hagas introducciones innecesarias.
-- Para preguntas simples, una o dos oraciones alcanzan. No exageres con listas.
-- Usá listas solo cuando realmente ayude (ej. comparar varios planes o enumerar horarios).
-- Nunca menciones documentos, páginas ni fuentes. Simplemente sabés la información.
-- Si no tenés la información, decilo natural: "Eso no lo tengo claro, te recomiendo consultar directamente."
-- Podés usar un emoji ocasional cuando sea natural (ej. al dar una buena noticia, al despedirte, o para destacar algo importante), pero no en cada oración. Menos es más.
-- Respondé en español. Si el usuario escribe en otro idioma, usá ese idioma.
-
-Lo más importante: SOLO usá información del contexto provisto. Nunca inventes datos.
+- Tono amigable y cercano, sin formalismos corporativos.
+- Respondé directo al punto, sin repetir la pregunta.
+- Para preguntas simples, una o dos oraciones alcanzan.
+- Usá listas solo cuando realmente ayude (ej. comparar planes, enumerar horarios).
+- Nunca menciones "documentos", "páginas" ni "fuentes" — simplemente sabés la información.
+- Podés usar un emoji ocasional, pero menos es más.
+- Respondé en el idioma del usuario.
 """
+
+async def _triage_response(question: str, expertise_area: str) -> str:
+    """No relevant context found — let the LLM decide how to respond.
+    Greetings/chitchat get a warm reply; off-topic questions get a redirect."""
+    area = expertise_area or "los temas cubiertos en los documentos"
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                f"Sos un asistente especializado en: {area}.\n\n"
+                "El usuario te envió un mensaje pero no hay información relevante en tu base de conocimiento.\n"
+                "Reglas:\n"
+                "- Si es un saludo, agradecimiento o mensaje social → respondé de forma amigable "
+                "y ofrecé ayuda dentro de tu área de expertise.\n"
+                f"- Si es una pregunta fuera de tu área → decile brevemente que tu especialidad es {area} "
+                "y pedile que reformule su consulta.\n"
+                "- Máximo 2 oraciones. No inventes información técnica ni respondas preguntas fuera de tu área."
+            ),
+        },
+        {"role": "user", "content": question},
+    ]
+    try:
+        response = await http_client.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {settings.openrouter_api_key}",
+                "HTTP-Referer": "https://github.com/ruben-portfolio",
+            },
+            json={"model": settings.llm_model, "messages": messages, "max_tokens": 120, "temperature": 0.3},
+        )
+        response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"]
+    except Exception:
+        area_clause = f" Mi área de expertise: {expertise_area}." if expertise_area else ""
+        return f"Eso está fuera de mi área de expertise.{area_clause} Consultá directamente con nosotros."
+
 
 async def generate_answer(
     context_chunks: list[dict],
     question: str,
     conversation_history: list[dict],
+    expertise_area: str = "",
 ) -> str:
     """
     Generate an answer using retrieved context + conversation history.
     Uses OpenRouter so we can swap models easily.
     """
+    system_prompt = _build_system_prompt(expertise_area)
+
     if not context_chunks:
-        return (
-            "No encontré información relevante en los documentos para responder tu pregunta. "
-            "Intentá reformularla o preguntá sobre otro tema cubierto en los documentos cargados."
-        )
+        return await _triage_response(question, expertise_area)
 
     # Format context for the prompt
     context_text = "\n\n---\n\n".join([
@@ -200,7 +248,7 @@ async def generate_answer(
     ])
 
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt},
         {
             "role": "user",
             "content": f"DOCUMENT CONTEXT:\n{context_text}"
@@ -250,14 +298,14 @@ async def generate_answer(
 
 async def get_history(
     db: AsyncSession,
-    telegram_user_id: str,
+    user_id: str,
     namespace: str,
     limit: int = 10,
 ) -> list[dict]:
     result = await db.execute(
         select(Conversation)
         .where(
-            Conversation.telegram_user_id == telegram_user_id,
+            Conversation.user_id == user_id,
             Conversation.namespace == namespace,
         )
         .order_by(Conversation.created_at.desc())
@@ -272,19 +320,19 @@ HISTORY_ROW_CAP = 50  # max rows per user per namespace (~25 turns)
 
 async def save_turn(
     db: AsyncSession,
-    telegram_user_id: str,
+    user_id: str,
     namespace: str,
     user_msg: str,
     assistant_msg: str,
 ):
     db.add(Conversation(
-        telegram_user_id=telegram_user_id,
+        user_id=user_id,
         namespace=namespace,
         role="user",
         content=user_msg,
     ))
     db.add(Conversation(
-        telegram_user_id=telegram_user_id,
+        user_id=user_id,
         namespace=namespace,
         role="assistant",
         content=assistant_msg,
@@ -295,15 +343,15 @@ async def save_turn(
     await db.execute(
         text("""
             DELETE FROM conversations
-            WHERE telegram_user_id = :uid AND namespace = :ns
+            WHERE user_id = :uid AND namespace = :ns
             AND id NOT IN (
                 SELECT id FROM conversations
-                WHERE telegram_user_id = :uid AND namespace = :ns
+                WHERE user_id = :uid AND namespace = :ns
                 ORDER BY created_at DESC
                 LIMIT :cap
             )
         """),
-        {"uid": telegram_user_id, "ns": namespace, "cap": HISTORY_ROW_CAP},
+        {"uid": user_id, "ns": namespace, "cap": HISTORY_ROW_CAP},
     )
     await db.commit()
 
@@ -314,22 +362,18 @@ async def rag_query(
     db: AsyncSession,
     question: str,
     namespace: str,
-    telegram_user_id: str,
+    user_id: str,
+    expertise_area: str = "",
 ) -> tuple[str, list[dict]]:
     """
     Full RAG pipeline: retrieve context → generate answer → save history.
     Returns (answer, retrieved_chunks) for logging/debugging.
     """
-    # 1. Retrieve relevant context
     context = await retrieve_context(db, question, namespace)
-
-    # 2. Load conversation history
-    history = await get_history(db, telegram_user_id, namespace)
-
-    # 3. Generate answer
-    answer = await generate_answer(context, question, history)
-
-    # 4. Save to history
-    await save_turn(db, telegram_user_id, namespace, question, answer)
-
+    # Drop chunks that are too dissimilar — prevents off-topic questions from
+    # reaching the LLM with unrelated context that the model might ignore.
+    context = [c for c in context if c["similarity"] >= MIN_SIMILARITY]
+    history = await get_history(db, user_id, namespace)
+    answer = await generate_answer(context, question, history, expertise_area)
+    await save_turn(db, user_id, namespace, question, answer)
     return answer, context
