@@ -14,6 +14,7 @@ services:
       retries: 10
 
   ngrok:
+    profiles: ["dev"]
     image: ngrok/ngrok:latest
     command: http api:8000 --log=stdout
     environment:
@@ -43,6 +44,13 @@ services:
       - ./alembic:/app/alembic
       - ./alembic.ini:/app/alembic.ini
       - ./scripts:/app/scripts
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.ragbot.rule=Host(`${TRAEFIK_HOST}`)"
+      - "traefik.http.routers.ragbot.entrypoints=websecure"
+      - "traefik.http.routers.ragbot.tls=true"
+      - "traefik.http.routers.ragbot.tls.certresolver=letsencrypt"
+      - "traefik.http.services.ragbot.loadbalancer.server.port=8000"
 
 
 volumes:
