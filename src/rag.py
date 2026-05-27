@@ -511,6 +511,12 @@ async def rag_query(
         return answer, [], "needs_human"
 
     context = await retrieve_context(db, question, namespace)
+    logger.info(
+        "retrieve ns=%s q=%r top_scores=%s",
+        namespace,
+        question[:60],
+        [(round(c["similarity"], 3), c["source"], c["content"][:40]) for c in context[:3]],
+    )
     # Drop chunks that are too dissimilar — prevents off-topic questions from
     # reaching the LLM with unrelated context that the model might ignore.
     context = [c for c in context if c["similarity"] >= MIN_SIMILARITY]
