@@ -160,6 +160,29 @@ def test_chunk_text_strips_whitespace_from_chunk_content():
     assert not chunks[0]["content"].endswith(" ")
 
 
+def test_chunk_text_section_header_stays_with_content():
+    # Regression: character-based chunking split GROUP CLASSES header into
+    # the tail of the previous chunk, leaving the class list in a headerless
+    # chunk that scored < MIN_SIMILARITY for "que clases hay?".
+    from rag import chunk_text
+    doc = (
+        "SECTION A\n=========\n" + "word " * 80 + "\n\n"
+        "GROUP CLASSES\n=============\n"
+        "We offer the following group classes:\n"
+        "- Yoga (Mon/Wed/Fri at 7am)\n"
+        "- HIIT (Tue/Thu at 6am)\n"
+        "- Cycling (Mon/Wed/Sat at 8am)\n"
+    )
+    chunks = chunk_text(doc, source="faq.txt", page=1)
+    classes_chunk = next(
+        (c for c in chunks if "GROUP CLASSES" in c["content"] and "Yoga" in c["content"]),
+        None,
+    )
+    assert classes_chunk is not None, (
+        "GROUP CLASSES header and class list must be in the same chunk"
+    )
+
+
 # ─── embed_texts error handling ───────────────────────────────────────────────
 
 @pytest.mark.asyncio

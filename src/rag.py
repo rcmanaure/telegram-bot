@@ -34,28 +34,47 @@ http_client = httpx.AsyncClient(timeout=60)
 
 def chunk_text(text_content: str, source: str, page: int = 0) -> list[dict]:
     """
-    Split text into overlapping chunks for embedding.
-    Overlap ensures context isn't lost at chunk boundaries.
+    Split text into semantically coherent chunks by splitting on paragraph
+    boundaries first, then merging adjacent paragraphs up to chunk_size.
+    Falls back to character-based splitting only for oversized paragraphs.
+    This keeps section headers with their content so retrieval works correctly.
     """
-    chunks = []
     size = settings.chunk_size
     overlap = settings.chunk_overlap
-    start = 0
 
-    while start < len(text_content):
-        end = start + size
-        chunk = text_content[start:end].strip()
+    # Split on blank lines to get paragraphs/sections
+    paragraphs = [p.strip() for p in text_content.split('\n\n') if p.strip()]
 
-        if len(chunk) > 50:  # skip tiny chunks
-            chunks.append({
-                "content": chunk,
-                "source": source,
-                "page": page,
-            })
+    # For paragraphs that exceed chunk_size, fall back to character slicing
+    raw_pieces: list[str] = []
+    for para in paragraphs:
+        if len(para) <= size:
+            raw_pieces.append(para)
+        else:
+            start = 0
+            while start < len(para):
+                raw_pieces.append(para[start:start + size])
+                start += size - overlap
 
-        start = end - overlap  # overlap with previous chunk
+    # Greedily merge adjacent pieces up to chunk_size
+    merged: list[str] = []
+    current = ''
+    for piece in raw_pieces:
+        if not current:
+            current = piece
+        elif len(current) + 2 + len(piece) <= size:
+            current += '\n\n' + piece
+        else:
+            merged.append(current)
+            current = piece
+    if current:
+        merged.append(current)
 
-    return chunks
+    return [
+        {"content": content.strip(), "source": source, "page": page}
+        for content in merged
+        if len(content.strip()) > 50
+    ]
 
 
 # ─── Embeddings ──────────────────────────────────────────────────────────────
