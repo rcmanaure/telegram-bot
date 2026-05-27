@@ -1601,3 +1601,66 @@ async def test_generate_answer_message_ordering():
     assert not any(
         "I have read the context" in m.get("content", "") for m in msgs
     )
+
+
+# ─── Triage prompt quality ─────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_triage_prompt_no_introduction():
+    """Triage system prompt must prohibit self-introduction and greetings."""
+    import rag as rag_module
+    import inspect
+    src = inspect.getsource(rag_module._triage_response)
+    assert "Do NOT introduce yourself" in src
+    assert "Do NOT start with greetings" in src
+
+
+@pytest.mark.asyncio
+async def test_triage_ambiguous_classified_for_plans_question():
+    """'que planes tienes?' must be classified as ambiguous, not greeting."""
+    from rag import _triage_response
+
+    async def _mock_post(url, **kwargs):
+        msgs = kwargs["json"]["messages"]
+        system_content = msgs[0]["content"]
+        user_question = msgs[1]["content"]
+        # Verify the prompt has the no-intro rules
+        assert "Do NOT introduce yourself" in system_content
+        # Verify examples are present
+        assert "ambiguous" in system_content
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {
+            "choices": [{"message": {"content": '{"intent": "ambiguous", "reply": "Puedo ayudarte con los planes disponibles. ¿Querés más info?"}'}}]
+        }
+        return mock_resp
+
+    mock_http = AsyncMock()
+    mock_http.post = _mock_post
+    with patch("rag.http_client", mock_http):
+        intent, reply = await _triage_response("que planes tienes?", "ZOO memberships")
+
+    assert intent == "ambiguous"
+    assert "Hola" not in reply
+    assert "Soy" not in reply
+
+
+@pytest.mark.asyncio
+async def test_triage_greeting_only_for_pure_social():
+    """Pure social 'hi' should stay as greeting intent."""
+    from rag import _triage_response
+
+    async def _mock_post(url, **kwargs):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {
+            "choices": [{"message": {"content": '{"intent": "greeting", "reply": "¡Bienvenido! Puedo ayudarte con temas del ZOO."}'}}]
+        }
+        return mock_resp
+
+    mock_http = AsyncMock()
+    mock_http.post = _mock_post
+    with patch("rag.http_client", mock_http):
+        intent, reply = await _triage_response("hola", "ZOO memberships")
+
+    assert intent == "greeting"

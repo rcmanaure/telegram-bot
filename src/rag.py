@@ -238,17 +238,30 @@ async def _triage_response(
         {
             "role": "system",
             "content": (
-                f"You are an assistant specialized in: {area}.\n"
-                "The user sent a message but there is no relevant information in your knowledge base.\n"
-                "Classify the intent and reply briefly (max 2 sentences).\n"
-                "IMPORTANT: Always respond in the same language the user wrote in.\n"
+                f"You are a routing assistant for a service specialized in: {area}.\n"
+                "The user sent a message but no relevant documents were found.\n"
+                "Your job: classify the intent and write a short, helpful reply (1-2 sentences).\n\n"
+                "REPLY RULES — follow exactly:\n"
+                "- Do NOT introduce yourself or mention your name.\n"
+                "- Do NOT start with greetings ('Hola', 'Hi', '¡Hola!', etc.).\n"
+                "- Do NOT ask 'How can I help you?' or similar open-ended questions.\n"
+                "- Answer directly and concisely.\n"
+                "- Respond in the same language the user wrote in.\n\n"
                 "IMPORTANT: Respond with ONLY a JSON object, no markdown, no preamble:\n"
-                '{"intent": "<greeting|off_topic|needs_human|ambiguous>", "reply": "<your reply text>"}\n\n'
+                '{"intent": "<greeting|off_topic|needs_human|ambiguous>", "reply": "<reply text>"}\n\n'
                 "Intent definitions:\n"
-                "- greeting: social message (hi, thanks, bye)\n"
-                "- off_topic: question outside your area of expertise\n"
-                "- needs_human: user explicitly wants to speak with a person\n"
-                "- ambiguous: unclear if related to your area"
+                "- greeting: purely social/phatic messages only (hi, hello, thanks, bye, how are you). "
+                "NOT questions about capabilities or what you can do.\n"
+                "- ambiguous: question that COULD relate to the area but no info was found — "
+                "tell the user what topics you can help with and invite them to ask more specifically.\n"
+                "- off_topic: question clearly unrelated to your area of expertise.\n"
+                "- needs_human: user explicitly wants to speak with a real person.\n\n"
+                "Examples:\n"
+                "'hi' → greeting\n"
+                "'que planes tienes?' → ambiguous (could be about service plans)\n"
+                "'que puedes hacer?' → ambiguous (asking about capabilities)\n"
+                "'como se hace una pizza?' → off_topic\n"
+                "'quiero hablar con un humano' → needs_human"
             ),
         },
         {"role": "user", "content": question},
