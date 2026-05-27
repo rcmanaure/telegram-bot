@@ -1405,6 +1405,29 @@ def test_per_user_rate_limit_independent_users():
     assert _check_rate_limit(uid_b) is False
 
 
+def test_rate_limit_dict_cleanup_after_window_expires():
+    from bot import _check_rate_limit, _user_message_times, sweep_rate_limit_dict
+    from unittest.mock import patch
+
+    uid = "rl_cleanup_test_user"
+    _user_message_times.pop(uid, None)
+
+    base_time = datetime(2026, 1, 1, 12, 0, 0)
+
+    # Send one message at t=0
+    with patch("bot.datetime") as mock_dt:
+        mock_dt.utcnow.return_value = base_time
+        _check_rate_limit(uid)
+    assert uid in _user_message_times
+
+    # Sweep at t+61 — entry is stale (last message was at t=0, window = 60s)
+    with patch("bot.datetime") as mock_dt:
+        mock_dt.utcnow.return_value = base_time + timedelta(seconds=61)
+        removed = sweep_rate_limit_dict()
+    assert removed >= 1
+    assert uid not in _user_message_times
+
+
 # ─── History sanitization ─────────────────────────────────────────────────────
 
 @pytest.mark.asyncio

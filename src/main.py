@@ -113,6 +113,10 @@ async def cleanup_job():
         await db.commit()
     logger.info("cleanup_job: deleted UnansweredQuery rows older than 90 days")
 
+    from bot import sweep_rate_limit_dict
+    removed = sweep_rate_limit_dict()
+    logger.info("cleanup_job: rate_limit_sweep removed=%d stale entries", removed)
+
 
 # ─── ngrok URL discovery ──────────────────────────────────────────────────────
 
