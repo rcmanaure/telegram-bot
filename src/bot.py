@@ -153,8 +153,9 @@ async def _process_question(
 ) -> None:
     tenant = _get_tenant(ctx)
     uid = str(update.effective_user.id)
+    rate_key = f"{tenant.slug}:{uid}"
 
-    if _check_rate_limit(uid):
+    if _check_rate_limit(rate_key):
         await update.message.reply_text("Demasiados mensajes, esperá un minuto.")
         return
     language_code = update.effective_user.language_code
