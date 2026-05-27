@@ -30,7 +30,7 @@ def upgrade() -> None:
             source VARCHAR(255) NOT NULL,
             page INTEGER,
             content TEXT NOT NULL,
-            embedding TEXT,
+            embedding vector(1536),
             created_at TIMESTAMP WITH TIME ZONE,
             PRIMARY KEY (id)
         )
