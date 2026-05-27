@@ -60,6 +60,11 @@
 - [x] Alembic migration: 3 new Tenant columns + UnansweredQuery model + 2 indexes (`a1b2c3d4e5f6`)
 - [x] Fix 5 broken test mocks + 15 new tests — 62/62 passing
 
+## STT — Voice Notes (Groq Whisper)
+
+- [x] **STT-1** Groq Whisper integration (core) — `src/config.py` + `src/rag.py:transcribe_voice` + `src/bot.py:handle_voice + _process_question` + `src/main.py` register `filters.VOICE`; see CEO plan `~/.gstack/projects/rcmanaure-telegram-bot/ceo-plans/2026-05-26-groq-stt.md`
+- [ ] **STT-2** Per-tenant Groq API key (`Tenant.groq_api_key` nullable, admin UI field, falls back to global key) — trigger: first paying client hits quota or requests separate billing; Effort M (CC: ~10min)
+
 ## Deferred (cuando haya > 10 clientes)
 
 - [ ] Dynamic tenant reload sin restart (`POST /admin/tenants/{slug}/activate`)
