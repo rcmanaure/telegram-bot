@@ -33,6 +33,17 @@ def _check_rate_limit(user_id: str) -> bool:
         times.popleft()
     return len(times) > _RATE_LIMIT_MAX
 
+
+def sweep_rate_limit_dict() -> int:
+    """Remove entries whose window has fully expired. Returns number of entries removed."""
+    cutoff = datetime.utcnow() - timedelta(seconds=_RATE_LIMIT_WINDOW_S)
+    stale = [uid for uid, times in _user_message_times.items() if not times or times[-1] <= cutoff]
+    for uid in stale:
+        del _user_message_times[uid]
+    if stale:
+        logger.debug("rate_limit_sweep removed=%d remaining=%d", len(stale), len(_user_message_times))
+    return len(stale)
+
 def _get_tenant(ctx: ContextTypes.DEFAULT_TYPE) -> Tenant:
     return ctx.bot_data["tenant"]
 
