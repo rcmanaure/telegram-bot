@@ -3,6 +3,9 @@ Telegram bot handlers — used by the webhook endpoint in main.py.
 Each handler receives tenant context via ctx.bot_data["tenant"].
 """
 import logging
+from collections import defaultdict, deque
+from datetime import datetime, timedelta
+
 from sqlalchemy import select, func, text
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.error import TelegramError
@@ -11,8 +14,24 @@ from telegram.ext import ContextTypes
 from config import settings
 from db import AsyncSessionLocal, Conversation, DocumentChunk, Tenant
 from rag import rag_query, transcribe_voice
+from security import sanitize_user_input
 
 logger = logging.getLogger(__name__)
+
+_RATE_LIMIT_MAX = 20
+_RATE_LIMIT_WINDOW_S = 60
+_user_message_times: dict[str, deque] = defaultdict(deque)
+
+
+def _check_rate_limit(user_id: str) -> bool:
+    """True = rate limited. Allows exactly _RATE_LIMIT_MAX messages per _RATE_LIMIT_WINDOW_S seconds."""
+    now = datetime.utcnow()
+    times = _user_message_times[user_id]
+    times.append(now)
+    cutoff = now - timedelta(seconds=_RATE_LIMIT_WINDOW_S)
+    while times and times[0] <= cutoff:
+        times.popleft()
+    return len(times) > _RATE_LIMIT_MAX
 
 def _get_tenant(ctx: ContextTypes.DEFAULT_TYPE) -> Tenant:
     return ctx.bot_data["tenant"]
@@ -123,6 +142,10 @@ async def _process_question(
 ) -> None:
     tenant = _get_tenant(ctx)
     uid = str(update.effective_user.id)
+
+    if _check_rate_limit(uid):
+        await update.message.reply_text("Demasiados mensajes, esperá un minuto.")
+        return
     language_code = update.effective_user.language_code
 
     try:
@@ -171,7 +194,12 @@ async def _process_question(
 # ─── Message handler (main RAG query) ────────────────────────────────────────
 
 async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await _process_question(update, ctx, update.message.text)
+    try:
+        text = sanitize_user_input(update.message.text or "")
+    except ValueError:
+        await update.message.reply_text("Mensaje no permitido.")
+        return
+    await _process_question(update, ctx, text)
 
 
 # ─── Voice note handler ───────────────────────────────────────────────────────
@@ -200,6 +228,11 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return
         if not transcript.strip():
             await update.message.reply_text("No pude entender la nota de voz.")
+            return
+        try:
+            transcript = sanitize_user_input(transcript)
+        except ValueError:
+            await update.message.reply_text("Mensaje no permitido.")
             return
         echo = f"\n\n_🎤 Escuché: «{transcript[:120]}{'...' if len(transcript) > 120 else ''}»_"
         await _process_question(update, ctx, transcript, reply_suffix=echo)
