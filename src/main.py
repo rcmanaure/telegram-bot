@@ -150,8 +150,12 @@ async def lifespan(app: FastAPI):
 
     await init_db()
 
-    # Discover public domain (ngrok in dev, APP_DOMAIN in prod)
-    domain = await _get_ngrok_domain(http_client) or settings.app_domain
+    # Use APP_DOMAIN directly in prod; discover via ngrok in local dev
+    if not settings.app_domain.startswith("localhost"):
+        domain = settings.app_domain
+        logger.info("Webhook domain: %s", domain)
+    else:
+        domain = await _get_ngrok_domain(http_client) or settings.app_domain
 
     # Build Application per active tenant and register webhooks
     from db import AsyncSessionLocal
