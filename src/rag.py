@@ -12,6 +12,7 @@ import re
 
 import httpx
 from openai import AsyncOpenAI
+from security import CANARY_TOKEN, scan_chunk_for_injection, sanitize_user_input, validate_output
 
 logger = logging.getLogger(__name__)
 from sqlalchemy import select, text
@@ -100,7 +101,21 @@ async def index_chunks(
     if not chunks:
         return 0
 
-    texts = [c["content"] for c in chunks]
+    clean_chunks = []
+    for chunk in chunks:
+        if scan_chunk_for_injection(chunk["content"]):
+            logger.warning(
+                "injection_in_doc source=%s chunk_preview=%r",
+                chunk["source"],
+                chunk["content"][:80],
+            )
+            continue
+        clean_chunks.append(chunk)
+
+    if not clean_chunks:
+        return 0
+
+    texts = [c["content"] for c in clean_chunks]
     embeddings = await embed_texts(texts)
 
     db_chunks = [
@@ -111,7 +126,7 @@ async def index_chunks(
             content=chunk["content"],
             embedding=embedding,
         )
-        for chunk, embedding in zip(chunks, embeddings)
+        for chunk, embedding in zip(clean_chunks, embeddings)
     ]
 
     db.add_all(db_chunks)
@@ -201,6 +216,8 @@ Formato para Telegram (OBLIGATORIO):
   📅 HIIT: Mar/Jue — 6am y 7pm
 - Negrita con *asteriscos* para títulos o datos clave.
 - Código con `backticks` solo para datos técnicos exactos (precios, horarios puntuales).
+
+[CANARY_KEY: {CANARY_TOKEN}]
 """
 
 _ESCALATION_PATTERN = re.compile(
@@ -272,23 +289,17 @@ async def generate_answer(
         for c in context_chunks
     ])
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {
-            "role": "user",
-            "content": f"DOCUMENT CONTEXT:\n{context_text}"
-        },
-        {
-            "role": "assistant",
-            "content": "I have read the context. I will only answer based on this information."
-        },
-    ]
-
-    # Add last 6 turns of conversation history for context
+    # system → history → (context + question) LAST
+    # LLMs expect the current user turn to be the final message.
+    messages = [{"role": "system", "content": system_prompt}]
     messages.extend(conversation_history[-6:])
-
-    # Add current question
-    messages.append({"role": "user", "content": question})
+    messages.append({
+        "role": "user",
+        "content": (
+            f"<document_context>\n{context_text}\n</document_context>\n\n"
+            f"<user_question>\n{question}\n</user_question>"
+        ),
+    })
 
     try:
         response = await http_client.post(
@@ -366,7 +377,19 @@ async def get_history(
         .limit(limit)
     )
     rows = list(reversed(result.scalars().all()))
-    return [{"role": r.role, "content": r.content} for r in rows]
+    history = []
+    for r in rows:
+        if r.role == "user":
+            try:
+                content = sanitize_user_input(r.content)
+            except ValueError:
+                content = "[message removed]"
+        elif r.role == "assistant" and CANARY_TOKEN in r.content:
+            content = "[message redacted]"
+        else:
+            content = r.content
+        history.append({"role": r.role, "content": content})
+    return history
 
 
 HISTORY_ROW_CAP = 50  # max rows per user per namespace (~25 turns)
@@ -469,5 +492,6 @@ async def rag_query(
         return answer, [], intent
 
     answer = await generate_answer(context, question, history, expertise_area)
+    answer = validate_output(answer, user_id=user_id)
     await save_turn(db, user_id, namespace, question, answer)
     return answer, context, None
