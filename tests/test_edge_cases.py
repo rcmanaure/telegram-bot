@@ -1132,3 +1132,223 @@ async def test_handle_message_passes_language_code_to_rag_query():
 
     call_kwargs = mock_rag.call_args[1]
     assert call_kwargs.get("language_code") == "en"
+
+
+# ─── Voice note handler tests ─────────────────────────────────────────────────
+
+def _make_voice_update(user_id=123, file_id="voice_file_123", file_size=10000):
+    from telegram import Update
+    update = MagicMock(spec=Update)
+    update.effective_user = MagicMock()
+    update.effective_user.id = user_id
+    update.effective_user.first_name = "Test"
+    update.effective_user.language_code = "es"
+    update.effective_chat = MagicMock()
+    update.effective_chat.id = 999
+    update.message = MagicMock()
+    update.message.voice = MagicMock()
+    update.message.voice.file_id = file_id
+    update.message.voice.file_size = file_size
+    update.message.reply_text = AsyncMock()
+    return update
+
+
+@pytest.mark.asyncio
+async def test_handle_voice_no_groq_key():
+    from bot import handle_voice
+
+    update = _make_voice_update()
+    ctx = _make_ctx()
+
+    mock_settings = MagicMock()
+    mock_settings.groq_api_key = ""
+
+    with patch("bot.settings", mock_settings):
+        await handle_voice(update, ctx)
+
+    reply = update.message.reply_text.call_args[0][0]
+    assert "no están habilitadas" in reply
+
+
+@pytest.mark.asyncio
+async def test_handle_voice_too_large():
+    from bot import handle_voice
+
+    update = _make_voice_update(file_size=11 * 1024 * 1024)
+    ctx = _make_ctx()
+
+    mock_settings = MagicMock()
+    mock_settings.groq_api_key = "test-key"
+
+    with patch("bot.settings", mock_settings):
+        await handle_voice(update, ctx)
+
+    reply = update.message.reply_text.call_args[0][0]
+    assert "demasiado larga" in reply
+
+
+@pytest.mark.asyncio
+async def test_handle_voice_telegram_error():
+    from bot import handle_voice
+    from telegram.error import TelegramError
+
+    update = _make_voice_update()
+    ctx = _make_ctx()
+    ctx.bot.get_file = AsyncMock(side_effect=TelegramError("Network error"))
+
+    mock_settings = MagicMock()
+    mock_settings.groq_api_key = "test-key"
+
+    with patch("bot.settings", mock_settings):
+        await handle_voice(update, ctx)
+
+    reply = update.message.reply_text.call_args[0][0]
+    assert "descargar" in reply.lower()
+
+
+@pytest.mark.asyncio
+async def test_handle_voice_groq_rate_limit():
+    from bot import handle_voice
+
+    update = _make_voice_update()
+    ctx = _make_ctx()
+
+    mock_file = AsyncMock()
+    mock_file.download_as_bytearray = AsyncMock(return_value=bytearray(b"audio"))
+    ctx.bot.get_file = AsyncMock(return_value=mock_file)
+
+    mock_settings = MagicMock()
+    mock_settings.groq_api_key = "test-key"
+
+    with patch("bot.settings", mock_settings), \
+         patch("bot.transcribe_voice", new=AsyncMock(side_effect=RuntimeError("STT service is rate-limited."))):
+        await handle_voice(update, ctx)
+
+    reply = update.message.reply_text.call_args[0][0]
+    assert "rate-limited" in reply
+
+
+@pytest.mark.asyncio
+async def test_handle_voice_empty_transcript():
+    from bot import handle_voice
+
+    update = _make_voice_update()
+    ctx = _make_ctx()
+
+    mock_file = AsyncMock()
+    mock_file.download_as_bytearray = AsyncMock(return_value=bytearray(b"audio"))
+    ctx.bot.get_file = AsyncMock(return_value=mock_file)
+
+    mock_settings = MagicMock()
+    mock_settings.groq_api_key = "test-key"
+
+    with patch("bot.settings", mock_settings), \
+         patch("bot.transcribe_voice", new=AsyncMock(return_value="")):
+        await handle_voice(update, ctx)
+
+    reply = update.message.reply_text.call_args[0][0]
+    assert "entender" in reply.lower()
+
+
+@pytest.mark.asyncio
+async def test_handle_voice_success():
+    from bot import handle_voice
+
+    update = _make_voice_update()
+    ctx = _make_ctx()
+
+    mock_file = AsyncMock()
+    mock_file.download_as_bytearray = AsyncMock(return_value=bytearray(b"audio data"))
+    ctx.bot.get_file = AsyncMock(return_value=mock_file)
+
+    mock_settings = MagicMock()
+    mock_settings.groq_api_key = "test-key"
+
+    with patch("bot.settings", mock_settings), \
+         patch("bot.transcribe_voice", new=AsyncMock(return_value="¿Cuáles son los horarios?")) as mock_transcribe, \
+         patch("bot._process_question", new=AsyncMock()) as mock_pq:
+        await handle_voice(update, ctx)
+
+    mock_transcribe.assert_called_once()
+    mock_pq.assert_called_once()
+    call_kwargs = mock_pq.call_args[1]
+    assert "reply_suffix" in call_kwargs
+    assert "🎤" in call_kwargs["reply_suffix"]
+    assert "Escuché" in call_kwargs["reply_suffix"]
+
+
+# ─── transcribe_voice unit tests ─────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_transcribe_voice_success():
+    from rag import transcribe_voice
+
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.text = "  ¿Cuáles son los horarios?  "
+    mock_http = AsyncMock()
+    mock_http.post = AsyncMock(return_value=mock_response)
+
+    with patch("rag.http_client", mock_http), \
+         patch("rag.settings") as mock_settings:
+        mock_settings.groq_api_key = "test-key"
+        result = await transcribe_voice(b"audio bytes")
+
+    assert result == "¿Cuáles son los horarios?"
+    mock_http.post.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_transcribe_voice_429():
+    from rag import transcribe_voice
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 429
+    mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "429", request=MagicMock(), response=mock_resp
+    )
+    mock_http = AsyncMock()
+    mock_http.post = AsyncMock(return_value=mock_resp)
+
+    with patch("rag.http_client", mock_http), \
+         patch("rag.settings") as mock_settings:
+        mock_settings.groq_api_key = "test-key"
+        with pytest.raises(RuntimeError, match="rate-limited"):
+            await transcribe_voice(b"audio bytes")
+
+
+@pytest.mark.asyncio
+async def test_transcribe_voice_timeout():
+    from rag import transcribe_voice
+
+    mock_http = AsyncMock()
+    mock_http.post = AsyncMock(side_effect=httpx.TimeoutException("timeout"))
+
+    with patch("rag.http_client", mock_http), \
+         patch("rag.settings") as mock_settings:
+        mock_settings.groq_api_key = "test-key"
+        with pytest.raises(RuntimeError, match="timed out"):
+            await transcribe_voice(b"audio bytes")
+
+
+# ─── handle_message regression after _process_question extraction ─────────────
+
+@pytest.mark.asyncio
+async def test_handle_message_regression():
+    from bot import handle_message
+
+    update = _make_update(text="¿Cuáles son los horarios?")
+    ctx = _make_ctx()
+
+    mock_db = AsyncMock()
+    mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+    mock_db.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("bot.AsyncSessionLocal", MagicMock(return_value=mock_db)):
+        with patch("bot.rag_query", new=AsyncMock(return_value=("Abrimos a las 8am.", [], None))):
+            await handle_message(update, ctx)
+
+    update.message.reply_text.assert_called_once()
+    reply = update.message.reply_text.call_args[0][0]
+    assert "Abrimos" in reply
+    assert "Hay algo más" in reply

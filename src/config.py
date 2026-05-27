@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     app_port: int = 8000
     app_domain: str = "localhost:8000"
 
+    # STT
+    groq_api_key: str = ""
+
     # Observability
     sentry_dsn: str = ""
     environment: str = "dev"

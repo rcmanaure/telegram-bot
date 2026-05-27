@@ -704,7 +704,7 @@ async def admin_queries(
 # ─── Bot handler registration (imported by lifespan) ──────────────────────────
 
 def _register_handlers(tg_app):
-    from bot import cmd_start, cmd_help, cmd_sources, cmd_clear, cmd_contactar, handle_message
+    from bot import cmd_start, cmd_help, cmd_sources, cmd_clear, cmd_contactar, handle_message, handle_voice
     from telegram.ext import CommandHandler, MessageHandler, filters
     tg_app.add_handler(CommandHandler("start", cmd_start))
     tg_app.add_handler(CommandHandler("help", cmd_help))
@@ -712,3 +712,4 @@ def _register_handlers(tg_app):
     tg_app.add_handler(CommandHandler("clear", cmd_clear))
     tg_app.add_handler(CommandHandler("contactar", cmd_contactar))
     tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    tg_app.add_handler(MessageHandler(filters.VOICE, handle_voice))

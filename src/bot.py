@@ -5,10 +5,12 @@ Each handler receives tenant context via ctx.bot_data["tenant"].
 import logging
 from sqlalchemy import select, func, text
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
+from config import settings
 from db import AsyncSessionLocal, Conversation, DocumentChunk, Tenant
-from rag import rag_query
+from rag import rag_query, transcribe_voice
 
 logger = logging.getLogger(__name__)
 
@@ -111,17 +113,20 @@ async def cmd_clear(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🗑️ Conversación borrada. ¡Empezamos de cero!")
 
 
-# ─── Message handler (main RAG query) ────────────────────────────────────────
+# ─── Shared RAG query helper ──────────────────────────────────────────────────
 
-async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def _process_question(
+    update: Update,
+    ctx: ContextTypes.DEFAULT_TYPE,
+    question: str,
+    reply_suffix: str = "",
+) -> None:
     tenant = _get_tenant(ctx)
-    question = update.message.text
     uid = str(update.effective_user.id)
     language_code = update.effective_user.language_code
 
-    await ctx.bot.send_chat_action(update.effective_chat.id, "typing")
-
     try:
+        await ctx.bot.send_chat_action(update.effective_chat.id, "typing")
         async with AsyncSessionLocal() as db:
             answer, chunks, intent = await rag_query(
                 db=db,
@@ -139,9 +144,10 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         else:
             full_reply = answer
 
-        # Answered from docs — append follow-up prompt (not saved to DB history)
         if intent is None:
             full_reply += "\n\n¿Hay algo más en lo que pueda ayudarte?"
+
+        full_reply += reply_suffix
 
         reply_markup = None
         if intent in {"off_topic", "needs_human"} and tenant.contact_url:
@@ -160,3 +166,46 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "Lo siento, tuve un problema procesando tu pregunta. Por favor intentá de nuevo."
         )
+
+
+# ─── Message handler (main RAG query) ────────────────────────────────────────
+
+async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await _process_question(update, ctx, update.message.text)
+
+
+# ─── Voice note handler ───────────────────────────────────────────────────────
+
+async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    try:
+        voice = update.message.voice
+        if not settings.groq_api_key:
+            await update.message.reply_text("Las notas de voz no están habilitadas aún.")
+            return
+        MAX_VOICE_BYTES = 10 * 1024 * 1024
+        if voice.file_size and voice.file_size > MAX_VOICE_BYTES:
+            await update.message.reply_text("La nota de voz es demasiado larga.")
+            return
+        await ctx.bot.send_chat_action(update.effective_chat.id, "typing")
+        try:
+            tg_file = await ctx.bot.get_file(voice.file_id)
+            audio: bytes = bytes(await tg_file.download_as_bytearray())
+        except TelegramError:
+            await update.message.reply_text("No pude descargar la nota de voz.")
+            return
+        try:
+            transcript = await transcribe_voice(audio)
+        except RuntimeError as e:
+            await update.message.reply_text(str(e))
+            return
+        if not transcript.strip():
+            await update.message.reply_text("No pude entender la nota de voz.")
+            return
+        echo = f"\n\n_🎤 Escuché: «{transcript[:120]}{'...' if len(transcript) > 120 else ''}»_"
+        await _process_question(update, ctx, transcript, reply_suffix=echo)
+    except Exception:
+        logger.exception(
+            "handle_voice error file_id=%s",
+            update.message.voice.file_id if update.message.voice else "unknown",
+        )
+        await update.message.reply_text("Lo siento, tuve un problema. Intentá de nuevo.")
