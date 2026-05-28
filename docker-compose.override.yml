@@ -6,6 +6,8 @@ services:
   postgres:
     ports:
       - "5432:5432"
+    networks:
+      - app
 
   ngrok:
     profiles: ["dev"]
@@ -17,6 +19,8 @@ services:
       - "4040:4040"
     depends_on:
       - postgres
+    networks:
+      - app
 
   api:
     ports:
@@ -28,3 +32,8 @@ services:
       - ./alembic:/app/alembic
       - ./alembic.ini:/app/alembic.ini
       - ./scripts:/app/scripts
+    networks:
+      - app
+
+networks:
+  app:
