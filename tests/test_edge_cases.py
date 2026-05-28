@@ -1687,3 +1687,103 @@ async def test_triage_greeting_only_for_pure_social():
         intent, reply = await _triage_response("hola", "ZOO memberships")
 
     assert intent == "greeting"
+
+
+# ─── Admin document upload/delete/template ────────────────────────────────────
+
+def test_admin_upload_requires_auth(api_client):
+    r = api_client.post("/admin/upload/1", files={"file": ("test.md", b"content", "text/markdown")})
+    assert r.status_code == 401
+
+
+def test_admin_upload_wrong_password(api_client):
+    creds = base64.b64encode(b"admin:wrong").decode()
+    r = api_client.post(
+        "/admin/upload/1",
+        files={"file": ("test.md", b"content", "text/markdown")},
+        headers={"Authorization": f"Basic {creds}"},
+    )
+    assert r.status_code == 401
+
+
+def test_admin_upload_nonexistent_tenant(api_client):
+    import main as main_module
+    from db import get_db
+
+    mock_tenant = MagicMock()
+    mock_tenant.id = 999
+    mock_tenant.slug = "ghost"
+    db_override, mock_db = _make_db_mock(scalars_all=[mock_tenant], scalar_one_or_none=None)
+    main_module.app.dependency_overrides[get_db] = db_override
+    try:
+        with patch.object(main_module.settings, "admin_password", "changeme"):
+            r = api_client.post(
+                "/admin/upload/999",
+                files={"file": ("test.md", b"# Hello\n\nSome content here that is long enough.", "text/markdown")},
+                headers=_admin_auth("changeme"),
+            )
+        assert r.status_code == 200
+        assert b"no encontrado" in r.content.lower() or b"not found" in r.content.lower()
+    finally:
+        main_module.app.dependency_overrides.pop(get_db, None)
+
+
+def test_admin_upload_accepts_markdown(api_client):
+    import main as main_module
+    from db import get_db, Tenant
+
+    mock_tenant = MagicMock(spec=Tenant)
+    mock_tenant.id = 1
+    mock_tenant.slug = "test-tenant"
+    mock_tenant.active = True
+
+    db_override, mock_db = _make_db_mock(scalars_all=[mock_tenant], scalar_one_or_none=mock_tenant)
+
+    with patch("main.index_chunks", new_callable=AsyncMock, return_value=5) as mock_index:
+        main_module.app.dependency_overrides[get_db] = db_override
+        try:
+            with patch.object(main_module.settings, "admin_password", "changeme"):
+                r = api_client.post(
+                    "/admin/upload/1",
+                    files={"file": ("test.md", b"# Hello\n\nSome content here that is long enough for chunking.", "text/markdown")},
+                    headers=_admin_auth("changeme"),
+                )
+            assert r.status_code == 200
+            assert b"chunks indexados" in r.content or b"5" in r.content
+            mock_index.assert_called_once()
+        finally:
+            main_module.app.dependency_overrides.pop(get_db, None)
+
+
+def test_admin_upload_rejects_unsupported_format(api_client):
+    import main as main_module
+    from db import get_db, Tenant
+
+    mock_tenant = MagicMock(spec=Tenant)
+    mock_tenant.id = 1
+    mock_tenant.slug = "test-tenant"
+    mock_tenant.active = True
+
+    db_override, mock_db = _make_db_mock(scalars_all=[mock_tenant], scalar_one_or_none=mock_tenant)
+    main_module.app.dependency_overrides[get_db] = db_override
+    try:
+        with patch.object(main_module.settings, "admin_password", "changeme"):
+            r = api_client.post(
+                "/admin/upload/1",
+                files={"file": ("test.docx", b"content", "application/octet-stream")},
+                headers=_admin_auth("changeme"),
+            )
+        assert r.status_code == 200
+        assert b"Supported formats" in r.content or b"formatos soportados" in r.content.lower()
+    finally:
+        main_module.app.dependency_overrides.pop(get_db, None)
+
+
+def test_admin_delete_docs_requires_auth(api_client):
+    r = api_client.post("/admin/delete-docs/1")
+    assert r.status_code == 401
+
+
+def test_admin_template_download_requires_auth(api_client):
+    r = api_client.get("/admin/template")
+    assert r.status_code == 401
