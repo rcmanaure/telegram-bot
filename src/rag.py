@@ -203,7 +203,7 @@ async def retrieve_context(
 
 # ─── Generation ──────────────────────────────────────────────────────────────
 
-MIN_SIMILARITY = 0.30  # chunks below this threshold are considered off-topic
+MIN_SIMILARITY = 0.20  # chunks below this threshold are considered off-topic
 
 
 def _build_system_prompt(expertise_area: str) -> str:
