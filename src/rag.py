@@ -245,6 +245,58 @@ _ESCALATION_PATTERN = re.compile(
 )
 
 
+def _llm_error_msg(exc: Exception) -> str:
+    """Convert an LLM call exception into a user-facing RuntimeError message."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        if exc.response.status_code == 429:
+            return "LLM service is rate-limited. Please try again in a moment."
+        body = exc.response.json() if exc.response.headers.get("content-type", "").startswith("application/json") else exc.response.text
+        msg = body.get("error", {}).get("message", str(body)) if isinstance(body, dict) else body
+        return f"LLM service error ({exc.response.status_code}): {msg}"
+    if isinstance(exc, httpx.TimeoutException):
+        return "LLM service timed out. Please try again."
+    return "Unexpected response from LLM service."
+
+
+async def _call_llm(
+    messages: list[dict],
+    max_tokens: int = 800,
+    temperature: float = 0.1,
+) -> str:
+    """Call OpenRouter chat/completions with primary model, then fallback on failure."""
+    models = [settings.llm_model]
+    if settings.llm_fallback_model:
+        models.append(settings.llm_fallback_model)
+
+    last_error: Exception | None = None
+    for model in models:
+        try:
+            response = await http_client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.openrouter_api_key}",
+                    "HTTP-Referer": "https://github.com/ruben-portfolio",
+                },
+                json={"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature},
+            )
+            response.raise_for_status()
+            content = response.json()["choices"][0]["message"]["content"]
+            # Log when fallback model was used
+            if model != settings.llm_model:
+                logger.warning(
+                    "llm_fallback primary=%s fallback=%s error_type=%s",
+                    settings.llm_model, model, type(last_error).__name__,
+                )
+            return content
+        except (httpx.HTTPError, KeyError, IndexError) as e:
+            logger.warning("llm_call_failed model=%s error=%s", model, type(e).__name__)
+            last_error = e
+            continue
+
+    # All models failed
+    raise RuntimeError(_llm_error_msg(last_error))
+
+
 async def _triage_response(
     question: str,
     expertise_area: str,
@@ -286,16 +338,7 @@ async def _triage_response(
         {"role": "user", "content": question},
     ]
     try:
-        response = await http_client.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {settings.openrouter_api_key}",
-                "HTTP-Referer": "https://github.com/ruben-portfolio",
-            },
-            json={"model": settings.llm_model, "messages": messages, "max_tokens": 150, "temperature": 0.2},
-        )
-        response.raise_for_status()
-        raw = response.json()["choices"][0]["message"]["content"]
+        raw = await _call_llm(messages, max_tokens=150, temperature=0.2)
         parsed = json.loads(raw)
         return parsed["intent"], parsed["reply"]
     except Exception:
@@ -313,6 +356,9 @@ async def generate_answer(
     Generate an answer using retrieved context + conversation history.
     Uses OpenRouter so we can swap models easily.
     """
+    if not context_chunks:
+        return "No encontré información relevante en los documentos para responder tu pregunta."
+
     system_prompt = _build_system_prompt(expertise_area)
 
     # Format context for the prompt
@@ -333,33 +379,7 @@ async def generate_answer(
         ),
     })
 
-    try:
-        response = await http_client.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {settings.openrouter_api_key}",
-                "HTTP-Referer": "https://github.com/ruben-portfolio",
-            },
-            json={
-                "model": settings.llm_model,
-                "messages": messages,
-                "max_tokens": 800,
-                "temperature": 0.1,
-            }
-        )
-        response.raise_for_status()
-        data = response.json()
-        return data["choices"][0]["message"]["content"]
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 429:
-            raise RuntimeError("LLM service is rate-limited. Please try again in a moment.")
-        body = e.response.json() if e.response.headers.get("content-type", "").startswith("application/json") else e.response.text
-        msg = body.get("error", {}).get("message", str(body)) if isinstance(body, dict) else body
-        raise RuntimeError(f"LLM service error ({e.response.status_code}): {msg}")
-    except httpx.TimeoutException:
-        raise RuntimeError("LLM service timed out. Please try again.")
-    except (KeyError, IndexError):
-        raise RuntimeError("Unexpected response from LLM service.")
+    return await _call_llm(messages, max_tokens=800, temperature=0.1)
 
 
 # ─── Speech-to-Text (Groq Whisper) ───────────────────────────────────────────
