@@ -12,8 +12,8 @@ class Settings(BaseSettings):
     database_url: str
 
     # Models
-    llm_model: str = "openrouter/owl-alpha"
-    llm_fallback_model: str = "openrouter/free"  # empty string = disabled
+    llm_model: str = "openrouter/free"
+    llm_fallback_model: str = "openrouter/owl-alpha"  # empty string = disabled
     embedding_model: str = "openai/text-embedding-3-small"
     embedding_dim: int = 1536
 
