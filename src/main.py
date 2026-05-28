@@ -219,7 +219,7 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "model": settings.llm_model}
+    return {"status": "ok", "model": settings.llm_model, "fallback_model": settings.llm_fallback_model}
 
 
 @app.post("/upload")

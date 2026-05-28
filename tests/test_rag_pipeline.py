@@ -11,6 +11,8 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 import pytest
+from unittest.mock import AsyncMock, patch, MagicMock
+import httpx
 
 
 # ─── Unit: text chunking ──────────────────────────────────────────────────────
@@ -323,3 +325,113 @@ async def test_delete_only_deletes_own_namespace():
 
         await db.execute(text("DELETE FROM document_chunks WHERE namespace = '_delete_test_b'"))
         await db.commit()
+
+
+# ─── Unit: _call_llm fallback ───────────────────────────────────────────────────
+
+def _mock_response(status_code=200, json_data=None):
+    """Build a fake httpx.Response."""
+    resp = MagicMock(spec=httpx.Response)
+    resp.status_code = status_code
+    resp.headers = MagicMock()
+    resp.headers.get = MagicMock(return_value="application/json")
+    if json_data is not None:
+        resp.json = MagicMock(return_value=json_data)
+    resp.raise_for_status = MagicMock()
+    if status_code >= 400:
+        resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "error", request=MagicMock(), response=resp
+        )
+    return resp
+
+
+@pytest.mark.asyncio
+async def test_call_llm_primary_succeeds():
+    from rag import _call_llm
+    ok_resp = _mock_response(json_data={"choices": [{"message": {"content": "hello"}}]})
+    with patch("rag.http_client") as mock_client, \
+         patch("rag.settings") as mock_settings:
+        mock_settings.llm_model = "primary-model"
+        mock_settings.llm_fallback_model = "fallback-model"
+        mock_settings.openrouter_api_key = "test-key"
+        mock_client.post = AsyncMock(return_value=ok_resp)
+        result = await _call_llm([{"role": "user", "content": "hi"}])
+    assert result == "hello"
+
+
+@pytest.mark.asyncio
+async def test_call_llm_fallback_on_429():
+    from rag import _call_llm
+    fail_resp = _mock_response(status_code=429)
+    ok_resp = _mock_response(json_data={"choices": [{"message": {"content": "fallback reply"}}]})
+    with patch("rag.http_client") as mock_client, \
+         patch("rag.settings") as mock_settings:
+        mock_settings.llm_model = "primary-model"
+        mock_settings.llm_fallback_model = "fallback-model"
+        mock_settings.openrouter_api_key = "test-key"
+        mock_client.post = AsyncMock(side_effect=[fail_resp, ok_resp])
+        result = await _call_llm([{"role": "user", "content": "hi"}])
+    assert result == "fallback reply"
+
+
+@pytest.mark.asyncio
+async def test_call_llm_fallback_on_timeout():
+    from rag import _call_llm
+    ok_resp = _mock_response(json_data={"choices": [{"message": {"content": "fallback reply"}}]})
+    with patch("rag.http_client") as mock_client, \
+         patch("rag.settings") as mock_settings:
+        mock_settings.llm_model = "primary-model"
+        mock_settings.llm_fallback_model = "fallback-model"
+        mock_settings.openrouter_api_key = "test-key"
+        mock_client.post = AsyncMock(side_effect=[
+            httpx.TimeoutException("timeout"),
+            ok_resp,
+        ])
+        result = await _call_llm([{"role": "user", "content": "hi"}])
+    assert result == "fallback reply"
+
+
+@pytest.mark.asyncio
+async def test_call_llm_both_fail():
+    from rag import _call_llm
+    fail_429 = _mock_response(status_code=429)
+    fail_500 = _mock_response(status_code=500)
+    with patch("rag.http_client") as mock_client, \
+         patch("rag.settings") as mock_settings:
+        mock_settings.llm_model = "primary-model"
+        mock_settings.llm_fallback_model = "fallback-model"
+        mock_settings.openrouter_api_key = "test-key"
+        mock_client.post = AsyncMock(side_effect=[fail_429, fail_500])
+        with pytest.raises(RuntimeError, match="LLM service error"):
+            await _call_llm([{"role": "user", "content": "hi"}])
+
+
+@pytest.mark.asyncio
+async def test_call_llm_fallback_disabled():
+    from rag import _call_llm
+    fail_429 = _mock_response(status_code=429)
+    with patch("rag.http_client") as mock_client, \
+         patch("rag.settings") as mock_settings:
+        mock_settings.llm_model = "primary-model"
+        mock_settings.llm_fallback_model = ""
+        mock_settings.openrouter_api_key = "test-key"
+        mock_client.post = AsyncMock(return_value=fail_429)
+        with pytest.raises(RuntimeError, match="rate-limited"):
+            await _call_llm([{"role": "user", "content": "hi"}])
+        # Only one call — no fallback attempt
+        assert mock_client.post.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_call_llm_malformed_response_fallback():
+    from rag import _call_llm
+    bad_resp = _mock_response(json_data={"no_choices": True})
+    ok_resp = _mock_response(json_data={"choices": [{"message": {"content": "recovered"}}]})
+    with patch("rag.http_client") as mock_client, \
+         patch("rag.settings") as mock_settings:
+        mock_settings.llm_model = "primary-model"
+        mock_settings.llm_fallback_model = "fallback-model"
+        mock_settings.openrouter_api_key = "test-key"
+        mock_client.post = AsyncMock(side_effect=[bad_resp, ok_resp])
+        result = await _call_llm([{"role": "user", "content": "hi"}])
+    assert result == "recovered"
