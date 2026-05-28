@@ -13,6 +13,8 @@ services:
       timeout: 3s
       retries: 10
     restart: unless-stopped
+    networks:
+      - app
 
   api:
     build: .
@@ -28,13 +30,22 @@ services:
       retries: 5
       start_period: 15s
     restart: unless-stopped
+    networks:
+      - app
+      - proxy
     labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.ragbot.rule=Host(`${TRAEFIK_HOST}`)"
-      - "traefik.http.routers.ragbot.entrypoints=websecure"
-      - "traefik.http.routers.ragbot.tls=true"
-      - "traefik.http.routers.ragbot.tls.certresolver=letsencrypt"
-      - "traefik.http.services.ragbot.loadbalancer.server.port=8000"
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.routers.ragbot.rule=Host(`${TRAEFIK_HOST}`)
+      - traefik.http.routers.ragbot.entrypoints=websecure
+      - traefik.http.routers.ragbot.tls=true
+      - traefik.http.routers.ragbot.tls.certresolver=letsencrypt
+      - traefik.http.services.ragbot.loadbalancer.server.port=8000
 
 volumes:
   pgdata:
+
+networks:
+  app:
+  proxy:
+    external: true
