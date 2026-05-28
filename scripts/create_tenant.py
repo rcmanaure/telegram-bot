@@ -40,6 +40,9 @@ async def main():
         bot_token = input("Enter TELEGRAM_BOT_TOKEN: ").strip()
 
     slug = input("Enter tenant slug (e.g. 'mi-empresa'): ").strip() or "demo"
+    expertise_area = input(
+        "Enter expertise area (e.g. 'membership plans, group classes, personal training for ACME Gym'): "
+    ).strip()
 
     # Generate credentials
     raw_api_key = secrets.token_urlsafe(32)
@@ -65,6 +68,7 @@ async def main():
             api_key_hash=api_key_hash,
             webhook_secret=webhook_secret,
             bot_token=bot_token,
+            expertise_area=expertise_area or None,
             plan="free",
             active=True,
         )
