@@ -18,7 +18,7 @@ from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 import secrets as secrets_mod
 from fastapi import FastAPI, Header, HTTPException, UploadFile, File, Form, Depends, Request
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
 from pypdf import PdfReader
@@ -222,26 +222,13 @@ async def health():
     return {"status": "ok", "model": settings.llm_model, "fallback_model": settings.llm_fallback_model}
 
 
-@app.post("/upload")
-@limiter.limit("10/minute")
-async def upload_document(
-    request: Request,
-    file: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db),
-    tenant: Tenant = Depends(require_tenant),
-):
-    fname = file.filename.lower()
+def _process_uploaded_file(content: bytes, filename: str, source_name: str) -> tuple[list[dict], int]:
+    """Parse uploaded file content into chunks. Returns (chunks, pages_processed)."""
+    fname = filename.lower()
     if not (fname.endswith(".pdf") or fname.endswith(".md") or fname.endswith(".txt")):
         raise HTTPException(400, "Supported formats: PDF, Markdown (.md), plain text (.txt)")
 
-    namespace = tenant.slug
-    content = await file.read()
-
-    if len(content) > MAX_UPLOAD_BYTES:
-        raise HTTPException(413, "File too large. Maximum size is 10MB.")
-
     all_chunks = []
-
     if fname.endswith(".pdf"):
         try:
             reader = PdfReader(io.BytesIO(content))
@@ -250,27 +237,42 @@ async def upload_document(
         for page_num, page in enumerate(reader.pages):
             page_text = page.extract_text() or ""
             if page_text.strip():
-                chunks = chunk_text(page_text, source=file.filename, page=page_num + 1)
+                chunks = chunk_text(page_text, source=source_name, page=page_num + 1)
                 all_chunks.extend(chunks)
         pages_processed = len(reader.pages)
     else:
-        # Markdown / plain text — treat entire file as a single "page"
         try:
             text = content.decode("utf-8")
         except UnicodeDecodeError:
             raise HTTPException(400, "File must be UTF-8 encoded")
         if text.strip():
-            all_chunks = chunk_text(text, source=file.filename, page=1)
+            all_chunks = chunk_text(text, source=source_name, page=1)
         pages_processed = 1
 
     if not all_chunks:
         raise HTTPException(400, "No text could be extracted from this file")
 
-    stored = await index_chunks(db, all_chunks, namespace)
+    return all_chunks, pages_processed
+
+
+@app.post("/upload")
+@limiter.limit("10/minute")
+async def upload_document(
+    request: Request,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    tenant: Tenant = Depends(require_tenant),
+):
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, "File too large. Maximum size is 10MB.")
+
+    all_chunks, pages_processed = _process_uploaded_file(content, file.filename.lower(), file.filename)
+    stored = await index_chunks(db, all_chunks, tenant.slug)
 
     return {
         "status": "indexed",
-        "namespace": namespace,
+        "namespace": tenant.slug,
         "filename": file.filename,
         "pages_processed": pages_processed,
         "chunks_stored": stored,
@@ -387,9 +389,34 @@ def _require_admin(credentials: HTTPBasicCredentials = Depends(_basic)):
         )
 
 
-def _admin_html(tenants: list, message: str = "", error: str = "", new_api_key: str = "") -> str:
+import html as html_module
+
+
+def _admin_html(
+    tenants: list,
+    doc_stats: dict[int, list[dict]] | None = None,
+    message: str = "",
+    error: str = "",
+    new_api_key: str = "",
+) -> str:
+    if doc_stats is None:
+        doc_stats = {}
     rows = ""
     for t in tenants:
+        entries = doc_stats.get(t.id, [])
+        if entries:
+            doc_list = "".join(
+                f'<div>{html_module.escape(e["source"])} ({e["chunks"]} chunks)</div>' for e in entries
+            )
+        else:
+            doc_list = "<em style='color:#94a3b8'>Sin documentos</em>"
+        delete_btn = f"""
+        <form method="post" action="/admin/delete-docs/{t.id}" style="margin-top:6px"
+              onsubmit="return confirm('Eliminar TODOS los documentos y conversaciones de {t.slug}?')">
+          <button type="submit" style="padding:4px 12px;background:#dc2626;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85rem">
+            Eliminar docs
+          </button>
+        </form>""" if entries else ""
         rows += f"""
         <tr>
           <td>{t.id}</td>
@@ -408,6 +435,16 @@ def _admin_html(tenants: list, message: str = "", error: str = "", new_api_key: 
                 Guardar
               </button>
             </form>
+          </td>
+          <td>
+            <div style="margin-bottom:8px;font-size:0.85rem">{doc_list}</div>
+            <form method="post" action="/admin/upload/{t.id}" enctype="multipart/form-data" style="display:grid;gap:6px">
+              <input type="file" name="file" accept=".pdf,.md,.txt" style="font-size:0.85rem">
+              <button type="submit" style="padding:4px 12px;background:#16a34a;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85rem">
+                Subir documento
+              </button>
+            </form>
+            {delete_btn}
           </td>
           <td><a href="/admin/queries/{t.id}" style="color:#2563eb;font-size:0.85rem">Ver consultas</a></td>
         </tr>"""
@@ -502,9 +539,14 @@ def _admin_html(tenants: list, message: str = "", error: str = "", new_api_key: 
     </form>
   </div>
 
+  <p style="margin-bottom:24px">
+    <a href="/admin/template" style="color:#2563eb;font-size:0.9rem" download>Descargar plantilla de documento (.md)</a>
+    <span style="color:#64748b;font-size:0.8rem">— para que los tenants completen con su info</span>
+  </p>
+
   <h2>📋 Tenants existentes</h2>
   <table>
-    <thead><tr><th>ID</th><th>Slug</th><th>Estado</th><th>Plan</th><th>Configuración</th><th>Consultas</th></tr></thead>
+    <thead><tr><th>ID</th><th>Slug</th><th>Estado</th><th>Plan</th><th>Configuración</th><th>Documentos</th><th>Consultas</th></tr></thead>
     <tbody>{rows}</tbody>
   </table>
 </body>
@@ -514,6 +556,28 @@ def _admin_html(tenants: list, message: str = "", error: str = "", new_api_key: 
 async def _all_tenants(db: AsyncSession) -> list:
     result = await db.execute(select(Tenant).order_by(Tenant.id))
     return result.scalars().all()
+
+
+async def _get_all_doc_stats(db: AsyncSession) -> dict[int, list[dict]]:
+    """Return {tenant_id: [{source, chunks}, ...]} from document_chunks."""
+    result = await db.execute(
+        select(
+            DocumentChunk.namespace,
+            DocumentChunk.source,
+            func.count(DocumentChunk.id).label("chunks"),
+        )
+        .group_by(DocumentChunk.namespace, DocumentChunk.source)
+        .order_by(DocumentChunk.namespace)
+    )
+    rows = result.fetchall()
+    tenants = await _all_tenants(db)
+    slug_to_id = {t.slug: t.id for t in tenants}
+    stats: dict[int, list[dict]] = {}
+    for r in rows:
+        tid = slug_to_id.get(r.namespace)
+        if tid is not None:
+            stats.setdefault(tid, []).append({"source": r.source, "chunks": r.chunks})
+    return stats
 
 
 async def _init_tenant_bot(tenant: Tenant, domain: str) -> bool:
@@ -539,7 +603,7 @@ async def admin_panel(
     db: AsyncSession = Depends(get_db),
     _: None = Depends(_require_admin),
 ):
-    return _admin_html(await _all_tenants(db))
+    return _admin_html(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db))
 
 
 @app.post("/admin/tenants", response_class=HTMLResponse, include_in_schema=False)
@@ -559,17 +623,17 @@ async def admin_create_tenant(
     example_questions = [q.strip() for q in raw_questions.splitlines() if q.strip()][:5] or None
 
     if not slug or not bot_token:
-        return _admin_html(await _all_tenants(db), error="Slug y Bot Token son obligatorios.")
+        return _admin_html(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db), error="Slug y Bot Token son obligatorios.")
 
     if plan not in VALID_PLANS:
-        return _admin_html(await _all_tenants(db), error=f"Plan inválido '{plan}'. Opciones: {', '.join(VALID_PLANS)}.")
+        return _admin_html(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db), error=f"Plan inválido '{plan}'. Opciones: {', '.join(VALID_PLANS)}.")
 
     if contact_url and not contact_url.startswith(("http://", "https://")):
-        return _admin_html(await _all_tenants(db), error="URL de contacto debe empezar con http:// o https://")
+        return _admin_html(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db), error="URL de contacto debe empezar con http:// o https://")
 
     existing = await db.execute(select(Tenant).where(Tenant.slug == slug))
     if existing.scalar_one_or_none():
-        return _admin_html(await _all_tenants(db), error=f"Ya existe un tenant con slug '{slug}'.")
+        return _admin_html(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db), error=f"Ya existe un tenant con slug '{slug}'.")
 
     raw_api_key = secrets_mod.token_urlsafe(32)
     api_key_hash = hashlib.sha256(raw_api_key.encode()).hexdigest()
@@ -608,6 +672,7 @@ async def admin_create_tenant(
     if not ok:
         return _admin_html(
             await _all_tenants(db),
+            doc_stats=await _get_all_doc_stats(db),
             error=f"Tenant '{slug}' creado en DB pero falló al inicializar el bot. Revisá el Bot Token.",
             new_api_key=raw_api_key,
         )
@@ -615,6 +680,7 @@ async def admin_create_tenant(
     logger.info("Admin created tenant %s", slug)
     return _admin_html(
         await _all_tenants(db),
+        doc_stats=await _get_all_doc_stats(db),
         message=f"✓ Tenant '{slug}' creado y bot registrado.",
         new_api_key=raw_api_key,
     )
@@ -635,7 +701,7 @@ async def admin_update_tenant(
     if contact_url and not contact_url.startswith(("http://", "https://")):
         result = await db.execute(select(Tenant).order_by(Tenant.id))
         tenants = result.scalars().all()
-        return _admin_html(tenants, error="URL de contacto debe empezar con http:// o https://")
+        return _admin_html(tenants, doc_stats=await _get_all_doc_stats(db), error="URL de contacto debe empezar con http:// o https://")
 
     result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
     tenant = result.scalar_one_or_none()
@@ -653,7 +719,7 @@ async def admin_update_tenant(
     if tg_app:
         tg_app.bot_data["tenant"] = tenant
 
-    return _admin_html(await _all_tenants(db), message=f"✓ Tenant '{tenant.slug}' actualizado.")
+    return _admin_html(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db), message=f"✓ Tenant '{tenant.slug}' actualizado.")
 
 
 @app.get("/admin/queries/{tenant_id}", response_class=HTMLResponse, include_in_schema=False)
@@ -707,6 +773,68 @@ async def admin_queries(
   </table>
 </body>
 </html>"""
+
+
+@app.post("/admin/upload/{tenant_id}", response_class=HTMLResponse, include_in_schema=False)
+async def admin_upload_document(
+    tenant_id: int,
+    request: Request,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(_require_admin),
+):
+    result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+    tenant = result.scalar_one_or_none()
+    if not tenant:
+        return _admin_html(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db),
+                           error=f"Tenant {tenant_id} no encontrado.")
+
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_BYTES:
+        return _admin_html(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db),
+                           error="Archivo demasiado grande. Máximo 10MB.")
+
+    try:
+        all_chunks, pages_processed = _process_uploaded_file(content, file.filename.lower(), file.filename)
+    except HTTPException as e:
+        return _admin_html(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db), error=e.detail)
+
+    stored = await index_chunks(db, all_chunks, tenant.slug)
+    logger.info("Admin uploaded %s for tenant %s (%d chunks)", file.filename, tenant.slug, stored)
+    return _admin_html(
+        await _all_tenants(db),
+        doc_stats=await _get_all_doc_stats(db),
+        message=f"✓ {stored} chunks indexados desde {file.filename} para '{tenant.slug}'.",
+    )
+
+
+@app.post("/admin/delete-docs/{tenant_id}", response_class=HTMLResponse, include_in_schema=False)
+async def admin_delete_docs(
+    tenant_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(_require_admin),
+):
+    result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+    tenant = result.scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(404, "Tenant not found")
+
+    ns = tenant.slug
+    await db.execute(text("DELETE FROM document_chunks WHERE namespace = :ns"), {"ns": ns})
+    await db.execute(text("DELETE FROM conversations WHERE namespace = :ns"), {"ns": ns})
+    await db.commit()
+
+    logger.info("Admin deleted all docs for tenant %s", tenant.slug)
+    return _admin_html(
+        await _all_tenants(db),
+        doc_stats=await _get_all_doc_stats(db),
+        message=f"✓ Documentos y conversaciones eliminados para '{tenant.slug}'.",
+    )
+
+
+@app.get("/admin/template", include_in_schema=False)
+async def admin_download_template(_: None = Depends(_require_admin)):
+    return FileResponse("documents/plantilla.md", filename="plantilla.md", media_type="text/markdown")
 
 
 # ─── Bot handler registration (imported by lifespan) ──────────────────────────

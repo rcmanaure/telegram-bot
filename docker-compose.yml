@@ -12,17 +12,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-
-  ngrok:
-    profiles: ["dev"]
-    image: ngrok/ngrok:latest
-    command: http api:8000 --log=stdout
-    environment:
-      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN}
-    ports:
-      - "4040:4040"
-    depends_on:
-      - postgres
+    restart: unless-stopped
 
   api:
     build: .
@@ -37,13 +27,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
-    volumes:
-      - ./src:/app/src
-      - ./tests:/app/tests
-      - ./documents:/app/documents
-      - ./alembic:/app/alembic
-      - ./alembic.ini:/app/alembic.ini
-      - ./scripts:/app/scripts
+    restart: unless-stopped
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.ragbot.rule=Host(`${TRAEFIK_HOST}`)"
@@ -51,7 +35,6 @@ services:
       - "traefik.http.routers.ragbot.tls=true"
       - "traefik.http.routers.ragbot.tls.certresolver=letsencrypt"
       - "traefik.http.services.ragbot.loadbalancer.server.port=8000"
-
 
 volumes:
   pgdata:

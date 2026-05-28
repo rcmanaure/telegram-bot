@@ -151,15 +151,15 @@ def test_delete_namespace_requires_auth(api_client):
 
 # ─── API: upload validation (with auth) ──────────────────────────────────────
 
-def test_upload_rejects_non_pdf(authed_api_client):
+def test_upload_rejects_unsupported_format(authed_api_client):
     client, _ = authed_api_client
     r = client.post(
         "/upload",
-        files={"file": ("readme.txt", b"some text", "text/plain")},
+        files={"file": ("data.xlsx", b"fake", "application/vnd.ms-excel")},
         headers={"X-API-Key": "test-key"},
     )
     assert r.status_code == 400
-    assert "PDF" in r.json()["detail"]
+    assert "Supported formats" in r.json()["detail"]
 
 
 def test_upload_accepts_uppercase_extension(authed_api_client):
