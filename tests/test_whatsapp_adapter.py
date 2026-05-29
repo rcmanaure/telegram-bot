@@ -371,6 +371,32 @@ class TestFormatText:
         assert "Line1" in result
         assert "Line2" in result
 
+    def test_whatsapp_strips_markdown_headers(self):
+        text = "## Precios\n\n*Plan Basic* — $29"
+        result = format_text_for_channel(text, "whatsapp")
+        assert "##" not in result
+        assert "*Precios*" in result
+
+    def test_whatsapp_converts_strikethrough(self):
+        text = "Precio ~~$50~~ *$29*"
+        result = format_text_for_channel(text, "whatsapp")
+        assert "~~" not in result
+        assert "~$50~" in result
+        assert "*$29*" in result
+
+    def test_whatsapp_strips_horizontal_rules(self):
+        text = "Intro\n---\nPrecio"
+        result = format_text_for_channel(text, "whatsapp")
+        assert "---" not in result
+        assert "Intro" in result
+        assert "Precio" in result
+
+    def test_whatsapp_strips_code_block_language_hint(self):
+        text = "```python\nprint('hello')\n```"
+        result = format_text_for_channel(text, "whatsapp")
+        assert "```python" not in result
+        assert "```\n" in result
+
 
 # ─── _build_system_prompt channel param ────────────────────────────────────
 
@@ -385,7 +411,9 @@ class TestBuildSystemPromptChannel:
         from rag import _build_system_prompt
         prompt = _build_system_prompt("test_area", channel="whatsapp")
         assert "Formato para WhatsApp" in prompt
-        assert "NUNCA uses `backticks`" in prompt
+        assert "NUNCA uses `backticks" in prompt
+        assert "```" in prompt  # triple-backtick monospace is supported
+        assert "~tachado~" in prompt  # strikethrough format
 
     def test_default_is_telegram(self):
         from rag import _build_system_prompt

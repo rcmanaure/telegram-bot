@@ -97,16 +97,26 @@ TELEGRAM_FORMATTING = ChannelFormatting(
 
 WHATSAPP_FORMATTING = ChannelFormatting(
     format_instructions="""Formato para WhatsApp (OBLIGATORIO):
+- Formato soportado: *negrita*, _cursiva_, ~tachado~, ```monoespacio```.
 - NUNCA uses tablas Markdown (| col | col |) — WhatsApp no las renderiza.
-- Para comparar opciones usá listas con viñetas:
+- NUNCA uses `backticks sueltos` para código inline — usá ```bloque monoespacio``` para datos técnicos exactos, o texto plano.
+- NUNCA uses encabezados con # — WhatsApp no los renderiza. Usá *NEGRITA* para títulos.
+- Para comparar opciones usá listas con viñetas (usá - o *):
   *Plan Basic* — $29/mes · acceso 6am–10pm · 2 clases/mes
   *Plan Pro* — $59/mes · acceso 24/7 · clases ilimitadas
 - Para listas simples usá guiones o números.
 - Para horarios usá formato vertical:
   📅 Yoga: Lun/Mié/Vie — 7am y 6pm
-- Negrita con *asteriscos*.
-- NUNCA uses `backticks` ni código formateado — WhatsApp no lo soporta bien. Escribí los datos en texto plano.
-- Líneas separadas por salto de línea. No uses encabezados con # ni listas numeradas complejas.""",
+  📅 HIIT: Mar/Jue — 6am y 7pm
+- Usá > para citas o destacados:
+  > "La mejor atención" — Cliente satisfecho
+- Emojis con moderación (máx ~10 por mensaje) como señales visuales, no decoración.
+- Mensajes cortos y escaneables: idealmente menos de 450 caracteres para plantillas.
+- Separá secciones con una línea en blanco (máx 2 saltos consecutivos).
+- Pone la información más importante al principio (la preview muestra las primeras 2 líneas).
+- Negrita con *asteriscos* para títulos o datos clave.
+- Cursiva con _guiones bajos_ para énfasis secundario o nombres.
+- Tachado con ~virgulillas~ para precios anteriores o info obsoleta.""",
     max_length=4096,
     supports_markdown_tables=False,
     code_format="text",  # No backtick support — plain text only
@@ -165,7 +175,8 @@ class ChannelAdapter(Protocol):
 def format_text_for_channel(text: str, channel: str, max_length: int | None = None) -> str:
     """Apply channel-specific post-processing to LLM output.
 
-    For WhatsApp: strip markdown tables, backtick code, truncate at 4096.
+    For WhatsApp: strip markdown tables, convert markdown syntax to WA-native
+    syntax, strip unsupported formatting, truncate at 4096.
     For Telegram: pass through (formatting is already correct from prompt).
     """
     from channels.protocol import CHANNEL_FORMATTING
@@ -176,9 +187,18 @@ def format_text_for_channel(text: str, channel: str, max_length: int | None = No
         import re
         # Strip markdown tables: | col | col | → remove entire line
         text = re.sub(r"^\|.*\|$", "", text, flags=re.MULTILINE)
-        # Strip backtick code: `text` → text
-        text = re.sub(r"`([^`]+)`", r"\1", text)
-        # Collapse multiple blank lines from table stripping
+        # Strip markdown headers: # Title → *Title*
+        text = re.sub(r"^#{1,6}\s+(.+)$", r"*\1*", text, flags=re.MULTILINE)
+        # Strip horizontal rules (---, ***, ___) → blank line
+        text = re.sub(r"^[-*_]{3,}$", "", text, flags=re.MULTILINE)
+        # Convert markdown strikethrough ~~text~~ → WhatsApp ~text~
+        text = re.sub(r"~~([^~]+)~~", r"~\1~", text)
+        # Strip code block language hints: ```python → ```
+        text = re.sub(r"```\w+\n", "```\n", text)
+        # Strip inline backtick code: `text` → text
+        # Only match single-backtick inline code (not triple-backtick blocks)
+        text = re.sub(r"(?<!`)`([^`\n]+)`(?!`)", r"\1", text)
+        # Collapse multiple blank lines (max 2 consecutive newlines for readability)
         text = re.sub(r"\n{3,}", "\n\n", text)
 
     # Truncate to channel max length
