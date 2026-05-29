@@ -273,7 +273,16 @@ class TestParseIncoming:
 # ─── verify_webhook ────────────────────────────────────────────────────────
 
 class TestVerifyWebhook:
-    def test_valid_signature(self):
+    def test_valid_signature_with_body_param(self):
+        adapter = make_wa_adapter()
+        body = b'{"entry":[]}'
+        sig = "sha256=" + hmac.new(b"test_secret", body, hashlib.sha256).hexdigest()
+        request = MagicMock()
+        request.headers = {"X-Hub-Signature-256": sig}
+        assert adapter.verify_webhook(request, body) is True
+
+    def test_valid_signature_with_request_body(self):
+        """Fallback: verify_webhook reads from request._body when body param not given."""
         adapter = make_wa_adapter()
         body = b'{"entry":[]}'
         sig = "sha256=" + hmac.new(b"test_secret", body, hashlib.sha256).hexdigest()
@@ -294,6 +303,13 @@ class TestVerifyWebhook:
         request = MagicMock()
         request.headers = {}
         request._body = b'{"entry":[]}'
+        assert adapter.verify_webhook(request) is False
+
+    def test_empty_body_returns_false(self):
+        adapter = make_wa_adapter()
+        request = MagicMock()
+        request.headers = {"X-Hub-Signature-256": "sha256=somesig"}
+        # No body param, no _body attribute
         assert adapter.verify_webhook(request) is False
 
 

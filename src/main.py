@@ -401,15 +401,18 @@ async def telegram_webhook(
 async def _process_wa_message(
     tenant: Tenant,
     wa_msg: "ChannelMessage",
-    db: AsyncSession,
 ):
-    """Background task: process a single WA message through the RAG pipeline."""
+    """Background task: process a single WA message through the RAG pipeline.
+
+    Creates its own DB session since the request-scoped session from the
+    webhook handler will be closed by the time this task runs.
+    """
     from rag import sanitize_user_input
 
     user_id = wa_msg.user_id
     namespace = tenant.slug
 
-    # Unsupported media — reply with help text
+    # Unsupported media — reply with help text (no DB needed)
     if wa_msg.media_type == "image" or (wa_msg.text is None and wa_msg.media_type != "voice"):
         adapter = _get_wa_adapter(tenant)
         if adapter:
@@ -423,7 +426,7 @@ async def _process_wa_message(
                 logger.warning("wa_send_failed user=%s — media fallback", user_id)
         return
 
-    # Voice note — transcribe (T8: deferred, placeholder)
+    # Voice note — transcribe (T8: deferred, placeholder, no DB needed)
     if wa_msg.media_type == "voice":
         adapter = _get_wa_adapter(tenant)
         if adapter:
@@ -436,7 +439,7 @@ async def _process_wa_message(
                 logger.warning("wa_send_failed user=%s — voice fallback", user_id)
         return
 
-    # Text message — process through RAG
+    # Text message — process through RAG (needs DB session)
     text = wa_msg.text or ""
     if not text.strip():
         return
@@ -463,65 +466,67 @@ async def _process_wa_message(
         return
     _wa_rate_limits[rate_key] = timestamps + [now]
 
-    # 24h service window check
-    within_window = await check_wa_service_window(db, tenant.id, user_id)
-    if not within_window:
-        adapter = _get_wa_adapter(tenant)
-        if adapter:
-            if tenant.wa_reengagement_template:
-                try:
-                    await send_wa_template(adapter, user_id, tenant.wa_reengagement_template)
-                except ChannelSendError:
-                    logger.warning("wa_template_failed user=%s template=%s", user_id, tenant.wa_reengagement_template)
-            else:
-                logger.warning("wa_outside_window_no_template user=%s — logging unanswered", user_id)
-                await _log_unanswered(db, namespace, text, user_id, "needs_human", tenant.id)
-        return
+    # DB operations — create a fresh session since this runs as a background task
+    async with AsyncSessionLocal() as db:
+        # 24h service window check
+        within_window = await check_wa_service_window(db, tenant.id, user_id)
+        if not within_window:
+            adapter = _get_wa_adapter(tenant)
+            if adapter:
+                if tenant.wa_reengagement_template:
+                    try:
+                        await send_wa_template(adapter, user_id, tenant.wa_reengagement_template)
+                    except ChannelSendError:
+                        logger.warning("wa_template_failed user=%s template=%s", user_id, tenant.wa_reengagement_template)
+                else:
+                    logger.warning("wa_outside_window_no_template user=%s — logging unanswered", user_id)
+                    await _log_unanswered(db, namespace, text, user_id, "needs_human", tenant.id)
+            return
 
-    # Update service window timestamp
-    await update_wa_service_window(db, tenant.id, user_id)
+        # Update service window timestamp
+        await update_wa_service_window(db, tenant.id, user_id)
 
-    # RAG query
-    try:
-        answer, chunks, intent = await rag_query(
-            db=db,
-            question=text,
-            namespace=namespace,
-            user_id=user_id,
-            expertise_area=tenant.expertise_area or "",
-            tenant_id=tenant.id,
-            channel="whatsapp",
-        )
-    except Exception as e:
-        logger.error("wa_rag_error user=%s: %s", user_id, e)
-        adapter = _get_wa_adapter(tenant)
-        if adapter:
-            try:
-                await adapter.send_reply(user_id, "Lo siento, hubo un error. Intentá de nuevo en un momento.")
-            except ChannelSendError:
-                pass
-        return
-
-    # Send reply
-    adapter = _get_wa_adapter(tenant)
-    if adapter:
-        # Format sources footer for WA
-        source_footer = ""
-        if chunks:
-            sources = set(c["source"] for c in chunks if c.get("source"))
-            if sources:
-                source_footer = "\n\n📎 Fuentes: " + ", ".join(sources)
-
+        # RAG query
         try:
-            await adapter.send_reply(user_id, answer + source_footer)
-        except ChannelSendError as e:
-            logger.warning("wa_send_failed user=%s: %s — retrying once", user_id, e)
-            # Retry once with backoff
-            await asyncio.sleep(2)
+            answer, chunks, intent = await rag_query(
+                db=db,
+                question=text,
+                namespace=namespace,
+                user_id=user_id,
+                expertise_area=tenant.expertise_area or "",
+                tenant_id=tenant.id,
+                channel="whatsapp",
+            )
+        except Exception as e:
+            logger.error("wa_rag_error user=%s: %s", user_id, e)
+            adapter = _get_wa_adapter(tenant)
+            if adapter:
+                try:
+                    await adapter.send_reply(user_id, "Lo siento, hubo un error. Intentá de nuevo en un momento.")
+                except ChannelSendError:
+                    pass
+            return
+
+        # Send reply
+        adapter = _get_wa_adapter(tenant)
+        if adapter:
+            # Format sources footer for WA
+            source_footer = ""
+            if chunks:
+                sources = set(c["source"] for c in chunks if c.get("source"))
+                if sources:
+                    source_footer = "\n\n📎 Fuentes: " + ", ".join(sources)
+
             try:
                 await adapter.send_reply(user_id, answer + source_footer)
-            except ChannelSendError:
-                logger.error("wa_send_failed_retry user=%s — giving up", user_id)
+            except ChannelSendError as e:
+                logger.warning("wa_send_failed user=%s: %s — retrying once", user_id, e)
+                # Retry once with backoff
+                await asyncio.sleep(2)
+                try:
+                    await adapter.send_reply(user_id, answer + source_footer)
+                except ChannelSendError:
+                    logger.error("wa_send_failed_retry user=%s — giving up", user_id)
 
 
 def _get_wa_adapter(tenant: Tenant) -> WhatsAppAdapter | None:
@@ -587,16 +592,19 @@ async def whatsapp_webhook(
     if "whatsapp" not in (tenant.channels or "telegram"):
         raise HTTPException(status_code=404, detail="WhatsApp not enabled for this tenant")
 
-    # 3. HMAC verification
+    # 3. Read body for HMAC verification (must read before json() consumes the stream)
+    body_bytes = await request.body()
+
+    # 4. HMAC verification
     adapter = _get_wa_adapter(tenant)
     if not adapter:
         raise HTTPException(status_code=404, detail="WhatsApp not configured for this tenant")
 
-    if not adapter.verify_webhook(request):
+    if not adapter.verify_webhook(request, body_bytes):
         logger.warning("wa_hmac_failed tenant=%s", tenant_slug)
         raise HTTPException(status_code=403, detail="Invalid webhook signature")
 
-    # 4. Parse payload
+    # 5. Parse payload
     try:
         data = await request.json()
     except Exception:
@@ -611,10 +619,7 @@ async def whatsapp_webhook(
     # 6. Process each message in background
     for msg in messages:
         # Dedup already checked in parse_incoming via _is_duplicate
-        from fastapi import BackgroundTasks
-        # Use the app's background tasks infrastructure
-        import asyncio
-        asyncio.create_task(_process_wa_message(tenant, msg, db))
+        asyncio.create_task(_process_wa_message(tenant, msg))
 
     return {"ok": True}
 
