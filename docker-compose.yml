@@ -41,6 +41,7 @@ services:
       - traefik.http.routers.ragbot.tls=true
       - traefik.http.routers.ragbot.tls.certresolver=letsencrypt
       - traefik.http.services.ragbot.loadbalancer.server.port=8000
+      - traefik.http.services.ragbot.loadbalancer.server.scheme=http
 
 volumes:
   pgdata:
