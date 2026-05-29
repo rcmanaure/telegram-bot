@@ -32,7 +32,7 @@ from telegram.ext import ApplicationBuilder
 
 from config import settings
 from db import init_db, get_db, AsyncSessionLocal, DocumentChunk, Tenant, UnansweredQuery, WaServiceWindow
-from rag import chunk_text, index_chunks, sync_faq_chunks, rag_query
+from rag import chunk_text, index_chunks, sync_faq_chunks, rag_query, _log_unanswered
 from channels.whatsapp import (
     WhatsAppAdapter,
     check_wa_service_window,
@@ -42,6 +42,11 @@ from channels.whatsapp import (
 from channels.protocol import ChannelSendError, format_text_for_channel, normalize_phone
 
 logger = logging.getLogger(__name__)
+
+# WA rate limits (separate from TG's _user_message_times since WA is async)
+_WA_RATE_LIMIT_MAX = 20
+_WA_RATE_LIMIT_WINDOW_S = 60
+_wa_rate_limits: dict[str, list] = {}
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
 
@@ -399,7 +404,6 @@ async def _process_wa_message(
     db: AsyncSession,
 ):
     """Background task: process a single WA message through the RAG pipeline."""
-    from bot import rate_limits
     from rag import sanitize_user_input
 
     user_id = wa_msg.user_id
@@ -448,15 +452,16 @@ async def _process_wa_message(
                 pass
         return
 
-    # Rate limit (reuse TG pattern: 20/60s per tenant:user)
+    # Rate limit (20/60s per tenant:user, independent of TG)
     rate_key = f"{namespace}:{user_id}"
-    now = asyncio.get_event_loop().time()
-    timestamps = rate_limits.get(rate_key, [])
-    timestamps = [t for t in timestamps if now - t < 60]
-    if len(timestamps) >= 20:
+    import time as _time
+    now = _time.monotonic()
+    timestamps = _wa_rate_limits.get(rate_key, [])
+    timestamps = [t for t in timestamps if now - t < _WA_RATE_LIMIT_WINDOW_S]
+    if len(timestamps) >= _WA_RATE_LIMIT_MAX:
         logger.warning("wa_rate_limit key=%s", rate_key)
         return
-    rate_limits[rate_key] = timestamps + [now]
+    _wa_rate_limits[rate_key] = timestamps + [now]
 
     # 24h service window check
     within_window = await check_wa_service_window(db, tenant.id, user_id)
