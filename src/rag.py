@@ -234,9 +234,14 @@ async def retrieve_context(
 MIN_SIMILARITY = 0.20  # chunks below this threshold are considered off-topic
 
 
-def _build_system_prompt(expertise_area: str) -> str:
+def _build_system_prompt(expertise_area: str, channel: str = "telegram") -> str:
+    from channels.protocol import CHANNEL_FORMATTING
+
     area_clause = f" Mi área de expertise: {expertise_area}." if expertise_area else ""
     off_topic_reply = f"Eso está fuera de mi área de expertise.{area_clause} Consultá directamente con nosotros."
+
+    fmt = CHANNEL_FORMATTING.get(channel, CHANNEL_FORMATTING["telegram"])
+
     return f"""Sos un asistente especializado exclusivamente en la información de los documentos cargados. Tu ÚNICA fuente de conocimiento es el contexto que se te proporciona.
 
 REGLAS INQUEBRANTABLES:
@@ -249,20 +254,10 @@ Cómo hablar:
 - Respondé directo al punto, sin repetir la pregunta.
 - Para preguntas simples, una o dos oraciones alcanzan.
 - Nunca menciones "documentos", "páginas" ni "fuentes" — simplemente sabés la información.
-- Usá emojis temáticos cuando menciones actividades, servicios o conceptos. El emoji va SIEMPRE ANTES del nombre del ítem, elegido por vos según el concepto (ej: 🧘‍♀️ *Yoga*, 🚴 *Cycling*, 💪 *Entrenamiento*, 💳 *Plan Pro*). No uses siempre el mismo emoji genérico — elegí el que mejor represente semánticamente cada término. Telegram tiene una gama enorme; aprovechala para hacer el mensaje más visual y fácil de escanear.
+- Usá emojis temáticos cuando menciones actividades, servicios o conceptos. El emoji va SIEMPRE ANTES del nombre del ítem, elegido por vos según el concepto (ej: 🧘‍♀️ *Yoga*, 🚴 *Cycling*, 💪 *Entrenamiento*, 💳 *Plan Pro*). No uses siempre el mismo emoji genérico — elegí el que mejor represente semánticamente cada término.
 - Respondé en el idioma del usuario.
 
-Formato para Telegram (OBLIGATORIO):
-- NUNCA uses tablas Markdown (| col | col |) — Telegram no las renderiza, se ven como texto crudo.
-- Para comparar opciones o listar ítems con atributos usá listas con viñetas y negrita:
-  *Plan Basic* — $29/mes · acceso 6am–10pm · 2 clases/mes
-  *Plan Pro* — $59/mes · acceso 24/7 · clases ilimitadas
-- Para listas simples usá guiones o números.
-- Para horarios o datos tabulares usá formato vertical:
-  📅 Yoga: Lun/Mié/Vie — 7am y 6pm
-  📅 HIIT: Mar/Jue — 6am y 7pm
-- Negrita con *asteriscos* para títulos o datos clave.
-- Código con `backticks` solo para datos técnicos exactos (precios, horarios puntuales).
+{fmt.format_instructions}
 
 [CANARY_KEY: {CANARY_TOKEN}]
 """
@@ -379,6 +374,7 @@ async def generate_answer(
     question: str,
     conversation_history: list[dict],
     expertise_area: str = "",
+    channel: str = "telegram",
 ) -> str:
     """
     Generate an answer using retrieved context + conversation history.
@@ -387,7 +383,7 @@ async def generate_answer(
     if not context_chunks:
         return "No encontré información relevante en los documentos para responder tu pregunta."
 
-    system_prompt = _build_system_prompt(expertise_area)
+    system_prompt = _build_system_prompt(expertise_area, channel=channel)
 
     # Format context for the prompt
     context_text = "\n\n---\n\n".join([
@@ -481,18 +477,21 @@ async def save_turn(
     namespace: str,
     user_msg: str,
     assistant_msg: str,
+    channel: str = "telegram",
 ):
     db.add(Conversation(
         user_id=user_id,
         namespace=namespace,
         role="user",
         content=user_msg,
+        channel=channel,
     ))
     db.add(Conversation(
         user_id=user_id,
         namespace=namespace,
         role="assistant",
         content=assistant_msg,
+        channel=channel,
     ))
     await db.commit()
 
@@ -544,6 +543,7 @@ async def rag_query(
     expertise_area: str = "",
     language_code: str | None = None,
     tenant_id: int | None = None,
+    channel: str = "telegram",
 ) -> tuple[str, list[dict], str | None]:
     """
     Full RAG pipeline: retrieve context → generate answer → save history.
@@ -553,8 +553,8 @@ async def rag_query(
     # Pre-RAG: explicit escalation shortcut — skip vector search
     if _ESCALATION_PATTERN.search(question):
         area_clause = f" Mi área de expertise: {expertise_area}." if expertise_area else ""
-        answer = f"Entiendo que querés hablar con alguien.{area_clause} Contactanos directamente."
-        await save_turn(db, user_id, namespace, question, answer)
+        answer = f"Entiendo que querés hablar con alguien.{area_clause} Contactamos directamente."
+        await save_turn(db, user_id, namespace, question, answer, channel=channel)
         await _log_unanswered(db, namespace, question, user_id, "needs_human", tenant_id)
         return answer, [], "needs_human"
 
@@ -572,12 +572,12 @@ async def rag_query(
 
     if not context:
         intent, answer = await _triage_response(question, expertise_area, language_code)
-        await save_turn(db, user_id, namespace, question, answer)
+        await save_turn(db, user_id, namespace, question, answer, channel=channel)
         if intent in {"off_topic", "needs_human"}:
             await _log_unanswered(db, namespace, question, user_id, intent, tenant_id)
         return answer, [], intent
 
-    answer = await generate_answer(context, question, history, expertise_area)
+    answer = await generate_answer(context, question, history, expertise_area, channel=channel)
     answer = validate_output(answer, user_id=user_id)
-    await save_turn(db, user_id, namespace, question, answer)
+    await save_turn(db, user_id, namespace, question, answer, channel=channel)
     return answer, context, None

@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Boolean, Column, DateTime, ForeignKey, Index,
-    Integer, JSON, String, Text, func,
+    Integer, JSON, String, Text, UniqueConstraint, func,
 )
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -33,6 +33,15 @@ class Tenant(Base):
     operator_chat_id = Column(String(64), nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     active = Column(Boolean, default=True)
+
+    # WhatsApp / multi-channel
+    wa_phone_number_id = Column(String(100), nullable=True)
+    wa_access_token = Column(String(500), nullable=True)
+    wa_app_secret = Column(String(100), nullable=True)
+    wa_business_id = Column(String(100), nullable=True)
+    wa_verify_token = Column(String(100), nullable=True)
+    wa_reengagement_template = Column(String(200), nullable=True)
+    channels = Column(Text, nullable=True, server_default="telegram")
 
 
 class DocumentChunk(Base):
@@ -84,6 +93,19 @@ class Conversation(Base):
     role = Column(String(20), nullable=False)
     content = Column(Text, nullable=False)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class WaServiceWindow(Base):
+    __tablename__ = "wa_service_windows"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
+    user_id = Column(String(100), nullable=False)
+    last_user_message_at = Column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "user_id", name="uq_wa_window_tenant_user"),
+    )
 
 
 # ─── Engine + Session ────────────────────────────────────────────────────────

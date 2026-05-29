@@ -37,5 +37,12 @@ class Settings(BaseSettings):
     # Admin UI
     admin_password: str = "changeme"
 
+    # WhatsApp (optional — per-tenant credentials stored in DB)
+    wa_phone_number_id: str = ""
+    wa_access_token: str = ""
+    wa_app_secret: str = ""
+    wa_business_id: str = ""
+    wa_verify_token: str = ""
+
 
 settings = Settings()
