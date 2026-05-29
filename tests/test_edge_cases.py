@@ -1101,7 +1101,7 @@ async def test_handle_message_off_topic_no_follow_up_appended():
 
 
 @pytest.mark.asyncio
-async def test_handle_message_answered_intent_appends_follow_up():
+async def test_handle_message_answered_intent_no_hardcoded_follow_up():
     from bot import handle_message
 
     update = _make_update(text="¿Cuáles son los horarios?")
@@ -1116,7 +1116,9 @@ async def test_handle_message_answered_intent_appends_follow_up():
             await handle_message(update, ctx)
 
     reply = update.message.reply_text.call_args[0][0]
-    assert "Hay algo más" in reply
+    # No hardcoded follow-up — LLM decides how to close
+    assert "Hay algo más" not in reply
+    assert "Abrimos" in reply
 
 
 @pytest.mark.asyncio
@@ -1375,7 +1377,6 @@ async def test_handle_message_regression():
     update.message.reply_text.assert_called_once()
     reply = update.message.reply_text.call_args[0][0]
     assert "Abrimos" in reply
-    assert "Hay algo más" in reply
 
 
 # ─── Rate limit ───────────────────────────────────────────────────────────────
