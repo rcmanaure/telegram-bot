@@ -1,0 +1,15 @@
+http:
+  routers:
+    ragbot:
+      rule: "Host(`${TRAEFIK_HOST}`)"
+      entrypoints:
+        - websecure
+      tls:
+        certresolver: letsencrypt
+      service: ragbot
+
+  services:
+    ragbot:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:8000"
