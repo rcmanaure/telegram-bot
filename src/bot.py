@@ -119,7 +119,8 @@ async def cmd_sources(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         lines = ["📚 *Documentos que conozco:*\n"]
         for row in rows:
-            lines.append(f"• {row.source} ({row.chunks} fragmentos)")
+            name = "Preguntas frecuentes" if row.source == "__faq__" else row.source
+            lines.append(f"• {name} ({row.chunks} fragmentos)")
         await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
     except Exception:
