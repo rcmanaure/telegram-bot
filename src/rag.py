@@ -106,6 +106,34 @@ async def embed_texts(texts: list[str]) -> list[list[float]]:
     return all_embeddings
 
 
+# ─── FAQ chunk sync ──────────────────────────────────────────────────────────
+
+FAQ_SOURCE = "__faq__"
+
+
+async def sync_faq_chunks(
+    db: AsyncSession,
+    tenant_slug: str,
+    example_questions: list[str] | None,
+) -> int:
+    """Delete old FAQ chunks and (re)index example_questions for a tenant."""
+    await db.execute(
+        text("DELETE FROM document_chunks WHERE namespace = :ns AND source = :src"),
+        {"ns": tenant_slug, "src": FAQ_SOURCE},
+    )
+    await db.commit()
+
+    if not example_questions:
+        return 0
+
+    chunks = [
+        {"content": q.strip(), "source": FAQ_SOURCE, "page": 0}
+        for q in example_questions
+        if q and q.strip()
+    ]
+    return await index_chunks(db, chunks, tenant_slug)
+
+
 # ─── Indexing ────────────────────────────────────────────────────────────────
 
 async def index_chunks(

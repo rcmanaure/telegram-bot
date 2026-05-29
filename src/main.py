@@ -32,7 +32,7 @@ from telegram.ext import ApplicationBuilder
 
 from config import settings
 from db import init_db, get_db, AsyncSessionLocal, DocumentChunk, Tenant, UnansweredQuery
-from rag import chunk_text, index_chunks
+from rag import chunk_text, index_chunks, sync_faq_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +91,8 @@ async def daily_digest_job():
                 rows = result.fetchall()
             if not rows:
                 continue
-            lines = ["📊 *Consultas sin respuesta (últimas 24h):*\n"]
+            bot_name = tenant.name or tenant.slug
+            lines = [f"📊 *Consultas sin respuesta — {bot_name}* (últimas 24h):\n"]
             for i, row in enumerate(rows, 1):
                 lines.append(f"{i}. {row.question} ({row.cnt}×)")
             await tg_app.bot.send_message(
@@ -181,6 +182,18 @@ async def lifespan(app: FastAPI):
             logger.info("Webhook set for tenant %s", tenant.slug)
         except Exception:
             logger.exception("Failed to initialize tenant %s — skipping", tenant.slug)
+
+    # Index FAQ chunks for tenants that have example_questions
+    from rag import sync_faq_chunks
+    async with AsyncSessionLocal() as db:
+        for tenant in tenants:
+            if tenant.example_questions:
+                try:
+                    count = await sync_faq_chunks(db, tenant.slug, tenant.example_questions)
+                    if count:
+                        logger.info("Indexed %d FAQ chunks for tenant %s", count, tenant.slug)
+                except Exception:
+                    logger.exception("Failed to index FAQ chunks for tenant %s", tenant.slug)
 
     scheduler = AsyncIOScheduler(timezone="UTC", misfire_grace_time=300)
     scheduler.add_job(daily_digest_job, "cron", hour=8, minute=0, id="daily_digest")
@@ -431,6 +444,8 @@ def _admin_html(
                      style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
               <input name="operator_chat_id" value="{t.operator_chat_id or ''}" placeholder="chat_id operador"
                      style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
+              <textarea name="example_questions" rows="3" placeholder="Preguntas frecuentes (una por línea, máx 5)"
+                        style="padding:4px 8px;border:1px solid #ccc;border-radius:4px;width:100%;box-sizing:border-box">{html_module.escape(chr(10).join(t.example_questions) if t.example_questions else '')}</textarea>
               <button type="submit" style="padding:4px 12px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer">
                 Guardar
               </button>
@@ -655,6 +670,9 @@ async def admin_create_tenant(
     await db.commit()
     await db.refresh(tenant)
 
+    if example_questions:
+        await sync_faq_chunks(db, tenant.slug, example_questions)
+
     # Discover current public domain from ngrok or settings
     from rag import http_client
     domain = None
@@ -697,6 +715,8 @@ async def admin_update_tenant(
     expertise_area = form.get("expertise_area", "")
     contact_url = (form.get("contact_url") or "").strip() or None
     operator_chat_id = (form.get("operator_chat_id") or "").strip() or None
+    raw_questions = (form.get("example_questions") or "").strip()
+    example_questions = [q.strip() for q in raw_questions.splitlines() if q.strip()][:5] or None
 
     if contact_url and not contact_url.startswith(("http://", "https://")):
         result = await db.execute(select(Tenant).order_by(Tenant.id))
@@ -711,9 +731,12 @@ async def admin_update_tenant(
     tenant.expertise_area = expertise_area
     tenant.contact_url = contact_url
     tenant.operator_chat_id = operator_chat_id
+    tenant.example_questions = example_questions
     db.add(tenant)
     await db.commit()
     await db.refresh(tenant)
+
+    await sync_faq_chunks(db, tenant.slug, example_questions)
 
     tg_app = telegram_apps.get(tenant.bot_token)
     if tg_app:
