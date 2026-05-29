@@ -91,7 +91,8 @@ async def daily_digest_job():
                 rows = result.fetchall()
             if not rows:
                 continue
-            lines = ["📊 *Consultas sin respuesta (últimas 24h):*\n"]
+            bot_name = tenant.name or tenant.slug
+            lines = [f"📊 *Consultas sin respuesta — {bot_name}* (últimas 24h):\n"]
             for i, row in enumerate(rows, 1):
                 lines.append(f"{i}. {row.question} ({row.cnt}×)")
             await tg_app.bot.send_message(
