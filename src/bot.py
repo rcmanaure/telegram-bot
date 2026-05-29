@@ -180,9 +180,6 @@ async def _process_question(
         else:
             full_reply = answer
 
-        if intent is None:
-            full_reply += "\n\n¿Hay algo más en lo que pueda ayudarte?"
-
         full_reply += reply_suffix
 
         reply_markup = None
