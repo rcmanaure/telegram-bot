@@ -263,14 +263,23 @@ class WhatsAppAdapter:
 
     # ─── verify_webhook ─────────────────────────────────────────────────────
 
-    def verify_webhook(self, request: Request) -> bool:
-        """Verify WhatsApp webhook signature using HMAC-SHA256."""
+    def verify_webhook(self, request: Request, body: bytes = b"") -> bool:
+        """Verify WhatsApp webhook signature using HMAC-SHA256.
+
+        Callers should read the request body first (await request.body())
+        and pass it as the `body` parameter. If `body` is empty, falls back
+        to request._body (populated after body() is called).
+        """
         try:
-            body = request._body.decode("utf-8") if hasattr(request, "_body") else ""
-            if not body:
-                import asyncio
-                # Sync context — body might need to be read
-                # In practice, FastAPI reads body before this is called
+            if body:
+                raw = body
+            elif hasattr(request, "_body") and request._body:
+                raw = request._body
+            else:
+                return False
+
+            body_str = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+            if not body_str:
                 return False
 
             signature = request.headers.get("X-Hub-Signature-256", "")
@@ -279,7 +288,7 @@ class WhatsAppAdapter:
 
             expected = hmac.new(
                 self.app_secret.encode("utf-8"),
-                body.encode("utf-8"),
+                body_str.encode("utf-8"),
                 hashlib.sha256,
             ).hexdigest()
             received = signature.removeprefix("sha256=")
@@ -299,7 +308,7 @@ class WhatsAppAdapter:
         token = request.query_params.get("hub.verify_token")
         challenge = request.query_params.get("hub.challenge")
 
-        if mode == "subscribe" and token == self.verify_token:
+        if mode == "subscribe" and hmac.compare_digest(token or "", self.verify_token):
             logger.info("wa_webhook_verified")
             return Response(content=challenge, status_code=200)
         return None
