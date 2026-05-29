@@ -31,8 +31,15 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder
 
 from config import settings
-from db import init_db, get_db, AsyncSessionLocal, DocumentChunk, Tenant, UnansweredQuery
-from rag import chunk_text, index_chunks, sync_faq_chunks
+from db import init_db, get_db, AsyncSessionLocal, DocumentChunk, Tenant, UnansweredQuery, WaServiceWindow
+from rag import chunk_text, index_chunks, sync_faq_chunks, rag_query
+from channels.whatsapp import (
+    WhatsAppAdapter,
+    check_wa_service_window,
+    update_wa_service_window,
+    send_wa_template,
+)
+from channels.protocol import ChannelSendError, format_text_for_channel, normalize_phone
 
 logger = logging.getLogger(__name__)
 
@@ -383,6 +390,230 @@ async def telegram_webhook(
     return {"ok": True}
 
 
+# ─── WhatsApp webhook endpoints ───────────────────────────────────────────────
+
+
+async def _process_wa_message(
+    tenant: Tenant,
+    wa_msg: "ChannelMessage",
+    db: AsyncSession,
+):
+    """Background task: process a single WA message through the RAG pipeline."""
+    from bot import rate_limits
+    from rag import sanitize_user_input
+
+    user_id = wa_msg.user_id
+    namespace = tenant.slug
+
+    # Unsupported media — reply with help text
+    if wa_msg.media_type == "image" or (wa_msg.text is None and wa_msg.media_type != "voice"):
+        adapter = _get_wa_adapter(tenant)
+        if adapter:
+            try:
+                await adapter.send_reply(
+                    user_id,
+                    "Solo puedo procesar texto y notas de voz. "
+                    "Escribí tu consulta o enviá una nota de voz.",
+                )
+            except ChannelSendError:
+                logger.warning("wa_send_failed user=%s — media fallback", user_id)
+        return
+
+    # Voice note — transcribe (T8: deferred, placeholder)
+    if wa_msg.media_type == "voice":
+        adapter = _get_wa_adapter(tenant)
+        if adapter:
+            try:
+                await adapter.send_reply(
+                    user_id,
+                    "Las notas de voz aún no están disponibles. Escribí tu consulta por texto.",
+                )
+            except ChannelSendError:
+                logger.warning("wa_send_failed user=%s — voice fallback", user_id)
+        return
+
+    # Text message — process through RAG
+    text = wa_msg.text or ""
+    if not text.strip():
+        return
+
+    try:
+        text = sanitize_user_input(text)
+    except ValueError:
+        adapter = _get_wa_adapter(tenant)
+        if adapter:
+            try:
+                await adapter.send_reply(user_id, "Tu mensaje contiene contenido no permitido.")
+            except ChannelSendError:
+                pass
+        return
+
+    # Rate limit (reuse TG pattern: 20/60s per tenant:user)
+    rate_key = f"{namespace}:{user_id}"
+    now = asyncio.get_event_loop().time()
+    timestamps = rate_limits.get(rate_key, [])
+    timestamps = [t for t in timestamps if now - t < 60]
+    if len(timestamps) >= 20:
+        logger.warning("wa_rate_limit key=%s", rate_key)
+        return
+    rate_limits[rate_key] = timestamps + [now]
+
+    # 24h service window check
+    within_window = await check_wa_service_window(db, tenant.id, user_id)
+    if not within_window:
+        adapter = _get_wa_adapter(tenant)
+        if adapter:
+            if tenant.wa_reengagement_template:
+                try:
+                    await send_wa_template(adapter, user_id, tenant.wa_reengagement_template)
+                except ChannelSendError:
+                    logger.warning("wa_template_failed user=%s template=%s", user_id, tenant.wa_reengagement_template)
+            else:
+                logger.warning("wa_outside_window_no_template user=%s — logging unanswered", user_id)
+                await _log_unanswered(db, namespace, text, user_id, "needs_human", tenant.id)
+        return
+
+    # Update service window timestamp
+    await update_wa_service_window(db, tenant.id, user_id)
+
+    # RAG query
+    try:
+        answer, chunks, intent = await rag_query(
+            db=db,
+            question=text,
+            namespace=namespace,
+            user_id=user_id,
+            expertise_area=tenant.expertise_area or "",
+            tenant_id=tenant.id,
+            channel="whatsapp",
+        )
+    except Exception as e:
+        logger.error("wa_rag_error user=%s: %s", user_id, e)
+        adapter = _get_wa_adapter(tenant)
+        if adapter:
+            try:
+                await adapter.send_reply(user_id, "Lo siento, hubo un error. Intentá de nuevo en un momento.")
+            except ChannelSendError:
+                pass
+        return
+
+    # Send reply
+    adapter = _get_wa_adapter(tenant)
+    if adapter:
+        # Format sources footer for WA
+        source_footer = ""
+        if chunks:
+            sources = set(c["source"] for c in chunks if c.get("source"))
+            if sources:
+                source_footer = "\n\n📎 Fuentes: " + ", ".join(sources)
+
+        try:
+            await adapter.send_reply(user_id, answer + source_footer)
+        except ChannelSendError as e:
+            logger.warning("wa_send_failed user=%s: %s — retrying once", user_id, e)
+            # Retry once with backoff
+            await asyncio.sleep(2)
+            try:
+                await adapter.send_reply(user_id, answer + source_footer)
+            except ChannelSendError:
+                logger.error("wa_send_failed_retry user=%s — giving up", user_id)
+
+
+def _get_wa_adapter(tenant: Tenant) -> WhatsAppAdapter | None:
+    """Create a WhatsApp adapter for the tenant, or None if WA not configured."""
+    if not tenant.wa_phone_number_id or not tenant.wa_access_token:
+        return None
+    if "whatsapp" not in (tenant.channels or "telegram"):
+        return None
+    return WhatsAppAdapter(
+        phone_number_id=tenant.wa_phone_number_id,
+        access_token=tenant.wa_access_token,
+        app_secret=tenant.wa_app_secret or "",
+        verify_token=tenant.wa_verify_token or "",
+        business_id=tenant.wa_business_id,
+    )
+
+
+@app.get("/webhook/{tenant_slug}/whatsapp")
+async def whatsapp_webhook_verify(
+    tenant_slug: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """WhatsApp webhook GET verification (hub.challenge)."""
+    result = await db.execute(
+        select(Tenant).where(Tenant.slug == tenant_slug, Tenant.active == True)  # noqa: E712
+    )
+    tenant = result.scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    adapter = _get_wa_adapter(tenant)
+    if not adapter:
+        raise HTTPException(status_code=404, detail="WhatsApp not configured for this tenant")
+
+    response = await adapter.handle_verification(request)
+    if response:
+        return response
+    raise HTTPException(status_code=403, detail="Verification failed")
+
+
+@app.post("/webhook/{tenant_slug}/whatsapp")
+@limiter.limit("20/minute")
+async def whatsapp_webhook(
+    tenant_slug: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """WhatsApp webhook POST — receive and process messages.
+
+    Sync path: tenant lookup, HMAC verify, dedup check, spawn BackgroundTask.
+    Returns 200 immediately so Meta doesn't retry.
+    """
+    # 1. Lookup tenant
+    result = await db.execute(
+        select(Tenant).where(Tenant.slug == tenant_slug, Tenant.active == True)  # noqa: E712
+    )
+    tenant = result.scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    # 2. Check WA is enabled
+    if "whatsapp" not in (tenant.channels or "telegram"):
+        raise HTTPException(status_code=404, detail="WhatsApp not enabled for this tenant")
+
+    # 3. HMAC verification
+    adapter = _get_wa_adapter(tenant)
+    if not adapter:
+        raise HTTPException(status_code=404, detail="WhatsApp not configured for this tenant")
+
+    if not adapter.verify_webhook(request):
+        logger.warning("wa_hmac_failed tenant=%s", tenant_slug)
+        raise HTTPException(status_code=403, detail="Invalid webhook signature")
+
+    # 4. Parse payload
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
+    # 5. Parse incoming messages (handles status callbacks → empty list)
+    try:
+        messages = await adapter.parse_incoming(data)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Malformed webhook payload")
+
+    # 6. Process each message in background
+    for msg in messages:
+        # Dedup already checked in parse_incoming via _is_duplicate
+        from fastapi import BackgroundTasks
+        # Use the app's background tasks infrastructure
+        import asyncio
+        asyncio.create_task(_process_wa_message(tenant, msg, db))
+
+    return {"ok": True}
+
+
 # ─── Admin UI ────────────────────────────────────────────────────────────────
 
 VALID_PLANS = ("free", "basic", "pro")
@@ -446,6 +677,20 @@ def _admin_html(
                      style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
               <textarea name="example_questions" rows="3" placeholder="Preguntas frecuentes (una por línea, máx 5)"
                         style="padding:4px 8px;border:1px solid #ccc;border-radius:4px;width:100%;box-sizing:border-box">{html_module.escape(chr(10).join(t.example_questions) if t.example_questions else '')}</textarea>
+              <details style="margin-top:6px"><summary style="cursor:pointer;font-size:0.85rem;color:#475569">WhatsApp Config</summary>
+              <div style="display:grid;gap:4px;margin-top:4px">
+                <input name="wa_phone_number_id" value="{t.wa_phone_number_id or ''}" placeholder="Phone Number ID"
+                       style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
+                <input name="wa_access_token" value="{t.wa_access_token or ''}" placeholder="Access Token" type="password"
+                       style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
+                <input name="wa_app_secret" value="{t.wa_app_secret or ''}" placeholder="App Secret" type="password"
+                       style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
+                <input name="wa_verify_token" value="{t.wa_verify_token or ''}" placeholder="Verify Token"
+                       style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
+                <input name="wa_reengagement_template" value="{t.wa_reengagement_template or ''}" placeholder="Re-engagement Template Name"
+                       style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
+              </div>
+              </details>
               <button type="submit" style="padding:4px 12px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer">
                 Guardar
               </button>
@@ -718,6 +963,13 @@ async def admin_update_tenant(
     raw_questions = (form.get("example_questions") or "").strip()
     example_questions = [q.strip() for q in raw_questions.splitlines() if q.strip()][:5] or None
 
+    # WhatsApp / multi-channel fields
+    wa_phone_number_id = (form.get("wa_phone_number_id") or "").strip() or None
+    wa_access_token = (form.get("wa_access_token") or "").strip() or None
+    wa_app_secret = (form.get("wa_app_secret") or "").strip() or None
+    wa_verify_token = (form.get("wa_verify_token") or "").strip() or None
+    wa_reengagement_template = (form.get("wa_reengagement_template") or "").strip() or None
+
     if contact_url and not contact_url.startswith(("http://", "https://")):
         result = await db.execute(select(Tenant).order_by(Tenant.id))
         tenants = result.scalars().all()
@@ -732,6 +984,17 @@ async def admin_update_tenant(
     tenant.contact_url = contact_url
     tenant.operator_chat_id = operator_chat_id
     tenant.example_questions = example_questions
+    tenant.wa_phone_number_id = wa_phone_number_id
+    tenant.wa_access_token = wa_access_token
+    tenant.wa_app_secret = wa_app_secret
+    tenant.wa_verify_token = wa_verify_token
+    tenant.wa_reengagement_template = wa_reengagement_template
+
+    # Enable WhatsApp channel if WA credentials are provided
+    if wa_phone_number_id and wa_access_token:
+        tenant.channels = "telegram,whatsapp"
+    else:
+        tenant.channels = "telegram"
     db.add(tenant)
     await db.commit()
     await db.refresh(tenant)
