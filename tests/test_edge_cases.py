@@ -82,36 +82,7 @@ def _make_db_mock(fetchall=None, scalars_all=None, scalar_one_or_none=None):
     return _override, mock_db
 
 
-# ─── Fixtures ────────────────────────────────────────────────────────────────
-
-@pytest.fixture
-def api_client():
-    from fastapi.testclient import TestClient
-    import main as main_module
-    with patch("main.init_db", new_callable=AsyncMock), _patch_lifespan_db():
-        with TestClient(main_module.app) as client:
-            yield client
-
-
-@pytest.fixture
-def authed_api_client():
-    from fastapi.testclient import TestClient
-    import main as main_module
-    from db import Tenant
-
-    mock_tenant = MagicMock(spec=Tenant)
-    mock_tenant.slug = "test-tenant"
-    mock_tenant.active = True
-    mock_tenant.bot_token = "fake-token"
-    mock_tenant.expertise_area = ""
-
-    async def _mock_require_tenant(*args, **kwargs):
-        return mock_tenant
-
-    with patch("main.init_db", new_callable=AsyncMock), _patch_lifespan_db():
-        with patch("main.require_tenant", side_effect=_mock_require_tenant):
-            with TestClient(main_module.app) as client:
-                yield client, mock_tenant
+# api_client and authed_api_client fixtures are defined in conftest.py (session-scoped)
 
 
 # ─── chunk_text edge cases ────────────────────────────────────────────────────
@@ -183,18 +154,18 @@ def test_chunk_text_section_header_stays_with_content():
     )
 
 
-# ─── embed_texts error handling ───────────────────────────────────────────────
+# ─── call_embeddings error handling ───────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_embed_texts_empty_list_returns_empty():
-    from rag import embed_texts
-    result = await embed_texts([])
+async def test_call_embeddings_empty_list_returns_empty():
+    from llm import call_embeddings
+    result = await call_embeddings([])
     assert result == []
 
 
 @pytest.mark.asyncio
-async def test_embed_texts_rate_limit_raises_runtime_error():
-    from rag import embed_texts
+async def test_call_embeddings_rate_limit_raises_runtime_error():
+    from llm import call_embeddings
     from openai import RateLimitError
 
     err = RateLimitError(
@@ -202,27 +173,29 @@ async def test_embed_texts_rate_limit_raises_runtime_error():
         response=httpx.Response(429, request=httpx.Request("POST", "https://openrouter.ai")),
         body={},
     )
-    with patch("rag.openai_client") as mock_client:
-        mock_client.embeddings.create = AsyncMock(side_effect=err)
+    mock_client = AsyncMock()
+    mock_client.embeddings.create = AsyncMock(side_effect=err)
+    with patch("llm._get_embedding_client", return_value=mock_client):
         with pytest.raises(RuntimeError, match="rate-limited"):
-            await embed_texts(["test text"])
+            await call_embeddings(["test text"])
 
 
 @pytest.mark.asyncio
-async def test_embed_texts_timeout_raises_runtime_error():
-    from rag import embed_texts
+async def test_call_embeddings_timeout_raises_runtime_error():
+    from llm import call_embeddings
     from openai import APITimeoutError
 
     err = APITimeoutError(request=httpx.Request("POST", "https://openrouter.ai"))
-    with patch("rag.openai_client") as mock_client:
-        mock_client.embeddings.create = AsyncMock(side_effect=err)
+    mock_client = AsyncMock()
+    mock_client.embeddings.create = AsyncMock(side_effect=err)
+    with patch("llm._get_embedding_client", return_value=mock_client):
         with pytest.raises(RuntimeError, match="timed out"):
-            await embed_texts(["test text"])
+            await call_embeddings(["test text"])
 
 
 @pytest.mark.asyncio
-async def test_embed_texts_api_error_raises_runtime_error():
-    from rag import embed_texts
+async def test_call_embeddings_api_error_raises_runtime_error():
+    from llm import call_embeddings
     from openai import APIError
 
     err = APIError(
@@ -230,10 +203,11 @@ async def test_embed_texts_api_error_raises_runtime_error():
         request=httpx.Request("POST", "https://openrouter.ai"),
         body={},
     )
-    with patch("rag.openai_client") as mock_client:
-        mock_client.embeddings.create = AsyncMock(side_effect=err)
+    mock_client = AsyncMock()
+    mock_client.embeddings.create = AsyncMock(side_effect=err)
+    with patch("llm._get_embedding_client", return_value=mock_client):
         with pytest.raises(RuntimeError, match="Embedding failed"):
-            await embed_texts(["test text"])
+            await call_embeddings(["test text"])
 
 
 # ─── generate_answer error handling ──────────────────────────────────────────
@@ -245,9 +219,7 @@ _SAMPLE_CTX = [{"content": "Horarios: Lun-Vie 8am-10pm", "source": "info.pdf", "
 async def test_generate_answer_llm_timeout_raises_runtime_error():
     from rag import generate_answer
 
-    mock_http = AsyncMock()
-    mock_http.post = AsyncMock(side_effect=httpx.TimeoutException("timeout"))
-    with patch("rag.http_client", mock_http):
+    with patch("rag.call_chat", new_callable=AsyncMock, side_effect=RuntimeError("LLM service timed out. Please try again.")):
         with pytest.raises(RuntimeError, match="timed out"):
             await generate_answer(_SAMPLE_CTX, "¿Horarios?", [])
 
@@ -256,14 +228,7 @@ async def test_generate_answer_llm_timeout_raises_runtime_error():
 async def test_generate_answer_llm_429_raises_rate_limited():
     from rag import generate_answer
 
-    mock_resp = MagicMock()
-    mock_resp.status_code = 429
-    mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
-        "429", request=MagicMock(), response=mock_resp
-    )
-    mock_http = AsyncMock()
-    mock_http.post = AsyncMock(return_value=mock_resp)
-    with patch("rag.http_client", mock_http):
+    with patch("rag.call_chat", new_callable=AsyncMock, side_effect=RuntimeError("LLM service is rate-limited. Please try again in a moment.")):
         with pytest.raises(RuntimeError, match="rate-limited"):
             await generate_answer(_SAMPLE_CTX, "¿Horarios?", [])
 
@@ -272,16 +237,7 @@ async def test_generate_answer_llm_429_raises_rate_limited():
 async def test_generate_answer_llm_500_raises_with_status_code():
     from rag import generate_answer
 
-    mock_resp = MagicMock()
-    mock_resp.status_code = 500
-    mock_resp.headers = {"content-type": "application/json"}
-    mock_resp.json.return_value = {"error": {"message": "Internal error"}}
-    mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
-        "500", request=MagicMock(), response=mock_resp
-    )
-    mock_http = AsyncMock()
-    mock_http.post = AsyncMock(return_value=mock_resp)
-    with patch("rag.http_client", mock_http):
+    with patch("rag.call_chat", new_callable=AsyncMock, side_effect=RuntimeError("LLM service error (500): Internal error")):
         with pytest.raises(RuntimeError, match="500"):
             await generate_answer(_SAMPLE_CTX, "¿Horarios?", [])
 
@@ -290,12 +246,7 @@ async def test_generate_answer_llm_500_raises_with_status_code():
 async def test_generate_answer_malformed_response_raises_unexpected():
     from rag import generate_answer
 
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status = MagicMock()
-    mock_resp.json.return_value = {"no_choices_key": "oops"}
-    mock_http = AsyncMock()
-    mock_http.post = AsyncMock(return_value=mock_resp)
-    with patch("rag.http_client", mock_http):
+    with patch("rag.call_chat", new_callable=AsyncMock, side_effect=RuntimeError("Unexpected response from LLM service.")):
         with pytest.raises(RuntimeError, match="Unexpected response"):
             await generate_answer(_SAMPLE_CTX, "¿Horarios?", [])
 
@@ -306,9 +257,7 @@ async def test_generate_answer_malformed_response_raises_unexpected():
 async def test_triage_response_network_failure_returns_fallback():
     from rag import _triage_response
 
-    mock_http = AsyncMock()
-    mock_http.post = AsyncMock(side_effect=httpx.ConnectError("refused"))
-    with patch("rag.http_client", mock_http):
+    with patch("rag.call_chat", new_callable=AsyncMock, side_effect=RuntimeError("LLM service error")):
         intent, text = await _triage_response("¿Qué hacés?", "fitness")
 
     assert intent == "off_topic"
@@ -897,14 +846,8 @@ def test_webhook_valid_tenant_no_app_registered_returns_ok(api_client):
 async def test_triage_response_returns_tuple_on_success():
     from rag import _triage_response
 
-    mock_response = MagicMock()
-    mock_response.raise_for_status = MagicMock()
-    mock_response.json.return_value = {
-        "choices": [{"message": {"content": '{"intent": "greeting", "reply": "¡Hola! ¿En qué te ayudo?"}'}}]
-    }
-    mock_http = AsyncMock()
-    mock_http.post = AsyncMock(return_value=mock_response)
-    with patch("rag.http_client", mock_http):
+    raw_json = '{"intent": "greeting", "reply": "¡Hola! ¿En qué te ayudo?"}'
+    with patch("rag.call_chat", new_callable=AsyncMock, return_value=raw_json):
         intent, text = await _triage_response("Hola", "fitness")
 
     assert intent == "greeting"
@@ -915,14 +858,7 @@ async def test_triage_response_returns_tuple_on_success():
 async def test_triage_response_invalid_json_returns_fallback():
     from rag import _triage_response
 
-    mock_response = MagicMock()
-    mock_response.raise_for_status = MagicMock()
-    mock_response.json.return_value = {
-        "choices": [{"message": {"content": "not valid json at all"}}]
-    }
-    mock_http = AsyncMock()
-    mock_http.post = AsyncMock(return_value=mock_response)
-    with patch("rag.http_client", mock_http):
+    with patch("rag.call_chat", new_callable=AsyncMock, return_value="not valid json at all"):
         intent, text = await _triage_response("¿Qué es 2+2?", "finanzas")
 
     assert intent == "off_topic"
@@ -1570,7 +1506,7 @@ async def test_index_chunks_skips_injected_chunk():
     mock_db.add_all = MagicMock()
     mock_db.commit = AsyncMock()
 
-    with patch("rag.embed_texts", new=AsyncMock(return_value=[[0.1] * 1536])):
+    with patch("rag.call_embeddings", new=AsyncMock(return_value=[[0.1] * 1536])):
         count = await index_chunks(mock_db, chunks, namespace="test-ns")
 
     assert count == 1
@@ -1595,18 +1531,11 @@ async def test_generate_answer_message_ordering():
 
     captured = {}
 
-    async def _mock_post(url, **kwargs):
-        captured["messages"] = kwargs["json"]["messages"]
-        mock_resp = MagicMock()
-        mock_resp.raise_for_status = MagicMock()
-        mock_resp.json.return_value = {
-            "choices": [{"message": {"content": "Abrimos a las 8am."}}]
-        }
-        return mock_resp
+    async def _mock_call_chat(messages, **kwargs):
+        captured["messages"] = messages
+        return "Abrimos a las 8am."
 
-    mock_http = AsyncMock()
-    mock_http.post = _mock_post
-    with patch("rag.http_client", mock_http):
+    with patch("rag.call_chat", side_effect=_mock_call_chat):
         await generate_answer(context, question, history)
 
     msgs = captured["messages"]
@@ -1644,24 +1573,15 @@ async def test_triage_ambiguous_classified_for_plans_question():
     """'que planes tienes?' must be classified as ambiguous, not greeting."""
     from rag import _triage_response
 
-    async def _mock_post(url, **kwargs):
-        msgs = kwargs["json"]["messages"]
-        system_content = msgs[0]["content"]
-        user_question = msgs[1]["content"]
+    async def _mock_call_chat(messages, **kwargs):
+        system_content = messages[0]["content"]
         # Verify the prompt has the no-intro rules
         assert "Do NOT introduce yourself" in system_content
         # Verify examples are present
         assert "ambiguous" in system_content
-        mock_resp = MagicMock()
-        mock_resp.raise_for_status = MagicMock()
-        mock_resp.json.return_value = {
-            "choices": [{"message": {"content": '{"intent": "ambiguous", "reply": "Puedo ayudarte con los planes disponibles. ¿Querés más info?"}'}}]
-        }
-        return mock_resp
+        return '{"intent": "ambiguous", "reply": "Puedo ayudarte con los planes disponibles. ¿Querés más info?"}'
 
-    mock_http = AsyncMock()
-    mock_http.post = _mock_post
-    with patch("rag.http_client", mock_http):
+    with patch("rag.call_chat", side_effect=_mock_call_chat):
         intent, reply = await _triage_response("que planes tienes?", "ZOO memberships")
 
     assert intent == "ambiguous"
@@ -1674,17 +1594,10 @@ async def test_triage_greeting_only_for_pure_social():
     """Pure social 'hi' should stay as greeting intent."""
     from rag import _triage_response
 
-    async def _mock_post(url, **kwargs):
-        mock_resp = MagicMock()
-        mock_resp.raise_for_status = MagicMock()
-        mock_resp.json.return_value = {
-            "choices": [{"message": {"content": '{"intent": "greeting", "reply": "¡Bienvenido! Puedo ayudarte con temas del ZOO."}'}}]
-        }
-        return mock_resp
+    async def _mock_call_chat(messages, **kwargs):
+        return '{"intent": "greeting", "reply": "¡Bienvenido! Puedo ayudarte con temas del ZOO."}'
 
-    mock_http = AsyncMock()
-    mock_http.post = _mock_post
-    with patch("rag.http_client", mock_http):
+    with patch("rag.call_chat", side_effect=_mock_call_chat):
         intent, reply = await _triage_response("hola", "ZOO memberships")
 
     assert intent == "greeting"
