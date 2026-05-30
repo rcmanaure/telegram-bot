@@ -5,44 +5,67 @@ from pydantic import ConfigDict
 class Settings(BaseSettings):
     model_config = ConfigDict(env_file=".env", extra="ignore")
 
-    # API Keys
-    openrouter_api_key: str
-
-    # Database
-    database_url: str
-
-    # Models
+    # ─── Chat LLM Provider ──────────────────────────────────────────────────────
+    # Used for chat/completion calls (generate_answer, triage).
+    # Defaults match current OpenRouter behavior for backwards compatibility.
+    llm_base_url: str = "https://openrouter.ai/api/v1"
+    llm_api_key: str = ""  # Takes precedence over openrouter_api_key if both set
     llm_model: str = "openrouter/free"
     llm_fallback_model: str = "openrouter/owl-alpha"  # empty string = disabled
+
+    # ─── Embedding Provider ──────────────────────────────────────────────────────
+    # Separate config because Ollama Cloud doesn't offer embeddings.
+    # Must point to an OpenAI-compatible embeddings endpoint.
+    embedding_base_url: str = "https://openrouter.ai/api/v1"
+    embedding_api_key: str = ""  # Must be set explicitly — no fallback to LLM_API_KEY
     embedding_model: str = "openai/text-embedding-3-small"
     embedding_dim: int = 1536
 
-    # RAG
+    # ─── Deprecated aliases (backwards compat) ───────────────────────────────────
+    # openrouter_api_key still works but LLM_API_KEY takes precedence.
+    openrouter_api_key: str = ""
+
+    # ─── Database ────────────────────────────────────────────────────────────────
+    database_url: str
+
+    # ─── RAG ─────────────────────────────────────────────────────────────────────
     chunk_size: int = 500
     chunk_overlap: int = 50
     top_k_results: int = 4
 
-    # App
+    # ─── App ─────────────────────────────────────────────────────────────────────
     app_host: str = "0.0.0.0"
     app_port: int = 8000
     app_domain: str = "localhost:8000"
 
-    # STT
+    # ─── STT ─────────────────────────────────────────────────────────────────────
     groq_api_key: str = ""
 
-    # Observability
+    # ─── Observability ──────────────────────────────────────────────────────────
     sentry_dsn: str = ""
     environment: str = "dev"
 
-    # Admin UI
+    # ─── Admin UI ────────────────────────────────────────────────────────────────
     admin_password: str = "changeme"
 
-    # WhatsApp (optional — per-tenant credentials stored in DB)
+    # ─── WhatsApp (optional — per-tenant credentials stored in DB) ────────────────
     wa_phone_number_id: str = ""
     wa_access_token: str = ""
     wa_app_secret: str = ""
     wa_business_id: str = ""
     wa_verify_token: str = ""
+
+    # ─── Resolved properties ─────────────────────────────────────────────────────
+
+    @property
+    def effective_llm_api_key(self) -> str:
+        """LLM_API_KEY takes precedence over openrouter_api_key."""
+        return self.llm_api_key or self.openrouter_api_key
+
+    @property
+    def effective_embedding_api_key(self) -> str:
+        """Embedding API key. Falls back to openrouter_api_key for backwards compat."""
+        return self.embedding_api_key or self.openrouter_api_key
 
 
 settings = Settings()
