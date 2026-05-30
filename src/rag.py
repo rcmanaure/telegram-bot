@@ -11,7 +11,6 @@ import logging
 import re
 
 import httpx
-from openai import AsyncOpenAI
 from security import CANARY_TOKEN, scan_chunk_for_injection, sanitize_user_input, validate_output
 
 logger = logging.getLogger(__name__)
@@ -19,13 +18,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from db import DocumentChunk, Conversation, UnansweredQuery
 from config import settings
-
-openai_client = AsyncOpenAI(
-    api_key=settings.openrouter_api_key,
-    base_url="https://openrouter.ai/api/v1",
-    max_retries=2,
-    timeout=30.0,
-)
+from llm import call_chat, call_embeddings, extract_json_from_llm_response
 
 http_client = httpx.AsyncClient(timeout=60)
 
@@ -77,33 +70,7 @@ def chunk_text(text_content: str, source: str, page: int = 0) -> list[dict]:
     ]
 
 
-# ─── Embeddings ──────────────────────────────────────────────────────────────
-
-async def embed_texts(texts: list[str]) -> list[list[float]]:
-    """
-    Embed a list of texts via OpenRouter.
-    Returns list of 1536-dim vectors. Batched max 100 per call.
-    """
-    from openai import APIError, APITimeoutError, RateLimitError
-    all_embeddings = []
-    batch_size = 100
-
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i:i + batch_size]
-        try:
-            response = await openai_client.embeddings.create(
-                model=settings.embedding_model,
-                input=batch,
-            )
-            all_embeddings.extend([item.embedding for item in response.data])
-        except RateLimitError:
-            raise RuntimeError("Embedding service is rate-limited. Try again in a moment.")
-        except APITimeoutError:
-            raise RuntimeError("Embedding service timed out. Check your OpenRouter API key and quota.")
-        except APIError as e:
-            raise RuntimeError(f"Embedding failed: {e.message}")
-
-    return all_embeddings
+# ─── Embeddings (delegated to llm.call_embeddings) ─────────────────────────────
 
 
 # ─── FAQ chunk sync ──────────────────────────────────────────────────────────
@@ -163,7 +130,7 @@ async def index_chunks(
         return 0
 
     texts = [c["content"] for c in clean_chunks]
-    embeddings = await embed_texts(texts)
+    embeddings = await call_embeddings(texts)
 
     db_chunks = [
         DocumentChunk(
@@ -197,7 +164,7 @@ async def retrieve_context(
     top_k = top_k or settings.top_k_results
 
     # Embed the query
-    query_embedding = (await embed_texts([query]))[0]
+    query_embedding = (await call_embeddings([query]))[0]
 
     # pgvector cosine similarity search
     # <=> is cosine distance (lower = more similar)
@@ -254,7 +221,8 @@ Cómo hablar:
 - Respondé directo al punto, sin repetir la pregunta.
 - Para preguntas simples, una o dos oraciones alcanzan.
 - Nunca menciones "documentos", "páginas" ni "fuentes" — simplemente sabés la información.
-- Usá emojis temáticos cuando menciones actividades, servicios o conceptos. El emoji va SIEMPRE ANTES del nombre del ítem, elegido por vos según el concepto (ej: 🧘‍♀️ *Yoga*, 🚴 *Cycling*, 💪 *Entrenamiento*, 💳 *Plan Pro*). No uses siempre el mismo emoji genérico — elegí el que mejor represente semánticamente cada término.
+- Usá emojis temáticos cuando menciones actividades, servicios o conceptos. El emoji va SIEMPRE ANTES del nombre del ítem, elegido por vos según el concepto (ej: 🧪 *Análisis clínicos*, 🔬 *Biopsias*, 🏥 *Consultas*, 💳 *Plan Pro*). Elegí emojis apropiados al contexto del negocio — evitá emojis violentos o clínico-gráficos (como 🔪 para biopsias) y optá por emojis que transmitan cuidado, ciencia y salud (🔬 🧪 🏥 🩺 💊 🧬 📋 ✅ 🩻 🫀). No uses siempre el mismo emoji genérico — elegí el que mejor represente semánticamente cada término.
+- NO cierres el mensaje con "¿En qué más puedo ayudarte?" ni "¿Hay algo más en lo que pueda ayudar?" — ya lo dijiste al inicio. Respondé directo y cerrá con la información, sin repetir la oferta de ayuda. Una sola vez al inicio alcanza.
 - Respondé en el idioma del usuario.
 
 {fmt.format_instructions}
@@ -268,56 +236,7 @@ _ESCALATION_PATTERN = re.compile(
 )
 
 
-def _llm_error_msg(exc: Exception) -> str:
-    """Convert an LLM call exception into a user-facing RuntimeError message."""
-    if isinstance(exc, httpx.HTTPStatusError):
-        if exc.response.status_code == 429:
-            return "LLM service is rate-limited. Please try again in a moment."
-        body = exc.response.json() if exc.response.headers.get("content-type", "").startswith("application/json") else exc.response.text
-        msg = body.get("error", {}).get("message", str(body)) if isinstance(body, dict) else body
-        return f"LLM service error ({exc.response.status_code}): {msg}"
-    if isinstance(exc, httpx.TimeoutException):
-        return "LLM service timed out. Please try again."
-    return "Unexpected response from LLM service."
-
-
-async def _call_llm(
-    messages: list[dict],
-    max_tokens: int = 800,
-    temperature: float = 0.1,
-) -> str:
-    """Call OpenRouter chat/completions with primary model, then fallback on failure."""
-    models = [settings.llm_model]
-    if settings.llm_fallback_model:
-        models.append(settings.llm_fallback_model)
-
-    last_error: Exception | None = None
-    for model in models:
-        try:
-            response = await http_client.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.openrouter_api_key}",
-                    "HTTP-Referer": "https://github.com/ruben-portfolio",
-                },
-                json={"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature},
-            )
-            response.raise_for_status()
-            content = response.json()["choices"][0]["message"]["content"]
-            # Log when fallback model was used
-            if model != settings.llm_model:
-                logger.warning(
-                    "llm_fallback primary=%s fallback=%s error_type=%s",
-                    settings.llm_model, model, type(last_error).__name__,
-                )
-            return content
-        except (httpx.HTTPError, KeyError, IndexError) as e:
-            logger.warning("llm_call_failed model=%s error=%s", model, type(e).__name__)
-            last_error = e
-            continue
-
-    # All models failed
-    raise RuntimeError(_llm_error_msg(last_error))
+# ─── LLM calls (delegated to llm.call_chat) ──────────────────────────────────
 
 
 async def _triage_response(
@@ -361,8 +280,8 @@ async def _triage_response(
         {"role": "user", "content": question},
     ]
     try:
-        raw = await _call_llm(messages, max_tokens=150, temperature=0.2)
-        parsed = json.loads(raw)
+        raw = await call_chat(messages, max_tokens=150, temperature=0.2)
+        parsed = extract_json_from_llm_response(raw)
         return parsed["intent"], parsed["reply"]
     except Exception:
         area_clause = f" Mi área de expertise: {expertise_area}." if expertise_area else ""
@@ -378,7 +297,7 @@ async def generate_answer(
 ) -> str:
     """
     Generate an answer using retrieved context + conversation history.
-    Uses OpenRouter so we can swap models easily.
+    Uses the configured LLM provider so we can swap models easily.
     """
     if not context_chunks:
         return "No encontré información relevante en los documentos para responder tu pregunta."
@@ -403,7 +322,7 @@ async def generate_answer(
         ),
     })
 
-    return await _call_llm(messages, max_tokens=800, temperature=0.1)
+    return await call_chat(messages, max_tokens=800, temperature=0.1, channel=channel)
 
 
 # ─── Speech-to-Text (Groq Whisper) ───────────────────────────────────────────
