@@ -107,10 +107,14 @@ async def index_chunks(
     db: AsyncSession,
     chunks: list[dict],
     namespace: str,
+    auto_commit: bool = True,
 ) -> int:
     """
     Embed and store chunks in pgvector.
     Returns number of chunks stored.
+
+    When auto_commit=False, the caller is responsible for committing the
+    transaction (used for atomic upsert: DELETE old + INSERT new in one commit).
     """
     if not chunks:
         return 0
@@ -144,7 +148,8 @@ async def index_chunks(
     ]
 
     db.add_all(db_chunks)
-    await db.commit()
+    if auto_commit:
+        await db.commit()
 
     return len(db_chunks)
 

@@ -293,7 +293,17 @@ async def upload_document(
         raise HTTPException(413, "File too large. Maximum size is 10MB.")
 
     all_chunks, pages_processed = _process_uploaded_file(content, file.filename.lower(), file.filename)
-    stored = await index_chunks(db, all_chunks, tenant.slug)
+
+    if not all_chunks:
+        raise HTTPException(400, "No extractable text in file")
+
+    # Upsert: delete old chunks for this source, then insert new ones atomically
+    await db.execute(
+        text("DELETE FROM document_chunks WHERE namespace = :ns AND source = :src"),
+        {"ns": tenant.slug, "src": file.filename},
+    )
+    stored = await index_chunks(db, all_chunks, tenant.slug, auto_commit=False)
+    await db.commit()
 
     return {
         "status": "indexed",
@@ -1095,7 +1105,17 @@ async def admin_upload_document(
     except HTTPException as e:
         return _admin_html(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db), error=e.detail)
 
-    stored = await index_chunks(db, all_chunks, tenant.slug)
+    if not all_chunks:
+        return _admin_html(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db),
+                           error="No se pudo extraer texto del archivo.")
+
+    # Upsert: delete old chunks for this source, then insert new ones atomically
+    await db.execute(
+        text("DELETE FROM document_chunks WHERE namespace = :ns AND source = :src"),
+        {"ns": tenant.slug, "src": file.filename},
+    )
+    stored = await index_chunks(db, all_chunks, tenant.slug, auto_commit=False)
+    await db.commit()
     logger.info("Admin uploaded %s for tenant %s (%d chunks)", file.filename, tenant.slug, stored)
     return _admin_html(
         await _all_tenants(db),
