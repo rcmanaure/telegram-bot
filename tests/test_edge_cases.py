@@ -1321,10 +1321,10 @@ def test_per_user_rate_limit_burst():
     from bot import _check_rate_limit, _user_message_times
     uid = "rl_test_user_burst"
     _user_message_times.pop(uid, None)
-    # First 20 calls must NOT be rate limited
-    for _ in range(20):
+    # First 19 calls must NOT be rate limited
+    for _ in range(19):
         assert _check_rate_limit(uid) is False
-    # 21st call triggers the limit
+    # 20th call triggers the limit
     assert _check_rate_limit(uid) is True
 
 
