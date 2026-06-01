@@ -13,7 +13,8 @@ from telegram.ext import ContextTypes
 from config import settings
 from db import AsyncSessionLocal, Conversation, DocumentChunk, Tenant
 from limiter import tg_rate_limiter
-from rag import rag_query, transcribe_voice
+from rag import rag_query
+from services.stt import transcribe_voice
 from security import sanitize_user_input
 
 logger = logging.getLogger(__name__)

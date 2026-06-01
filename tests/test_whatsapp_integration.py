@@ -581,9 +581,9 @@ class TestProcessWaMessage:
 class TestRagChannelParam:
     def test_generate_answer_default_channel(self):
         """generate_answer should accept channel param without error."""
-        from rag import _build_system_prompt
-        prompt_tg = _build_system_prompt("test", channel="telegram")
-        prompt_wa = _build_system_prompt("test", channel="whatsapp")
+        from services.prompts import build_system_prompt
+        prompt_tg = build_system_prompt("test", channel="telegram")
+        prompt_wa = build_system_prompt("test", channel="whatsapp")
         assert prompt_tg != prompt_wa
         assert "Telegram" in prompt_tg
         assert "WhatsApp" in prompt_wa

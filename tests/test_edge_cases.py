@@ -268,14 +268,14 @@ async def test_triage_response_network_failure_returns_fallback():
 # ─── _build_system_prompt ─────────────────────────────────────────────────────
 
 def test_build_system_prompt_includes_expertise_area():
-    from rag import _build_system_prompt
-    prompt = _build_system_prompt("nutrición deportiva")
+    from services.prompts import build_system_prompt
+    prompt = build_system_prompt("nutrición deportiva")
     assert "nutrición deportiva" in prompt
 
 
 def test_build_system_prompt_empty_area_no_trailing_dot_clause():
-    from rag import _build_system_prompt
-    prompt = _build_system_prompt("")
+    from services.prompts import build_system_prompt
+    prompt = build_system_prompt("")
     assert "Mi área de expertise: ." not in prompt
 
 
@@ -1243,7 +1243,7 @@ async def test_handle_voice_success():
 
 @pytest.mark.asyncio
 async def test_transcribe_voice_success():
-    from rag import transcribe_voice
+    from services.stt import transcribe_voice
 
     mock_response = MagicMock()
     mock_response.raise_for_status = MagicMock()
@@ -1251,8 +1251,8 @@ async def test_transcribe_voice_success():
     mock_http = AsyncMock()
     mock_http.post = AsyncMock(return_value=mock_response)
 
-    with patch("rag.http_client", mock_http), \
-         patch("rag.settings") as mock_settings:
+    with patch("services.stt.http_client", mock_http), \
+         patch("services.stt.settings") as mock_settings:
         mock_settings.groq_api_key = "test-key"
         result = await transcribe_voice(b"audio bytes")
 
@@ -1262,7 +1262,7 @@ async def test_transcribe_voice_success():
 
 @pytest.mark.asyncio
 async def test_transcribe_voice_429():
-    from rag import transcribe_voice
+    from services.stt import transcribe_voice
 
     mock_resp = MagicMock()
     mock_resp.status_code = 429
@@ -1272,8 +1272,8 @@ async def test_transcribe_voice_429():
     mock_http = AsyncMock()
     mock_http.post = AsyncMock(return_value=mock_resp)
 
-    with patch("rag.http_client", mock_http), \
-         patch("rag.settings") as mock_settings:
+    with patch("services.stt.http_client", mock_http), \
+         patch("services.stt.settings") as mock_settings:
         mock_settings.groq_api_key = "test-key"
         with pytest.raises(RuntimeError, match="rate-limited"):
             await transcribe_voice(b"audio bytes")
@@ -1281,13 +1281,13 @@ async def test_transcribe_voice_429():
 
 @pytest.mark.asyncio
 async def test_transcribe_voice_timeout():
-    from rag import transcribe_voice
+    from services.stt import transcribe_voice
 
     mock_http = AsyncMock()
     mock_http.post = AsyncMock(side_effect=httpx.TimeoutException("timeout"))
 
-    with patch("rag.http_client", mock_http), \
-         patch("rag.settings") as mock_settings:
+    with patch("services.stt.http_client", mock_http), \
+         patch("services.stt.settings") as mock_settings:
         mock_settings.groq_api_key = "test-key"
         with pytest.raises(RuntimeError, match="timed out"):
             await transcribe_voice(b"audio bytes")
