@@ -47,7 +47,7 @@ def _make_db_mock(fetchall=None, scalars_all=None, scalar_one_or_none=None):
 
 @pytest.fixture(scope="session")
 def _app_client():
-    """Session-scoped TestClient — patches init_db, DB, and ngrok to avoid network delays."""
+    """Session-scoped TestClient — patches init_db, DB, ngrok, and config overlay to avoid network delays."""
     import main as main_module
     from db import get_db
 
@@ -56,7 +56,8 @@ def _app_client():
 
     with patch("lifespan.init_db", new_callable=AsyncMock), \
          _patch_lifespan_db(), \
-         patch("services.ngrok.get_ngrok_domain", new_callable=AsyncMock, return_value="localhost"):
+         patch("services.ngrok.get_ngrok_domain", new_callable=AsyncMock, return_value="localhost"), \
+         patch("config_overlay.reload_from_db", new_callable=AsyncMock):
         main_module.app.dependency_overrides[get_db] = _db_override
         with TestClient(main_module.app) as client:
             yield client
