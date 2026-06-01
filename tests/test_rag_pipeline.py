@@ -89,36 +89,7 @@ def _patch_lifespan_db():
     return patch("db.AsyncSessionLocal", mock_session_local)
 
 
-@pytest.fixture
-def api_client():
-    """Unauthenticated client — only for /health and auth-rejection tests."""
-    from unittest.mock import AsyncMock, patch
-    import main as main_module
-    from fastapi.testclient import TestClient
-    with patch("main.init_db", new_callable=AsyncMock), _patch_lifespan_db():
-        with TestClient(main_module.app) as client:
-            yield client
-
-
-@pytest.fixture
-def authed_api_client():
-    """Authenticated client — mocks require_tenant to return a test Tenant."""
-    from unittest.mock import AsyncMock, patch, MagicMock
-    import main as main_module
-    from fastapi.testclient import TestClient
-    from db import Tenant
-
-    mock_tenant = MagicMock(spec=Tenant)
-    mock_tenant.slug = "test-tenant"
-    mock_tenant.active = True
-
-    async def _mock_require_tenant(*args, **kwargs):
-        return mock_tenant
-
-    with patch("main.init_db", new_callable=AsyncMock), _patch_lifespan_db():
-        with patch("main.require_tenant", side_effect=_mock_require_tenant):
-            with TestClient(main_module.app) as client:
-                yield client, mock_tenant
+# api_client and authed_api_client fixtures are defined in conftest.py (session-scoped)
 
 
 # ─── API: /health ─────────────────────────────────────────────────────────────
@@ -327,7 +298,7 @@ async def test_delete_only_deletes_own_namespace():
         await db.commit()
 
 
-# ─── Unit: _call_llm fallback ───────────────────────────────────────────────────
+# ─── Unit: call_chat (via llm module) ───────────────────────────────────────────
 
 def _mock_response(status_code=200, json_data=None):
     """Build a fake httpx.Response."""
@@ -346,92 +317,98 @@ def _mock_response(status_code=200, json_data=None):
 
 
 @pytest.mark.asyncio
-async def test_call_llm_primary_succeeds():
-    from rag import _call_llm
+async def test_call_chat_primary_succeeds():
+    from llm import call_chat
     ok_resp = _mock_response(json_data={"choices": [{"message": {"content": "hello"}}]})
-    with patch("rag.http_client") as mock_client, \
-         patch("rag.settings") as mock_settings:
+    with patch("llm._chat_client") as mock_client, \
+         patch("llm.settings") as mock_settings:
         mock_settings.llm_model = "primary-model"
         mock_settings.llm_fallback_model = "fallback-model"
-        mock_settings.openrouter_api_key = "test-key"
+        mock_settings.effective_llm_api_key = "test-key"
+        mock_settings.llm_base_url = "https://openrouter.ai/api/v1"
         mock_client.post = AsyncMock(return_value=ok_resp)
-        result = await _call_llm([{"role": "user", "content": "hi"}])
+        result = await call_chat([{"role": "user", "content": "hi"}])
     assert result == "hello"
 
 
 @pytest.mark.asyncio
-async def test_call_llm_fallback_on_429():
-    from rag import _call_llm
+async def test_call_chat_fallback_on_429():
+    from llm import call_chat
     fail_resp = _mock_response(status_code=429)
     ok_resp = _mock_response(json_data={"choices": [{"message": {"content": "fallback reply"}}]})
-    with patch("rag.http_client") as mock_client, \
-         patch("rag.settings") as mock_settings:
+    with patch("llm._chat_client") as mock_client, \
+         patch("llm.settings") as mock_settings:
         mock_settings.llm_model = "primary-model"
         mock_settings.llm_fallback_model = "fallback-model"
-        mock_settings.openrouter_api_key = "test-key"
+        mock_settings.effective_llm_api_key = "test-key"
+        mock_settings.llm_base_url = "https://openrouter.ai/api/v1"
         mock_client.post = AsyncMock(side_effect=[fail_resp, ok_resp])
-        result = await _call_llm([{"role": "user", "content": "hi"}])
+        result = await call_chat([{"role": "user", "content": "hi"}])
     assert result == "fallback reply"
 
 
 @pytest.mark.asyncio
-async def test_call_llm_fallback_on_timeout():
-    from rag import _call_llm
+async def test_call_chat_fallback_on_timeout():
+    from llm import call_chat
     ok_resp = _mock_response(json_data={"choices": [{"message": {"content": "fallback reply"}}]})
-    with patch("rag.http_client") as mock_client, \
-         patch("rag.settings") as mock_settings:
+    with patch("llm._chat_client") as mock_client, \
+         patch("llm.settings") as mock_settings:
         mock_settings.llm_model = "primary-model"
         mock_settings.llm_fallback_model = "fallback-model"
-        mock_settings.openrouter_api_key = "test-key"
+        mock_settings.effective_llm_api_key = "test-key"
+        mock_settings.llm_base_url = "https://openrouter.ai/api/v1"
         mock_client.post = AsyncMock(side_effect=[
             httpx.TimeoutException("timeout"),
             ok_resp,
         ])
-        result = await _call_llm([{"role": "user", "content": "hi"}])
+        result = await call_chat([{"role": "user", "content": "hi"}])
     assert result == "fallback reply"
 
 
 @pytest.mark.asyncio
-async def test_call_llm_both_fail():
-    from rag import _call_llm
+async def test_call_chat_both_fail():
+    from llm import call_chat
     fail_429 = _mock_response(status_code=429)
     fail_500 = _mock_response(status_code=500)
-    with patch("rag.http_client") as mock_client, \
-         patch("rag.settings") as mock_settings:
+    with patch("llm._chat_client") as mock_client, \
+         patch("llm.settings") as mock_settings:
         mock_settings.llm_model = "primary-model"
         mock_settings.llm_fallback_model = "fallback-model"
-        mock_settings.openrouter_api_key = "test-key"
+        mock_settings.effective_llm_api_key = "test-key"
+        mock_settings.llm_base_url = "https://openrouter.ai/api/v1"
         mock_client.post = AsyncMock(side_effect=[fail_429, fail_500])
         with pytest.raises(RuntimeError, match="LLM service error"):
-            await _call_llm([{"role": "user", "content": "hi"}])
+            await call_chat([{"role": "user", "content": "hi"}])
 
 
 @pytest.mark.asyncio
-async def test_call_llm_fallback_disabled():
-    from rag import _call_llm
+async def test_call_chat_fallback_disabled():
+    from llm import call_chat
     fail_429 = _mock_response(status_code=429)
-    with patch("rag.http_client") as mock_client, \
-         patch("rag.settings") as mock_settings:
+    with patch("llm._chat_client") as mock_client, \
+         patch("llm.settings") as mock_settings:
         mock_settings.llm_model = "primary-model"
         mock_settings.llm_fallback_model = ""
-        mock_settings.openrouter_api_key = "test-key"
+        mock_settings.effective_llm_api_key = "test-key"
+        mock_settings.llm_base_url = "https://openrouter.ai/api/v1"
         mock_client.post = AsyncMock(return_value=fail_429)
         with pytest.raises(RuntimeError, match="rate-limited"):
-            await _call_llm([{"role": "user", "content": "hi"}])
+            await call_chat([{"role": "user", "content": "hi"}])
         # Only one call — no fallback attempt
         assert mock_client.post.call_count == 1
 
 
 @pytest.mark.asyncio
-async def test_call_llm_malformed_response_fallback():
-    from rag import _call_llm
+async def test_call_chat_malformed_response_fallback():
+    from llm import call_chat
     bad_resp = _mock_response(json_data={"no_choices": True})
     ok_resp = _mock_response(json_data={"choices": [{"message": {"content": "recovered"}}]})
-    with patch("rag.http_client") as mock_client, \
-         patch("rag.settings") as mock_settings:
+    with patch("llm._chat_client") as mock_client, \
+         patch("llm.settings") as mock_settings:
         mock_settings.llm_model = "primary-model"
         mock_settings.llm_fallback_model = "fallback-model"
-        mock_settings.openrouter_api_key = "test-key"
+        mock_settings.effective_llm_api_key = "test-key"
+        mock_settings.llm_base_url = "https://openrouter.ai/api/v1"
         mock_client.post = AsyncMock(side_effect=[bad_resp, ok_resp])
-        result = await _call_llm([{"role": "user", "content": "hi"}])
+        result = await call_chat([{"role": "user", "content": "hi"}])
     assert result == "recovered"

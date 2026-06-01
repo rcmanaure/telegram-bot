@@ -1,0 +1,93 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Commands
+
+```bash
+# Local dev — starts postgres + ngrok + api with hot-reload (requires NGROK_AUTHTOKEN in .env)
+docker compose --profile dev up -d
+
+# Production deploy (no ngrok, no host ports, Traefik handles HTTPS)
+docker compose -f docker-compose.yml up -d --build
+
+# Unit tests (no live services needed)
+.venv/Scripts/python.exe -m pytest tests/ -v -k "not integration"
+
+# Single test
+.venv/Scripts/python.exe -m pytest tests/test_rag_pipeline.py::test_chunk_text_basic -v
+
+# Integration tests (requires docker compose up first)
+docker compose exec api python -m pytest tests/ -v -m integration
+
+# Create a tenant interactively
+docker compose exec api python scripts/create_tenant.py
+
+# Apply DB migrations manually
+docker compose exec api alembic upgrade head
+
+# Generate ENCRYPTION_KEY for DB-stored secrets
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+`src/` is mounted as a volume in dev; changes hot-reload without rebuilding. `docker-compose.override.yml` is auto-loaded locally (exposes ports, mounts volumes, adds ngrok); delete or leave absent on the VPS for production.
+
+## Architecture
+
+**Multi-tenant** — each `Tenant` row has its own Telegram bot token (and optionally WhatsApp credentials). At startup, `lifespan()` in `main.py` loads all active tenants, builds a `python-telegram-bot` `Application` per tenant, registers webhooks, and stores them in `telegram_apps: dict[str, Application]` (keyed by bot token). **Do not use more than 1 uvicorn worker** — this in-memory dict, rate limit state, and APScheduler all break with multiple processes.
+
+**RAG pipeline** (`src/rag.py`):
+1. `rag_query()` is the entry point, called by both Telegram and WhatsApp handlers
+2. Escalation regex short-circuits before vector search for human-handoff phrases
+3. `retrieve_context()` embeds the query → cosine search via pgvector `<=>` operator, filtered to `namespace = tenant.slug`
+4. Chunks below `MIN_SIMILARITY = 0.20` are dropped; if nothing remains, `_triage_response()` classifies the message as `greeting | off_topic | needs_human | ambiguous` via LLM
+5. `generate_answer()` calls the LLM with `system → last-6-history → (context + question)`
+6. `validate_output()` logs a warning if the canary token leaks; then `save_turn()` persists the exchange
+
+Conversation history is auto-trimmed to `HISTORY_ROW_CAP = 50` rows per user+namespace. FAQ chunks are indexed under `source = "__faq__"` and re-synced whenever `example_questions` changes.
+
+**LLM layer** (`src/llm.py`):
+- `call_chat()` tries `LLM_MODEL` then `LLM_FALLBACK_MODEL`. When `model=` is passed explicitly (vision), only that model is tried — no fallback, since text-only fallback models cannot receive image payloads.
+- `call_embeddings()` uses the OpenAI SDK against any OpenAI-compatible endpoint; chat and embedding providers can point to different bases (`LLM_BASE_URL` vs `EMBEDDING_BASE_URL`)
+- `validate_config()` checks embedding dimensions at startup; `test_connection()` can verify a provider config manually
+
+**Runtime config overlay** (`src/config_overlay.py` + `src/crypto.py`):
+- `SystemConfig` DB table stores encrypted key-value pairs that override `.env` at runtime without restart
+- `get_setting(key, fallback)` resolves: DB override → fallback (.env value)
+- Values encrypted with Fernet AES-128-CBC (`src/crypto.py`); requires `ENCRYPTION_KEY` env var. If unset, values stored/read as plaintext with a warning. Decryption failure (e.g., value stored before encryption was enabled) falls back to plaintext silently.
+
+**Channel abstraction** (`src/channels/`):
+- `protocol.py` defines `ChannelAdapter` (Protocol), `ChannelMessage`, `ChannelSendError`, and per-channel formatting specs (`CHANNEL_FORMATTING`)
+- `telegram.py` — handlers only; webhook dispatch lives in `main.py`. Bot commands: `/start`, `/help`, `/sources`, `/clear`, `/contactar`
+- `whatsapp.py` — `WhatsAppAdapter` implements the protocol; Meta's 24-hour service-window rule is enforced via `WaServiceWindow` table; messages are processed as FastAPI `BackgroundTask` (returns 200 immediately)
+- Voice notes (Telegram): transcribed via Groq Whisper (`GROQ_API_KEY`); disabled fallback if key absent. WhatsApp voice: not yet implemented (returns placeholder).
+- Images: both channels accept photos; passed as base64 to vision model (`LLM_VISION_MODEL`). Upload endpoint also accepts `.jpg/.jpeg/.png` — vision model describes the image, then text is indexed.
+
+**DB models** (`src/db.py`): `Tenant`, `DocumentChunk` (with HNSW pgvector index), `Conversation`, `UnansweredQuery`, `WaServiceWindow`, `SystemConfig`.
+
+**Migrations** (`alembic/`): async Alembic, runs automatically on container start (`alembic upgrade head`). Baseline migration uses `IF NOT EXISTS` — this hides wrong column types on fresh databases; only a `DROP TABLE` + re-run reveals type bugs.
+
+**Security** (`src/security.py`): NFC normalization, regex injection scan on both inbound messages and document chunks at index time, 2000-char truncation, canary token in every system prompt.
+
+**Document upsert pattern**: before inserting chunks, delete old rows with same `(namespace, source)` in the same transaction — keeps uploads idempotent.
+
+**Conversation history poisoning risk**: old DB history is injected as few-shot examples into the LLM context. After major system prompt changes, clear history with `/clear` or `DELETE FROM conversations WHERE namespace = :ns`.
+
+**Background jobs** (APScheduler, started in `lifespan()`):
+- Daily digest at 08:00 UTC — sends top unanswered queries to `operator_chat_id` per tenant via Telegram
+- Weekly cleanup (Sunday 00:00 UTC) — purges `UnansweredQuery` rows older than 90 days; sweeps stale rate-limit entries via `bot.sweep_rate_limit_dict()`
+
+**Admin UI** at `/admin`: HTTP Basic auth (`admin` / `ADMIN_PASSWORD` env var). Manage tenants, upload documents, view unanswered queries. Creating a tenant here also initializes the Telegram bot webhook in-process.
+
+## Key constraints
+
+- 1 uvicorn worker always — no Redis, so state is in-process
+- `EMBEDDING_BASE_URL` must point to an OpenAI-compatible embeddings endpoint; Ollama Cloud does not support embeddings
+- API key auth: SHA-256 hash stored, plaintext never stored; lookup is `WHERE api_key_hash = sha256(header)`
+- Webhook auth: Telegram uses `X-Telegram-Bot-Api-Secret-Token` (`hmac.compare_digest`); WhatsApp uses HMAC-SHA256 of the raw body
+- `telegram_apps` stores `Application` instances keyed by `bot_token` (not slug) — tenant-bot association goes through `tg_app.bot_data["tenant"]`
+- Rate limits: 20 messages/60 s per user, tracked in-process (`_user_message_times` for Telegram, `_wa_rate_limits` for WhatsApp)
+
+## Testing
+
+`tests/conftest.py` provides a **session-scoped** `TestClient` that patches `init_db`, the DB session, and `_get_ngrok_domain`. Without this, the lifespan polls ngrok for up to 60 seconds per test creation. Use fixtures `api_client` (unauthenticated) or `authed_api_client` (patches `require_tenant`) from conftest. Mock `rag.call_chat`, not HTTP internals, when testing RAG paths.

@@ -11,7 +11,6 @@ import logging
 import re
 
 import httpx
-from openai import AsyncOpenAI
 from security import CANARY_TOKEN, scan_chunk_for_injection, sanitize_user_input, validate_output
 
 logger = logging.getLogger(__name__)
@@ -19,13 +18,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from db import DocumentChunk, Conversation, UnansweredQuery
 from config import settings
-
-openai_client = AsyncOpenAI(
-    api_key=settings.openrouter_api_key,
-    base_url="https://openrouter.ai/api/v1",
-    max_retries=2,
-    timeout=30.0,
-)
+from llm import call_chat, call_embeddings, extract_json_from_llm_response
 
 http_client = httpx.AsyncClient(timeout=60)
 
@@ -77,33 +70,7 @@ def chunk_text(text_content: str, source: str, page: int = 0) -> list[dict]:
     ]
 
 
-# ─── Embeddings ──────────────────────────────────────────────────────────────
-
-async def embed_texts(texts: list[str]) -> list[list[float]]:
-    """
-    Embed a list of texts via OpenRouter.
-    Returns list of 1536-dim vectors. Batched max 100 per call.
-    """
-    from openai import APIError, APITimeoutError, RateLimitError
-    all_embeddings = []
-    batch_size = 100
-
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i:i + batch_size]
-        try:
-            response = await openai_client.embeddings.create(
-                model=settings.embedding_model,
-                input=batch,
-            )
-            all_embeddings.extend([item.embedding for item in response.data])
-        except RateLimitError:
-            raise RuntimeError("Embedding service is rate-limited. Try again in a moment.")
-        except APITimeoutError:
-            raise RuntimeError("Embedding service timed out. Check your OpenRouter API key and quota.")
-        except APIError as e:
-            raise RuntimeError(f"Embedding failed: {e.message}")
-
-    return all_embeddings
+# ─── Embeddings (delegated to llm.call_embeddings) ─────────────────────────────
 
 
 # ─── FAQ chunk sync ──────────────────────────────────────────────────────────
@@ -140,10 +107,14 @@ async def index_chunks(
     db: AsyncSession,
     chunks: list[dict],
     namespace: str,
+    auto_commit: bool = True,
 ) -> int:
     """
     Embed and store chunks in pgvector.
     Returns number of chunks stored.
+
+    When auto_commit=False, the caller is responsible for committing the
+    transaction (used for atomic upsert: DELETE old + INSERT new in one commit).
     """
     if not chunks:
         return 0
@@ -163,7 +134,7 @@ async def index_chunks(
         return 0
 
     texts = [c["content"] for c in clean_chunks]
-    embeddings = await embed_texts(texts)
+    embeddings = await call_embeddings(texts)
 
     db_chunks = [
         DocumentChunk(
@@ -177,7 +148,8 @@ async def index_chunks(
     ]
 
     db.add_all(db_chunks)
-    await db.commit()
+    if auto_commit:
+        await db.commit()
 
     return len(db_chunks)
 
@@ -197,7 +169,7 @@ async def retrieve_context(
     top_k = top_k or settings.top_k_results
 
     # Embed the query
-    query_embedding = (await embed_texts([query]))[0]
+    query_embedding = (await call_embeddings([query]))[0]
 
     # pgvector cosine similarity search
     # <=> is cosine distance (lower = more similar)
@@ -234,9 +206,14 @@ async def retrieve_context(
 MIN_SIMILARITY = 0.20  # chunks below this threshold are considered off-topic
 
 
-def _build_system_prompt(expertise_area: str) -> str:
+def _build_system_prompt(expertise_area: str, channel: str = "telegram") -> str:
+    from channels.protocol import CHANNEL_FORMATTING
+
     area_clause = f" Mi área de expertise: {expertise_area}." if expertise_area else ""
     off_topic_reply = f"Eso está fuera de mi área de expertise.{area_clause} Consultá directamente con nosotros."
+
+    fmt = CHANNEL_FORMATTING.get(channel, CHANNEL_FORMATTING["telegram"])
+
     return f"""Sos un asistente especializado exclusivamente en la información de los documentos cargados. Tu ÚNICA fuente de conocimiento es el contexto que se te proporciona.
 
 REGLAS INQUEBRANTABLES:
@@ -249,20 +226,11 @@ Cómo hablar:
 - Respondé directo al punto, sin repetir la pregunta.
 - Para preguntas simples, una o dos oraciones alcanzan.
 - Nunca menciones "documentos", "páginas" ni "fuentes" — simplemente sabés la información.
-- Usá emojis temáticos cuando menciones actividades, servicios o conceptos. El emoji va SIEMPRE ANTES del nombre del ítem, elegido por vos según el concepto (ej: 🧘‍♀️ *Yoga*, 🚴 *Cycling*, 💪 *Entrenamiento*, 💳 *Plan Pro*). No uses siempre el mismo emoji genérico — elegí el que mejor represente semánticamente cada término. Telegram tiene una gama enorme; aprovechala para hacer el mensaje más visual y fácil de escanear.
+- Usá emojis temáticos cuando menciones actividades, servicios o conceptos. El emoji va SIEMPRE ANTES del nombre del ítem, elegido por vos según el concepto (ej: 🧪 *Análisis clínicos*, 🔬 *Biopsias*, 🏥 *Consultas*, 💳 *Plan Pro*). Elegí emojis apropiados al contexto del negocio — evitá emojis violentos o clínico-gráficos (como 🔪 para biopsias) y optá por emojis que transmitan cuidado, ciencia y salud (🔬 🧪 🏥 🩺 💊 🧬 📋 ✅ 🩻 🫀). No uses siempre el mismo emoji genérico — elegí el que mejor represente semánticamente cada término.
+- NO cierres el mensaje con "¿En qué más puedo ayudarte?" ni "¿Hay algo más en lo que pueda ayudar?" — ya lo dijiste al inicio. Respondé directo y cerrá con la información, sin repetir la oferta de ayuda. Una sola vez al inicio alcanza.
 - Respondé en el idioma del usuario.
 
-Formato para Telegram (OBLIGATORIO):
-- NUNCA uses tablas Markdown (| col | col |) — Telegram no las renderiza, se ven como texto crudo.
-- Para comparar opciones o listar ítems con atributos usá listas con viñetas y negrita:
-  *Plan Basic* — $29/mes · acceso 6am–10pm · 2 clases/mes
-  *Plan Pro* — $59/mes · acceso 24/7 · clases ilimitadas
-- Para listas simples usá guiones o números.
-- Para horarios o datos tabulares usá formato vertical:
-  📅 Yoga: Lun/Mié/Vie — 7am y 6pm
-  📅 HIIT: Mar/Jue — 6am y 7pm
-- Negrita con *asteriscos* para títulos o datos clave.
-- Código con `backticks` solo para datos técnicos exactos (precios, horarios puntuales).
+{fmt.format_instructions}
 
 [CANARY_KEY: {CANARY_TOKEN}]
 """
@@ -273,56 +241,7 @@ _ESCALATION_PATTERN = re.compile(
 )
 
 
-def _llm_error_msg(exc: Exception) -> str:
-    """Convert an LLM call exception into a user-facing RuntimeError message."""
-    if isinstance(exc, httpx.HTTPStatusError):
-        if exc.response.status_code == 429:
-            return "LLM service is rate-limited. Please try again in a moment."
-        body = exc.response.json() if exc.response.headers.get("content-type", "").startswith("application/json") else exc.response.text
-        msg = body.get("error", {}).get("message", str(body)) if isinstance(body, dict) else body
-        return f"LLM service error ({exc.response.status_code}): {msg}"
-    if isinstance(exc, httpx.TimeoutException):
-        return "LLM service timed out. Please try again."
-    return "Unexpected response from LLM service."
-
-
-async def _call_llm(
-    messages: list[dict],
-    max_tokens: int = 800,
-    temperature: float = 0.1,
-) -> str:
-    """Call OpenRouter chat/completions with primary model, then fallback on failure."""
-    models = [settings.llm_model]
-    if settings.llm_fallback_model:
-        models.append(settings.llm_fallback_model)
-
-    last_error: Exception | None = None
-    for model in models:
-        try:
-            response = await http_client.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.openrouter_api_key}",
-                    "HTTP-Referer": "https://github.com/ruben-portfolio",
-                },
-                json={"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature},
-            )
-            response.raise_for_status()
-            content = response.json()["choices"][0]["message"]["content"]
-            # Log when fallback model was used
-            if model != settings.llm_model:
-                logger.warning(
-                    "llm_fallback primary=%s fallback=%s error_type=%s",
-                    settings.llm_model, model, type(last_error).__name__,
-                )
-            return content
-        except (httpx.HTTPError, KeyError, IndexError) as e:
-            logger.warning("llm_call_failed model=%s error=%s", model, type(e).__name__)
-            last_error = e
-            continue
-
-    # All models failed
-    raise RuntimeError(_llm_error_msg(last_error))
+# ─── LLM calls (delegated to llm.call_chat) ──────────────────────────────────
 
 
 async def _triage_response(
@@ -366,8 +285,8 @@ async def _triage_response(
         {"role": "user", "content": question},
     ]
     try:
-        raw = await _call_llm(messages, max_tokens=150, temperature=0.2)
-        parsed = json.loads(raw)
+        raw = await call_chat(messages, max_tokens=150, temperature=0.2)
+        parsed = extract_json_from_llm_response(raw)
         return parsed["intent"], parsed["reply"]
     except Exception:
         area_clause = f" Mi área de expertise: {expertise_area}." if expertise_area else ""
@@ -379,15 +298,16 @@ async def generate_answer(
     question: str,
     conversation_history: list[dict],
     expertise_area: str = "",
+    channel: str = "telegram",
 ) -> str:
     """
     Generate an answer using retrieved context + conversation history.
-    Uses OpenRouter so we can swap models easily.
+    Uses the configured LLM provider so we can swap models easily.
     """
     if not context_chunks:
         return "No encontré información relevante en los documentos para responder tu pregunta."
 
-    system_prompt = _build_system_prompt(expertise_area)
+    system_prompt = _build_system_prompt(expertise_area, channel=channel)
 
     # Format context for the prompt
     context_text = "\n\n---\n\n".join([
@@ -407,7 +327,7 @@ async def generate_answer(
         ),
     })
 
-    return await _call_llm(messages, max_tokens=800, temperature=0.1)
+    return await call_chat(messages, max_tokens=800, temperature=0.1, channel=channel)
 
 
 # ─── Speech-to-Text (Groq Whisper) ───────────────────────────────────────────
@@ -481,18 +401,21 @@ async def save_turn(
     namespace: str,
     user_msg: str,
     assistant_msg: str,
+    channel: str = "telegram",
 ):
     db.add(Conversation(
         user_id=user_id,
         namespace=namespace,
         role="user",
         content=user_msg,
+        channel=channel,
     ))
     db.add(Conversation(
         user_id=user_id,
         namespace=namespace,
         role="assistant",
         content=assistant_msg,
+        channel=channel,
     ))
     await db.commit()
 
@@ -544,6 +467,7 @@ async def rag_query(
     expertise_area: str = "",
     language_code: str | None = None,
     tenant_id: int | None = None,
+    channel: str = "telegram",
 ) -> tuple[str, list[dict], str | None]:
     """
     Full RAG pipeline: retrieve context → generate answer → save history.
@@ -553,8 +477,8 @@ async def rag_query(
     # Pre-RAG: explicit escalation shortcut — skip vector search
     if _ESCALATION_PATTERN.search(question):
         area_clause = f" Mi área de expertise: {expertise_area}." if expertise_area else ""
-        answer = f"Entiendo que querés hablar con alguien.{area_clause} Contactanos directamente."
-        await save_turn(db, user_id, namespace, question, answer)
+        answer = f"Entiendo que querés hablar con alguien.{area_clause} Contactamos directamente."
+        await save_turn(db, user_id, namespace, question, answer, channel=channel)
         await _log_unanswered(db, namespace, question, user_id, "needs_human", tenant_id)
         return answer, [], "needs_human"
 
@@ -572,12 +496,12 @@ async def rag_query(
 
     if not context:
         intent, answer = await _triage_response(question, expertise_area, language_code)
-        await save_turn(db, user_id, namespace, question, answer)
+        await save_turn(db, user_id, namespace, question, answer, channel=channel)
         if intent in {"off_topic", "needs_human"}:
             await _log_unanswered(db, namespace, question, user_id, intent, tenant_id)
         return answer, [], intent
 
-    answer = await generate_answer(context, question, history, expertise_area)
+    answer = await generate_answer(context, question, history, expertise_area, channel=channel)
     answer = validate_output(answer, user_id=user_id)
-    await save_turn(db, user_id, namespace, question, answer)
+    await save_turn(db, user_id, namespace, question, answer, channel=channel)
     return answer, context, None
