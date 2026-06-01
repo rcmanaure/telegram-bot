@@ -4,7 +4,6 @@
 
 {% block content %}
 <h1>RAG Bot — Panel de Administración</h1>
-<p class="sub">Gestioná los tenants del sistema.</p>
 
 {% if message %}
 <div class="alert ok">{{ message }}</div>
@@ -20,6 +19,16 @@
   <code style="font-size:0.95rem;word-break:break-all">{{ new_api_key }}</code>
 </div>
 {% endif %}
+
+{# Tab navigation — server-side via ?tab= param #}
+<nav class="tabs">
+  <a href="/admin?tab=tenants" class="tab {% if active_tab == 'tenants' %}active{% endif %}">Tenants</a>
+  <a href="/admin?tab=settings" class="tab {% if active_tab == 'settings' %}active{% endif %}">Configuración</a>
+  <a href="/admin?tab=health" class="tab {% if active_tab == 'health' %}active{% endif %}">Salud</a>
+</nav>
+
+{# ─── Tenants Tab ──────────────────────────────────────────────────────── #}
+{% if active_tab == 'tenants' %}
 
 <h2>➕ Nuevo tenant</h2>
 <div class="card">
@@ -76,80 +85,241 @@
 </p>
 
 <h2>📋 Tenants existentes</h2>
-<table>
-  <thead><tr><th>ID</th><th>Slug</th><th>Estado</th><th>Plan</th><th>Configuración</th><th>Documentos</th><th>Consultas</th></tr></thead>
-  <tbody>
-  {% for t in tenants %}
-    <tr>
-      <td>{{ t.id }}</td>
-      <td><strong>{{ t.slug }}</strong></td>
-      <td>{% if t.active %}✅ activo{% else %}❌ inactivo{% endif %}</td>
-      <td>{{ t.plan }}</td>
-      <td>
-        <form method="post" action="/admin/tenant/{{ t.id }}" style="display:grid;gap:6px">
-          <input name="expertise_area" value="{{ t.expertise_area or '' }}" placeholder="área de expertise"
-                 style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
-          <input name="contact_url" value="{{ t.contact_url or '' }}" placeholder="https://... (URL contacto)"
-                 style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
-          <input name="operator_chat_id" value="{{ t.operator_chat_id or '' }}" placeholder="chat_id operador"
-                 style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
-          <textarea name="example_questions" rows="3" placeholder="Preguntas frecuentes (una por línea, máx 5)"
-                    style="padding:4px 8px;border:1px solid #ccc;border-radius:4px;width:100%;box-sizing:border-box">{{ t.example_questions | join('\n') if t.example_questions else '' }}</textarea>
-          <details style="margin-top:6px"><summary style="cursor:pointer;font-size:0.85rem;color:#475569">WhatsApp Config</summary>
-          <div style="display:grid;gap:4px;margin-top:4px">
-            <input name="wa_phone_number_id" value="{{ t.wa_phone_number_id or '' }}" placeholder="Phone Number ID"
-                   style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
-            <input name="wa_access_token" value="{{ t.wa_access_token or '' }}" placeholder="Access Token" type="password"
-                   style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
-            <input name="wa_app_secret" value="{{ t.wa_app_secret or '' }}" placeholder="App Secret" type="password"
-                   style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
-            <input name="wa_verify_token" value="{{ t.wa_verify_token or '' }}" placeholder="Verify Token"
-                   style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
-            <input name="wa_reengagement_template" value="{{ t.wa_reengagement_template or '' }}" placeholder="Re-engagement Template Name"
-                   style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
-          </div>
-          </details>
-          <details style="margin-top:6px"><summary style="cursor:pointer;font-size:0.85rem;color:#475569">Web Search (Ollama Cloud)</summary>
-          <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
-            <input type="checkbox" name="web_search_enabled" id="ws_{{ t.id }}" {% if t.web_search_enabled %}checked{% endif %}>
-            <label for="ws_{{ t.id }}" style="font-size:0.85rem">Habilitar búsqueda web cuando no hay contexto en documentos</label>
-          </div>
-          <div style="font-size:0.75rem;color:#64748b;margin-top:2px">Requiere WEB_SEARCH_URL configurado en .env</div>
-          </details>
-          <button type="submit" style="padding:4px 12px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer">
-            Guardar
-          </button>
-        </form>
-      </td>
-      <td>
-        <div style="margin-bottom:8px;font-size:0.85rem">
-        {% set entries = doc_stats.get(t.id, []) %}
-        {% if entries %}
-          {% for e in entries %}
-          <div>{{ e.source }} ({{ e.chunks }} chunks)</div>
-          {% endfor %}
-        {% else %}
-          <em style="color:#94a3b8">Sin documentos</em>
-        {% endif %}
-        </div>
-        <form method="post" action="/admin/upload/{{ t.id }}" enctype="multipart/form-data" style="display:grid;gap:6px">
-          <input type="file" name="file" accept=".pdf,.md,.txt,.jpg,.jpeg,.png" style="font-size:0.85rem">
-          <button type="submit" style="padding:4px 12px;background:#16a34a;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85rem">
-            Subir documento
-          </button>
-        </form>
-        {% if entries %}
-        <form method="post" action="/admin/delete-docs/{{ t.id }}" style="margin-top:6px"
-              onsubmit="return confirm('Eliminar TODOS los documentos y conversaciones de {{ t.slug }}?')">
-          <button type="submit" style="padding:4px 12px;background:#dc2626;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85rem">
-            Eliminar docs
-          </button>
-        </form>
-        {% endif %}
-      </td>
-      <td><a href="/admin/queries/{{ t.id }}" style="color:#2563eb;font-size:0.85rem">Ver consultas</a></td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
+<div class="tenant-grid">
+{% for t in tenants %}
+<div class="tenant-card">
+  <div class="tenant-header">
+    <strong>{{ t.slug }}</strong>
+    <span class="badge {% if t.active %}badge-ok{% else %}badge-err{% endif %}">
+      {% if t.active %}✅ activo{% else %}❌ inactivo{% endif %}
+    </span>
+  </div>
+  <div class="tenant-meta">ID: {{ t.id }} · Plan: {{ t.plan }}</div>
+
+  <form method="post" action="/admin/tenant/{{ t.id }}" style="display:grid;gap:6px">
+    <label>Área de expertise</label>
+    <input name="expertise_area" value="{{ t.expertise_area or '' }}" placeholder="área de expertise">
+    <label>URL de contacto</label>
+    <input name="contact_url" value="{{ t.contact_url or '' }}" placeholder="https://...">
+    <label>Chat ID operador</label>
+    <input name="operator_chat_id" value="{{ t.operator_chat_id or '' }}" placeholder="chat_id">
+    <label>Preguntas de ejemplo</label>
+    <textarea name="example_questions" rows="3" placeholder="Una por línea, máx 5">{{ t.example_questions | join('\n') if t.example_questions else '' }}</textarea>
+
+    <details style="margin-top:6px"><summary style="cursor:pointer;font-size:0.85rem;color:#475569">WhatsApp Config</summary>
+    <div style="display:grid;gap:4px;margin-top:4px">
+      <input name="wa_phone_number_id" value="{{ t.wa_phone_number_id or '' }}" placeholder="Phone Number ID">
+      <input name="wa_access_token" placeholder="Access Token (nuevo valor)" type="password">
+      <input name="wa_app_secret" placeholder="App Secret (nuevo valor)" type="password">
+      <input name="wa_verify_token" value="{{ t.wa_verify_token or '' }}" placeholder="Verify Token">
+      <input name="wa_reengagement_template" value="{{ t.wa_reengagement_template or '' }}" placeholder="Re-engagement Template">
+    </div>
+    </details>
+
+    <details style="margin-top:6px"><summary style="cursor:pointer;font-size:0.85rem;color:#475569">Web Search</summary>
+    <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
+      <input type="checkbox" name="web_search_enabled" id="ws_{{ t.id }}" {% if t.web_search_enabled %}checked{% endif %}>
+      <label for="ws_{{ t.id }}" style="font-size:0.85rem;font-weight:normal">Búsqueda web sin contexto en docs</label>
+    </div>
+    </details>
+
+    <div class="card-actions">
+      <button type="submit" class="btn btn-sm">Guardar</button>
+      <form method="post" action="/admin/tenant/{{ t.id }}/toggle-active" style="display:inline"
+            onsubmit="return confirm('{% if t.active %}Desactivar{% else %}Activar{% endif %} tenant {{ t.slug }}?')">
+        <button type="submit" class="btn btn-sm {% if t.active %}btn-warn{% else %}btn-ok{% endif %}">
+          {% if t.active %}Desactivar{% else %}Activar{% endif %}
+        </button>
+      </form>
+    </div>
+  </form>
+
+  <div class="tenant-docs">
+    {% set entries = doc_stats.get(t.id, []) %}
+    {% if entries %}
+      {% for e in entries %}
+      <div class="doc-item">{{ e.source }} <small>({{ e.chunks }} chunks)</small></div>
+      {% endfor %}
+    {% else %}
+      <em style="color:#94a3b8;font-size:0.85rem">Sin documentos</em>
+    {% endif %}
+    <form method="post" action="/admin/upload/{{ t.id }}" enctype="multipart/form-data" style="margin-top:6px">
+      <input type="file" name="file" accept=".pdf,.md,.txt,.jpg,.jpeg,.png" style="font-size:0.85rem">
+      <button type="submit" class="btn btn-sm btn-ok">Subir</button>
+    </form>
+    {% if entries %}
+    <form method="post" action="/admin/delete-docs/{{ t.id }}" style="margin-top:4px"
+          onsubmit="return confirm('Eliminar TODOS los documentos de {{ t.slug }}?')">
+      <button type="submit" class="btn btn-sm btn-err">Eliminar docs</button>
+    </form>
+    {% endif %}
+    <a href="/admin/queries/{{ t.id }}" style="color:#2563eb;font-size:0.85rem">Ver consultas</a>
+  </div>
+</div>
+{% endfor %}
+</div>
+
+{# ─── Settings Tab ─────────────────────────────────────────────────────── #}
+{% elif active_tab == 'settings' %}
+
+<h2>⚙️ Configuración del sistema</h2>
+<p class="sub">Los cambios se aplican sin reiniciar el servidor. Dejar vacío para mantener el valor actual.</p>
+
+<div class="card">
+  <form method="post" action="/admin/settings" id="settings-form">
+    <h3 style="margin:0 0 12px;font-size:1rem">Chat LLM</h3>
+    <div class="row">
+      <div class="field">
+        <label>LLM Base URL</label>
+        <input type="text" name="llm_base_url" placeholder="https://openrouter.ai/api/v1">
+      </div>
+      <div class="field">
+        <label>LLM API Key</label>
+        <input type="password" name="llm_api_key" placeholder="Nuevo valor (se encripta)">
+      </div>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label>Modelo primario</label>
+        <input type="text" name="llm_model" placeholder="openrouter/free">
+      </div>
+      <div class="field">
+        <label>Modelo fallback</label>
+        <input type="text" name="llm_fallback_model" placeholder="openrouter/owl-alpha">
+      </div>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label>Modelo vision</label>
+        <input type="text" name="llm_vision_model" placeholder="llava">
+      </div>
+    </div>
+
+    <h3 style="margin:20px 0 12px;font-size:1rem">Embeddings</h3>
+    <div class="row">
+      <div class="field">
+        <label>Embedding Base URL</label>
+        <input type="text" name="embedding_base_url" placeholder="https://openrouter.ai/api/v1">
+      </div>
+      <div class="field">
+        <label>Embedding API Key</label>
+        <input type="password" name="embedding_api_key" placeholder="Nuevo valor (se encripta)">
+      </div>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label>Embedding modelo</label>
+        <input type="text" name="embedding_model" placeholder="openai/text-embedding-3-small">
+      </div>
+      <div class="field">
+        <label>Embedding dimension</label>
+        <input type="text" name="embedding_dim" placeholder="1536">
+        <small style="color:#dc2626">⚠ Cambiar rompe alineación con pgvector</small>
+      </div>
+    </div>
+
+    <h3 style="margin:20px 0 12px;font-size:1rem">Otros</h3>
+    <div class="row">
+      <div class="field">
+        <label>Groq API Key (STT)</label>
+        <input type="password" name="groq_api_key" placeholder="Nuevo valor (se encripta)">
+      </div>
+      <div class="field">
+        <label>Web Search URL</label>
+        <input type="text" name="web_search_url" placeholder="https://ollama.com/api/web_search">
+      </div>
+    </div>
+
+    <button type="submit" class="btn">Guardar configuración</button>
+  </form>
+</div>
+
+<div class="card" style="margin-top:20px">
+  <h3 style="margin:0 0 12px;font-size:1rem">🔌 Test Connection</h3>
+  <div class="row">
+    <div class="field">
+      <label>Tipo</label>
+      <select id="test-type" style="padding:6px 10px;border:1px solid #cbd5e1;border-radius:4px;width:100%">
+        <option value="chat">Chat LLM</option>
+        <option value="embedding">Embeddings</option>
+      </select>
+    </div>
+  </div>
+  <button type="button" class="btn btn-ok" onclick="testConnection()">Test</button>
+  <div id="test-result" style="margin-top:12px"></div>
+</div>
+
+<script>
+async function testConnection() {
+  const type = document.getElementById('test-type').value;
+  const resultDiv = document.getElementById('test-result');
+  resultDiv.innerHTML = '<em>Probando...</em>';
+  try {
+    const resp = await fetch('/admin/settings/test-connection', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({type}),
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      resultDiv.innerHTML = `<div class="alert ok">✓ OK — ${data.model} — ${data.latency_ms}ms</div>`;
+    } else {
+      resultDiv.innerHTML = `<div class="alert err">✗ ${data.error}</div>`;
+    }
+  } catch (e) {
+    resultDiv.innerHTML = `<div class="alert err">Error: ${e.message}</div>`;
+  }
+}
+</script>
+
+{# ─── Health Tab ───────────────────────────────────────────────────────── #}
+{% elif active_tab == 'health' %}
+
+<h2>🏥 Estado del sistema</h2>
+<p class="sub">Datos cargados al hacer click en esta tab.</p>
+
+<div id="health-content">
+  <em>Cargando...</em>
+</div>
+
+<script>
+(async function() {
+  const el = document.getElementById('health-content');
+  try {
+    const resp = await fetch('/admin/health-data');
+    const data = await resp.json();
+    const llm = data.llm || {};
+    const db = data.db || {};
+    const tenants = data.tenants || {};
+    const chunks = data.chunks || {};
+    el.innerHTML = `
+      <div class="card">
+        <h3 style="margin:0 0 8px;font-size:1rem">Chat LLM</h3>
+        ${llm.ok
+          ? `<span class="badge badge-ok">✅ OK</span> ${llm.model} — ${llm.latency_ms}ms`
+          : `<span class="badge badge-err">❌ Error</span> ${llm.error || 'unknown'}`}
+      </div>
+      <div class="card" style="margin-top:12px">
+        <h3 style="margin:0 0 8px;font-size:1rem">Base de datos</h3>
+        ${db.ok
+          ? `<span class="badge badge-ok">✅ OK</span> ${db.version ? db.version.split(',')[0] : 'connected'}`
+          : `<span class="badge badge-err">❌ Error</span>`}
+      </div>
+      <div class="card" style="margin-top:12px">
+        <h3 style="margin:0 0 8px;font-size:1rem">Tenants</h3>
+        Activos: <strong>${tenants.active}</strong> / ${tenants.total}
+      </div>
+      <div class="card" style="margin-top:12px">
+        <h3 style="margin:0 0 8px;font-size:1rem">Chunks</h3>
+        Total: <strong>${chunks.total}</strong>
+      </div>
+    `;
+  } catch (e) {
+    el.innerHTML = `<div class="alert err">Error cargando datos: ${e.message}</div>`;
+  }
+})();
+</script>
+
+{% endif %}
+
 {% endblock %}
