@@ -45,6 +45,9 @@ async def handle_wa_message(
         logger.warning("wa_no_adapter tenant=%s", tenant.slug)
         return
 
+    image_b64: str | None = None
+    image_mime: str = "image/jpeg"
+
     async with adapter:
         # Unsupported media (video, sticker, document) — not image or voice
         if wa_msg.text is None and wa_msg.media_type not in ("voice", "image"):
@@ -70,8 +73,6 @@ async def handle_wa_message(
             return
 
         # Image message — download and base64-encode for vision model
-        image_b64: str | None = None
-        image_mime: str = "image/jpeg"
         if wa_msg.media_type == "image" and wa_msg.media_url:
             try:
                 import base64 as _b64
@@ -97,7 +98,7 @@ async def handle_wa_message(
                     pass
                 return
 
-        # Text or image-with-caption message — process through RAG (needs DB session)
+        # Text or image-with-caption message — process through RAG
         text = wa_msg.text or ("¿Qué querés saber sobre esta imagen?" if image_b64 else "")
         if not text.strip():
             return
@@ -111,64 +112,64 @@ async def handle_wa_message(
                 pass
             return
 
-    # Rate limit (20/60s per tenant:user, independent of TG)
-    rate_key = f"{namespace}:{user_id}"
-    if wa_rate_limiter.check(rate_key):
-        logger.warning("wa_rate_limit key=%s", rate_key)
-        return
-
-    # DB operations — create a fresh session since this runs as a background task
-    async with AsyncSessionLocal() as db:
-        # 24h service window check
-        within_window = await check_wa_service_window(db, tenant.id, user_id)
-        if not within_window:
-            if tenant.wa_reengagement_template:
-                try:
-                    await send_wa_template(adapter, user_id, tenant.wa_reengagement_template)
-                except ChannelSendError:
-                    logger.warning("wa_template_failed user=%s template=%s", user_id, tenant.wa_reengagement_template)
-            else:
-                logger.warning("wa_outside_window_no_template user=%s — logging unanswered", user_id)
-                await _log_unanswered(db, namespace, text, user_id, "needs_human", tenant.id)
+        # Rate limit (20/60s per tenant:user, independent of TG)
+        rate_key = f"{namespace}:{user_id}"
+        if wa_rate_limiter.check(rate_key):
+            logger.warning("wa_rate_limit key=%s", rate_key)
             return
 
-        # Update service window timestamp
-        await update_wa_service_window(db, tenant.id, user_id)
+        # DB operations — fresh session for background task
+        async with AsyncSessionLocal() as db:
+            # 24h service window check
+            within_window = await check_wa_service_window(db, tenant.id, user_id)
+            if not within_window:
+                if tenant.wa_reengagement_template:
+                    try:
+                        await send_wa_template(adapter, user_id, tenant.wa_reengagement_template)
+                    except ChannelSendError:
+                        logger.warning("wa_template_failed user=%s template=%s", user_id, tenant.wa_reengagement_template)
+                else:
+                    logger.warning("wa_outside_window_no_template user=%s — logging unanswered", user_id)
+                    await _log_unanswered(db, namespace, text, user_id, "needs_human", tenant.id)
+                return
 
-        # RAG query
-        try:
-            answer, chunks, intent = await rag_query(
-                db=db,
-                question=text,
-                namespace=namespace,
-                user_id=user_id,
-                expertise_area=tenant.expertise_area or "",
-                tenant_id=tenant.id,
-                channel="whatsapp",
-                image_b64=image_b64,
-                image_mime=image_mime,
-            )
-        except Exception as e:
-            logger.error("wa_rag_error user=%s: %s", user_id, e)
+            # Update service window timestamp
+            await update_wa_service_window(db, tenant.id, user_id)
+
+            # RAG query
             try:
-                await adapter.send_reply(user_id, "Lo siento, hubo un error. Intentá de nuevo en un momento.")
-            except ChannelSendError:
-                pass
-            return
+                answer, chunks, intent = await rag_query(
+                    db=db,
+                    question=text,
+                    namespace=namespace,
+                    user_id=user_id,
+                    expertise_area=tenant.expertise_area or "",
+                    tenant_id=tenant.id,
+                    channel="whatsapp",
+                    image_b64=image_b64,
+                    image_mime=image_mime,
+                )
+            except Exception as e:
+                logger.error("wa_rag_error user=%s: %s", user_id, e)
+                try:
+                    await adapter.send_reply(user_id, "Lo siento, hubo un error. Intentá de nuevo en un momento.")
+                except ChannelSendError:
+                    pass
+                return
 
-        # Send reply with sources footer
-        source_footer = ""
-        if chunks:
-            sources = set(c["source"] for c in chunks if c.get("source"))
-            if sources:
-                source_footer = "\n\n📎 Fuentes: " + ", ".join(sources)
+            # Send reply with sources footer
+            source_footer = ""
+            if chunks:
+                sources = set(c["source"] for c in chunks if c.get("source"))
+                if sources:
+                    source_footer = "\n\n📎 Fuentes: " + ", ".join(sources)
 
-        try:
-            await adapter.send_reply(user_id, answer + source_footer)
-        except ChannelSendError as e:
-            logger.warning("wa_send_failed user=%s: %s — retrying once", user_id, e)
-            await asyncio.sleep(2)
             try:
                 await adapter.send_reply(user_id, answer + source_footer)
-            except ChannelSendError:
-                logger.error("wa_send_failed_retry user=%s — giving up", user_id)
+            except ChannelSendError as e:
+                logger.warning("wa_send_failed user=%s: %s — retrying once", user_id, e)
+                await asyncio.sleep(2)
+                try:
+                    await adapter.send_reply(user_id, answer + source_footer)
+                except ChannelSendError:
+                    logger.error("wa_send_failed_retry user=%s — giving up", user_id)

@@ -49,10 +49,15 @@ def _make_db_mock(fetchall=None, scalars_all=None, scalar_one_or_none=None):
 def _app_client():
     """Session-scoped TestClient — patches init_db, DB, and ngrok to avoid network delays."""
     import main as main_module
+    from db import get_db
 
-    with patch("main.init_db", new_callable=AsyncMock), \
+    # Base mock DB for all requests via dependency override
+    _db_override, _mock_db = _make_db_mock()
+
+    with patch("lifespan.init_db", new_callable=AsyncMock), \
          _patch_lifespan_db(), \
          patch("services.ngrok.get_ngrok_domain", new_callable=AsyncMock, return_value="localhost"):
+        main_module.app.dependency_overrides[get_db] = _db_override
         with TestClient(main_module.app) as client:
             yield client
 
@@ -67,7 +72,8 @@ def api_client(_app_client):
 def authed_api_client(_app_client):
     """Authenticated API client — patches require_tenant for the test's duration."""
     import main as main_module
-    from db import Tenant
+    from db import Tenant, get_db
+    from dependencies import require_tenant
 
     mock_tenant = MagicMock(spec=Tenant)
     mock_tenant.slug = "test-tenant"
@@ -75,8 +81,9 @@ def authed_api_client(_app_client):
     mock_tenant.bot_token = "fake-token"
     mock_tenant.expertise_area = ""
 
-    async def _mock_require_tenant(*args, **kwargs):
+    async def _mock_require_tenant():
         return mock_tenant
 
-    with patch("dependencies.require_tenant", side_effect=_mock_require_tenant):
-        yield _app_client, mock_tenant
+    main_module.app.dependency_overrides[require_tenant] = _mock_require_tenant
+    yield _app_client, mock_tenant
+    main_module.app.dependency_overrides.pop(require_tenant, None)

@@ -16,6 +16,10 @@ import httpx
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from dependencies import require_tenant
+import config
+import state
+
 
 # ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -552,7 +556,7 @@ async def test_handle_message_generic_exception_returns_generic_message():
 def test_upload_accepts_markdown_file(authed_api_client):
     client, _ = authed_api_client
     md_content = b"# Bienvenidos\n\n" + b"A" * 200
-    with patch("main.index_chunks", new=AsyncMock(return_value=3)):
+    with patch("routes.api.index_chunks", new=AsyncMock(return_value=3)):
         r = client.post(
             "/upload",
             files={"file": ("docs.md", md_content, "text/markdown")},
@@ -564,7 +568,7 @@ def test_upload_accepts_markdown_file(authed_api_client):
 
 def test_upload_accepts_txt_file(authed_api_client):
     client, _ = authed_api_client
-    with patch("main.index_chunks", new=AsyncMock(return_value=1)):
+    with patch("routes.api.index_chunks", new=AsyncMock(return_value=1)):
         r = client.post(
             "/upload",
             files={"file": ("notas.txt", b"A" * 300, "text/plain")},
@@ -618,14 +622,14 @@ def test_stats_returns_empty_list_when_no_documents(api_client):
         return mock_tenant
 
     main_module.app.dependency_overrides[get_db] = db_override
-    main_module.app.dependency_overrides[main_module.require_tenant] = _tenant_override
+    main_module.app.dependency_overrides[require_tenant] = _tenant_override
     try:
         r = api_client.get("/stats", headers={"X-API-Key": "test-key"})
         assert r.status_code == 200
         assert r.json()["indexed_documents"] == []
     finally:
         main_module.app.dependency_overrides.pop(get_db, None)
-        main_module.app.dependency_overrides.pop(main_module.require_tenant, None)
+        main_module.app.dependency_overrides.pop(require_tenant, None)
 
 
 def test_delete_namespace_returns_status_and_namespace(api_client):
@@ -641,7 +645,7 @@ def test_delete_namespace_returns_status_and_namespace(api_client):
         return mock_tenant
 
     main_module.app.dependency_overrides[get_db] = db_override
-    main_module.app.dependency_overrides[main_module.require_tenant] = _tenant_override
+    main_module.app.dependency_overrides[require_tenant] = _tenant_override
     try:
         r = api_client.delete("/namespace", headers={"X-API-Key": "test-key"})
         assert r.status_code == 200
@@ -650,7 +654,7 @@ def test_delete_namespace_returns_status_and_namespace(api_client):
         assert body["namespace"] == "mi-tenant"
     finally:
         main_module.app.dependency_overrides.pop(get_db, None)
-        main_module.app.dependency_overrides.pop(main_module.require_tenant, None)
+        main_module.app.dependency_overrides.pop(require_tenant, None)
 
 
 def test_patch_tenant_updates_expertise_area(api_client):
@@ -668,7 +672,7 @@ def test_patch_tenant_updates_expertise_area(api_client):
         return mock_tenant
 
     main_module.app.dependency_overrides[get_db] = db_override
-    main_module.app.dependency_overrides[main_module.require_tenant] = _tenant_override
+    main_module.app.dependency_overrides[require_tenant] = _tenant_override
     try:
         r = api_client.patch(
             "/tenant",
@@ -679,7 +683,7 @@ def test_patch_tenant_updates_expertise_area(api_client):
         assert r.json()["expertise_area"] == "healthcare y seguros"
     finally:
         main_module.app.dependency_overrides.pop(get_db, None)
-        main_module.app.dependency_overrides.pop(main_module.require_tenant, None)
+        main_module.app.dependency_overrides.pop(require_tenant, None)
 
 
 # ─── Admin UI ─────────────────────────────────────────────────────────────────
@@ -701,7 +705,7 @@ def test_admin_panel_accessible_with_correct_credentials(api_client):
     db_override, _ = _make_db_mock(scalars_all=[])
     main_module.app.dependency_overrides[get_db] = db_override
     try:
-        with patch.object(main_module.settings, "admin_password", "changeme"):
+        with patch.object(config.settings, "admin_password", "changeme"):
             r = api_client.get("/admin", headers=_admin_auth("changeme"))
         assert r.status_code == 200
         assert b"Admin" in r.content
@@ -716,7 +720,7 @@ def test_admin_create_tenant_missing_slug_shows_error(api_client):
     db_override, _ = _make_db_mock(scalars_all=[])
     main_module.app.dependency_overrides[get_db] = db_override
     try:
-        with patch.object(main_module.settings, "admin_password", "changeme"):
+        with patch.object(config.settings, "admin_password", "changeme"):
             r = api_client.post(
                 "/admin/tenants",
                 data={"slug": "", "bot_token": "123:ABC"},
@@ -735,7 +739,7 @@ def test_admin_create_tenant_invalid_plan_shows_error(api_client):
     db_override, _ = _make_db_mock(scalars_all=[])
     main_module.app.dependency_overrides[get_db] = db_override
     try:
-        with patch.object(main_module.settings, "admin_password", "changeme"):
+        with patch.object(config.settings, "admin_password", "changeme"):
             r = api_client.post(
                 "/admin/tenants",
                 data={"slug": "nuevo-tenant", "bot_token": "123:ABC", "plan": "enterprise"},
@@ -764,7 +768,7 @@ def test_admin_create_tenant_duplicate_slug_shows_error(api_client):
 
     main_module.app.dependency_overrides[get_db] = db_override
     try:
-        with patch.object(main_module.settings, "admin_password", "changeme"):
+        with patch.object(config.settings, "admin_password", "changeme"):
             r = api_client.post(
                 "/admin/tenants",
                 data={"slug": "duplicado", "bot_token": "123:ABC", "plan": "free"},
@@ -827,7 +831,7 @@ def test_webhook_valid_tenant_no_app_registered_returns_ok(api_client):
 
     db_override, _ = _make_db_mock(scalar_one_or_none=mock_tenant)
     main_module.app.dependency_overrides[get_db] = db_override
-    main_module.telegram_apps.pop(token, None)
+    state.telegram_apps.pop(token, None)
     try:
         r = api_client.post(
             "/webhook/ghost-tenant",
@@ -1630,7 +1634,7 @@ def test_admin_upload_nonexistent_tenant(api_client):
     db_override, mock_db = _make_db_mock(scalars_all=[mock_tenant], scalar_one_or_none=None)
     main_module.app.dependency_overrides[get_db] = db_override
     try:
-        with patch.object(main_module.settings, "admin_password", "changeme"):
+        with patch.object(config.settings, "admin_password", "changeme"):
             r = api_client.post(
                 "/admin/upload/999",
                 files={"file": ("test.md", b"# Hello\n\nSome content here that is long enough.", "text/markdown")},
@@ -1653,10 +1657,10 @@ def test_admin_upload_accepts_markdown(api_client):
 
     db_override, mock_db = _make_db_mock(scalars_all=[mock_tenant], scalar_one_or_none=mock_tenant)
 
-    with patch("main.index_chunks", new_callable=AsyncMock, return_value=5) as mock_index:
+    with patch("routes.admin.index_chunks", new_callable=AsyncMock, return_value=5) as mock_index:
         main_module.app.dependency_overrides[get_db] = db_override
         try:
-            with patch.object(main_module.settings, "admin_password", "changeme"):
+            with patch.object(config.settings, "admin_password", "changeme"):
                 r = api_client.post(
                     "/admin/upload/1",
                     files={"file": ("test.md", b"# Hello\n\nSome content here that is long enough for chunking.", "text/markdown")},
@@ -1681,7 +1685,7 @@ def test_admin_upload_rejects_unsupported_format(api_client):
     db_override, mock_db = _make_db_mock(scalars_all=[mock_tenant], scalar_one_or_none=mock_tenant)
     main_module.app.dependency_overrides[get_db] = db_override
     try:
-        with patch.object(main_module.settings, "admin_password", "changeme"):
+        with patch.object(config.settings, "admin_password", "changeme"):
             r = api_client.post(
                 "/admin/upload/1",
                 files={"file": ("test.docx", b"content", "application/octet-stream")},
