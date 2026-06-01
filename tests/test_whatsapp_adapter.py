@@ -398,27 +398,27 @@ class TestFormatText:
         assert "```\n" in result
 
 
-# ─── _build_system_prompt channel param ────────────────────────────────────
+# ─── build_system_prompt channel param ────────────────────────────────────
 
 class TestBuildSystemPromptChannel:
     def test_telegram_formatting(self):
-        from rag import _build_system_prompt
-        prompt = _build_system_prompt("test_area", channel="telegram")
+        from services.prompts import build_system_prompt
+        prompt = build_system_prompt("test_area", channel="telegram")
         assert "Formato para Telegram" in prompt
         assert "backticks" in prompt
 
     def test_whatsapp_formatting(self):
-        from rag import _build_system_prompt
-        prompt = _build_system_prompt("test_area", channel="whatsapp")
+        from services.prompts import build_system_prompt
+        prompt = build_system_prompt("test_area", channel="whatsapp")
         assert "Formato para WhatsApp" in prompt
         assert "NUNCA uses `backticks" in prompt
         assert "```" in prompt  # triple-backtick monospace is supported
         assert "~tachado~" in prompt  # strikethrough format
 
     def test_default_is_telegram(self):
-        from rag import _build_system_prompt
-        prompt_default = _build_system_prompt("test_area")
-        prompt_tg = _build_system_prompt("test_area", channel="telegram")
+        from services.prompts import build_system_prompt
+        prompt_default = build_system_prompt("test_area")
+        prompt_tg = build_system_prompt("test_area", channel="telegram")
         assert prompt_default == prompt_tg
 
 

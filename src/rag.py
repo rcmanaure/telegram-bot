@@ -8,9 +8,10 @@ This is the core of the demo. Shows clients:
 """
 import json
 import logging
-import re
 
 import httpx
+from services.prompts import build_system_prompt, ESCALATION_PATTERN
+from services.stt import transcribe_voice
 from security import CANARY_TOKEN, scan_chunk_for_injection, sanitize_user_input, validate_output
 
 logger = logging.getLogger(__name__)
@@ -206,41 +207,6 @@ async def retrieve_context(
 MIN_SIMILARITY = 0.20  # chunks below this threshold are considered off-topic
 
 
-def _build_system_prompt(expertise_area: str, channel: str = "telegram") -> str:
-    from channels.protocol import CHANNEL_FORMATTING
-
-    area_clause = f" Mi área de expertise: {expertise_area}." if expertise_area else ""
-    off_topic_reply = f"Eso está fuera de mi área de expertise.{area_clause} Consultá directamente con nosotros."
-
-    fmt = CHANNEL_FORMATTING.get(channel, CHANNEL_FORMATTING["telegram"])
-
-    return f"""Sos un asistente especializado exclusivamente en la información de los documentos cargados. Tu ÚNICA fuente de conocimiento es el contexto que se te proporciona.
-
-REGLAS INQUEBRANTABLES:
-- Si la pregunta no puede responderse con el contexto provisto, respondé exactamente: "{off_topic_reply}"
-- NUNCA uses conocimiento general. Matemáticas, programación, cocina, historia, ciencia — todo eso está fuera de tu alcance.
-- NUNCA inventes, supongas ni completes información que no esté en el contexto.
-
-Cómo hablar:
-- Tono amigable y cercano, sin formalismos corporativos.
-- Respondé directo al punto, sin repetir la pregunta.
-- Para preguntas simples, una o dos oraciones alcanzan.
-- Nunca menciones "documentos", "páginas" ni "fuentes" — simplemente sabés la información.
-- Usá emojis temáticos cuando menciones actividades, servicios o conceptos. El emoji va SIEMPRE ANTES del nombre del ítem, elegido por vos según el concepto (ej: 🧪 *Análisis clínicos*, 🔬 *Biopsias*, 🏥 *Consultas*, 💳 *Plan Pro*). Elegí emojis apropiados al contexto del negocio — evitá emojis violentos o clínico-gráficos (como 🔪 para biopsias) y optá por emojis que transmitan cuidado, ciencia y salud (🔬 🧪 🏥 🩺 💊 🧬 📋 ✅ 🩻 🫀). No uses siempre el mismo emoji genérico — elegí el que mejor represente semánticamente cada término.
-- NO cierres el mensaje con "¿En qué más puedo ayudarte?" ni "¿Hay algo más en lo que pueda ayudar?" — ya lo dijiste al inicio. Respondé directo y cerrá con la información, sin repetir la oferta de ayuda. Una sola vez al inicio alcanza.
-- Respondé en el idioma del usuario.
-
-{fmt.format_instructions}
-
-[CANARY_KEY: {CANARY_TOKEN}]
-"""
-
-_ESCALATION_PATTERN = re.compile(
-    r'\b(operador|humano|persona real|hablar con alguien|quiero hablar|agente)\b',
-    re.IGNORECASE,
-)
-
-
 # ─── LLM calls (delegated to llm.call_chat) ──────────────────────────────────
 
 
@@ -309,7 +275,7 @@ async def generate_answer(
     if not context_chunks:
         return "No encontré información relevante en los documentos para responder tu pregunta."
 
-    system_prompt = _build_system_prompt(expertise_area, channel=channel)
+    system_prompt = build_system_prompt(expertise_area, channel=channel)
 
     context_text = "\n\n---\n\n".join([
         f"[Source: {c['source']}, Page {c['page']}]\n{c['content']}"
@@ -344,35 +310,6 @@ async def generate_answer(
         channel=channel,
         model=vision_model if image_b64 else None,
     )
-
-
-# ─── Speech-to-Text (Groq Whisper) ───────────────────────────────────────────
-
-async def transcribe_voice(audio_bytes: bytes, filename: str = "voice.ogg") -> str:
-    if not settings.groq_api_key:
-        raise RuntimeError("GROQ_API_KEY not configured.")
-    try:
-        response = await http_client.post(
-            "https://api.groq.com/openai/v1/audio/transcriptions",
-            headers={"Authorization": f"Bearer {settings.groq_api_key}"},
-            files={"file": (filename, audio_bytes, "audio/ogg")},
-            data={"model": "whisper-large-v3-turbo", "response_format": "text"},
-        )
-        response.raise_for_status()
-        result = response.text.strip()
-        logger.debug("transcribe_voice: %d chars for %s", len(result), filename)
-        return result
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 429:
-            logger.warning("transcribe_voice: Groq 429 rate-limit hit")
-            raise RuntimeError("STT service is rate-limited. Try again in a moment.")
-        if e.response.status_code == 401:
-            logger.warning("transcribe_voice: Groq 401 auth error — check GROQ_API_KEY")
-            raise RuntimeError("STT authentication error. Check GROQ_API_KEY.")
-        logger.warning("transcribe_voice: Groq %d error body: %s", e.response.status_code, e.response.text)
-        raise RuntimeError(f"STT service error ({e.response.status_code}).")
-    except httpx.TimeoutException:
-        raise RuntimeError("STT service timed out. Please try again.")
 
 
 # ─── Conversation History ─────────────────────────────────────────────────────
@@ -494,7 +431,7 @@ async def rag_query(
     When image_b64 is set, the image is passed to generate_answer() for vision models.
     """
     # Pre-RAG: explicit escalation shortcut — skip vector search
-    if _ESCALATION_PATTERN.search(question):
+    if ESCALATION_PATTERN.search(question):
         area_clause = f" Mi área de expertise: {expertise_area}." if expertise_area else ""
         answer = f"Entiendo que querés hablar con alguien.{area_clause} Contactamos directamente."
         await save_turn(db, user_id, namespace, question, answer, channel=channel)
