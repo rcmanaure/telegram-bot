@@ -4,7 +4,6 @@ FastAPI backend — multi-tenant RAG API.
 import asyncio
 import hashlib
 import hmac
-import io
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -21,14 +20,10 @@ from fastapi import FastAPI, Header, HTTPException, UploadFile, File, Form, Depe
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
-from pypdf import PdfReader
-from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
 from sqlalchemy import select, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from telegram import Update
-from telegram.ext import ApplicationBuilder
 
 from config import settings
 from db import init_db, get_db, AsyncSessionLocal, DocumentChunk, Tenant, UnansweredQuery, WaServiceWindow
@@ -40,115 +35,23 @@ from channels.whatsapp import (
     send_wa_template,
 )
 from channels.protocol import ChannelSendError, format_text_for_channel, normalize_phone
+from state import telegram_apps, register_app, get_app, update_tenant_cache
+from dependencies import require_tenant
+from limiter import limiter, rate_limit_handler, wa_rate_limiter
+from services.upload import MAX_UPLOAD_BYTES, _IMAGE_EXTS, describe_image_for_upload, process_uploaded_file
+from services.ngrok import get_ngrok_domain
+from services.jobs import daily_digest_job, cleanup_job
+from services.tenant_bot import init_tenant_bot
 
 logger = logging.getLogger(__name__)
 
-# WA rate limits (separate from TG's _user_message_times since WA is async)
-_WA_RATE_LIMIT_MAX = 20
-_WA_RATE_LIMIT_WINDOW_S = 60
-_wa_rate_limits: dict[str, list] = {}
-
-MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
-
-# ─── Rate limiter ─────────────────────────────────────────────────────────────
-
-limiter = Limiter(key_func=get_remote_address)
-
-# ─── Per-tenant Application registry ─────────────────────────────────────────
-
-telegram_apps: dict[str, object] = {}  # bot_token → Application
-
-# ─── Auth dependency ──────────────────────────────────────────────────────────
-
-async def require_tenant(
-    x_api_key: str = Header(..., alias="X-API-Key"),
-    db: AsyncSession = Depends(get_db),
-) -> Tenant:
-    key_hash = hashlib.sha256(x_api_key.encode()).hexdigest()  # noqa: S324
-    result = await db.execute(
-        select(Tenant).where(Tenant.api_key_hash == key_hash, Tenant.active == True)
-    )
-    tenant = result.scalar_one_or_none()
-    if not tenant:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-    return tenant
-
 
 # ─── Background jobs ─────────────────────────────────────────────────────────
-
-async def daily_digest_job():
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
-    async with AsyncSessionLocal() as db:
-        result = await db.execute(
-            select(Tenant).where(Tenant.active == True, Tenant.operator_chat_id != None)
-        )
-        tenants = result.scalars().all()
-
-    for tenant in tenants:
-        try:
-            tg_app = telegram_apps.get(tenant.bot_token)
-            if not tg_app:
-                continue
-            async with AsyncSessionLocal() as db:
-                result = await db.execute(
-                    select(UnansweredQuery.question, func.count().label("cnt"))
-                    .where(
-                        UnansweredQuery.tenant_id == tenant.id,
-                        UnansweredQuery.created_at >= cutoff,
-                    )
-                    .group_by(UnansweredQuery.question)
-                    .order_by(text("cnt DESC"))
-                    .limit(5)
-                )
-                rows = result.fetchall()
-            if not rows:
-                continue
-            bot_name = tenant.name or tenant.slug
-            lines = [f"📊 *Consultas sin respuesta — {bot_name}* (últimas 24h):\n"]
-            for i, row in enumerate(rows, 1):
-                lines.append(f"{i}. {row.question} ({row.cnt}×)")
-            await tg_app.bot.send_message(
-                chat_id=tenant.operator_chat_id,
-                text="\n".join(lines),
-                parse_mode="Markdown",
-            )
-        except Exception:
-            logger.exception("daily_digest_job failed for tenant %s", tenant.slug)
-
-
-async def cleanup_job():
-    cutoff = datetime.now(timezone.utc) - timedelta(days=90)
-    async with AsyncSessionLocal() as db:
-        await db.execute(
-            text("DELETE FROM unanswered_queries WHERE created_at < :cutoff"),
-            {"cutoff": cutoff},
-        )
-        await db.commit()
-    logger.info("cleanup_job: deleted UnansweredQuery rows older than 90 days")
-
-    from bot import sweep_rate_limit_dict
-    removed = sweep_rate_limit_dict()
-    logger.info("cleanup_job: rate_limit_sweep removed=%d stale entries", removed)
+# (imported from services.jobs)
 
 
 # ─── ngrok URL discovery ──────────────────────────────────────────────────────
-
-async def _get_ngrok_domain(client) -> str | None:
-    """Query ngrok's local API (http://ngrok:4040) to get the public HTTPS URL.
-    Retries for up to 20 seconds to handle startup ordering."""
-    for _ in range(20):
-        try:
-            resp = await client.get("http://ngrok:4040/api/tunnels", timeout=2.0)
-            for tunnel in resp.json().get("tunnels", []):
-                if tunnel.get("proto") == "https":
-                    url = tunnel["public_url"].replace("https://", "")
-                    logger.info("ngrok public domain: %s", url)
-                    return url
-        except Exception:
-            pass
-        await asyncio.sleep(1)
-    logger.warning("ngrok not available — falling back to APP_DOMAIN=%s", settings.app_domain)
-    return None
+# (imported from services.ngrok)
 
 
 # ─── Lifespan ─────────────────────────────────────────────────────────────────
@@ -172,7 +75,7 @@ async def lifespan(app: FastAPI):
         domain = settings.app_domain
         logger.info("Webhook domain: %s", domain)
     else:
-        domain = await _get_ngrok_domain(http_client) or settings.app_domain
+        domain = await get_ngrok_domain(http_client) or settings.app_domain
 
     # Build Application per active tenant and register webhooks
     from db import AsyncSessionLocal
@@ -182,16 +85,9 @@ async def lifespan(app: FastAPI):
 
     for tenant in tenants:
         try:
-            tg_app = ApplicationBuilder().token(tenant.bot_token).build()
-            _register_handlers(tg_app)
-            tg_app.bot_data["tenant"] = tenant
-            await tg_app.initialize()
-            await tg_app.bot.set_webhook(
-                url=f"https://{domain}/webhook/{tenant.slug}",
-                secret_token=tenant.webhook_secret,
-            )
-            telegram_apps[tenant.bot_token] = tg_app
-            logger.info("Webhook set for tenant %s", tenant.slug)
+            ok = await init_tenant_bot(tenant, domain)
+            if ok:
+                logger.info("Webhook set for tenant %s", tenant.slug)
         except Exception:
             logger.exception("Failed to initialize tenant %s — skipping", tenant.slug)
 
@@ -236,8 +132,8 @@ app = FastAPI(
 app.state.limiter = limiter
 
 @app.exception_handler(RateLimitExceeded)
-async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
-    return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"})
+async def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    return rate_limit_handler(request, exc)
 
 
 # ─── Endpoints ────────────────────────────────────────────────────────────────
@@ -247,83 +143,7 @@ async def health():
     return {"status": "ok", "model": settings.llm_model, "fallback_model": settings.llm_fallback_model}
 
 
-_IMAGE_EXTS = (".jpg", ".jpeg", ".png")
-_VISION_DESCRIBE_PROMPT = (
-    "Describe this image in complete detail including all visible text, numbers, labels, "
-    "layout, and content. Be exhaustive."
-)
-
-
-async def _describe_image_for_upload(content: bytes, filename: str) -> str:
-    """Call vision model to describe an image. Returns description text.
-    Raises HTTPException 422 if description is too short to be useful."""
-    import base64 as _b64
-    from llm import call_chat
-
-    try:
-        import filetype as _ft
-        kind = _ft.guess(content)
-        mime = kind.mime if kind else "image/jpeg"
-    except Exception:
-        mime = "image/jpeg"
-
-    b64 = _b64.b64encode(content).decode("utf-8")
-    vision_model = settings.llm_vision_model or None
-
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": _VISION_DESCRIBE_PROMPT},
-                {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
-            ],
-        }
-    ]
-    try:
-        description = await call_chat(messages, max_tokens=1000, temperature=0.1, model=vision_model)
-    except RuntimeError as e:
-        raise HTTPException(422, f"Vision model failed to describe image: {e}")
-
-    if not description:
-        raise HTTPException(422, "No se pudo describir la imagen. El modelo no pudo procesarla.")
-
-    if len(description.strip()) < 100:
-        raise HTTPException(422, "No se pudo extraer contenido de la imagen. Verificá que el modelo soporte visión.")
-
-    return description
-
-
-def _process_uploaded_file(content: bytes, filename: str, source_name: str) -> tuple[list[dict], int]:
-    """Parse uploaded file content into chunks. Returns (chunks, pages_processed)."""
-    fname = filename.lower()
-    if not (fname.endswith(".pdf") or fname.endswith(".md") or fname.endswith(".txt")):
-        raise HTTPException(400, "Supported formats: PDF, Markdown (.md), plain text (.txt)")
-
-    all_chunks = []
-    if fname.endswith(".pdf"):
-        try:
-            reader = PdfReader(io.BytesIO(content))
-        except Exception as e:
-            raise HTTPException(400, f"Could not read PDF: {e}")
-        for page_num, page in enumerate(reader.pages):
-            page_text = page.extract_text() or ""
-            if page_text.strip():
-                chunks = chunk_text(page_text, source=source_name, page=page_num + 1)
-                all_chunks.extend(chunks)
-        pages_processed = len(reader.pages)
-    else:
-        try:
-            text = content.decode("utf-8")
-        except UnicodeDecodeError:
-            raise HTTPException(400, "File must be UTF-8 encoded")
-        if text.strip():
-            all_chunks = chunk_text(text, source=source_name, page=1)
-        pages_processed = 1
-
-    if not all_chunks:
-        raise HTTPException(400, "No text could be extracted from this file")
-
-    return all_chunks, pages_processed
+# Upload constants re-exported from services.upload for convenience
 
 
 @app.post("/upload")
@@ -340,11 +160,11 @@ async def upload_document(
 
     fname_lower = file.filename.lower()
     if any(fname_lower.endswith(ext) for ext in _IMAGE_EXTS):
-        description = await _describe_image_for_upload(content, fname_lower)
+        description = await describe_image_for_upload(content, fname_lower)
         all_chunks = chunk_text(description, source=file.filename, page=1)
         pages_processed = 1
     else:
-        all_chunks, pages_processed = _process_uploaded_file(content, fname_lower, file.filename)
+        all_chunks, pages_processed = process_uploaded_file(content, fname_lower, file.filename)
 
     if not all_chunks:
         raise HTTPException(400, "No extractable text in file")
@@ -408,7 +228,7 @@ async def update_tenant(
     await db.refresh(tenant)
 
     # Update the in-memory cached tenant so the bot uses the new value immediately
-    tg_app = telegram_apps.get(tenant.bot_token)
+    tg_app = get_app(tenant.bot_token)
     if tg_app:
         tg_app.bot_data["tenant"] = tenant
 
@@ -446,7 +266,7 @@ async def telegram_webhook(
     if not hmac.compare_digest(received, tenant.webhook_secret):
         raise HTTPException(status_code=403, detail="Invalid webhook signature")
 
-    tg_app = telegram_apps.get(tenant.bot_token)
+    tg_app = get_app(tenant.bot_token)
     if not tg_app:
         logger.error("No Application for tenant %s — restart may be needed", tenant_slug)
         return {"ok": True}
@@ -548,14 +368,9 @@ async def _process_wa_message(
 
     # Rate limit (20/60s per tenant:user, independent of TG)
     rate_key = f"{namespace}:{user_id}"
-    import time as _time
-    now = _time.monotonic()
-    timestamps = _wa_rate_limits.get(rate_key, [])
-    timestamps = [t for t in timestamps if now - t < _WA_RATE_LIMIT_WINDOW_S]
-    if len(timestamps) >= _WA_RATE_LIMIT_MAX:
+    if wa_rate_limiter.check(rate_key):
         logger.warning("wa_rate_limit key=%s", rate_key)
         return
-    _wa_rate_limits[rate_key] = timestamps + [now]
 
     # DB operations — create a fresh session since this runs as a background task
     async with AsyncSessionLocal() as db:
@@ -944,24 +759,6 @@ async def _get_all_doc_stats(db: AsyncSession) -> dict[int, list[dict]]:
     return stats
 
 
-async def _init_tenant_bot(tenant: Tenant, domain: str) -> bool:
-    """Build telegram Application for a tenant and register its webhook."""
-    try:
-        tg_app = ApplicationBuilder().token(tenant.bot_token).build()
-        _register_handlers(tg_app)
-        tg_app.bot_data["tenant"] = tenant
-        await tg_app.initialize()
-        await tg_app.bot.set_webhook(
-            url=f"https://{domain}/webhook/{tenant.slug}",
-            secret_token=tenant.webhook_secret,
-        )
-        telegram_apps[tenant.bot_token] = tg_app
-        return True
-    except Exception:
-        logger.exception("Failed to initialize bot for tenant %s", tenant.slug)
-        return False
-
-
 @app.get("/admin", response_class=HTMLResponse, include_in_schema=False)
 async def admin_panel(
     db: AsyncSession = Depends(get_db),
@@ -1024,18 +821,9 @@ async def admin_create_tenant(
 
     # Discover current public domain from ngrok or settings
     from rag import http_client
-    domain = None
-    try:
-        resp = await http_client.get("http://ngrok:4040/api/tunnels", timeout=2.0)
-        for t in resp.json().get("tunnels", []):
-            if t.get("proto") == "https":
-                domain = t["public_url"].replace("https://", "")
-                break
-    except Exception:
-        pass
-    domain = domain or settings.app_domain
+    domain = await get_ngrok_domain(http_client, max_retries=1) or settings.app_domain
 
-    ok = await _init_tenant_bot(tenant, domain)
+    ok = await init_tenant_bot(tenant, domain)
     if not ok:
         return _admin_html(
             await _all_tenants(db),
@@ -1109,7 +897,7 @@ async def admin_update_tenant(
 
     await sync_faq_chunks(db, tenant.slug, example_questions)
 
-    tg_app = telegram_apps.get(tenant.bot_token)
+    tg_app = get_app(tenant.bot_token)
     if tg_app:
         tg_app.bot_data["tenant"] = tenant
 
@@ -1191,11 +979,11 @@ async def admin_upload_document(
     try:
         fname_lower = file.filename.lower()
         if any(fname_lower.endswith(ext) for ext in _IMAGE_EXTS):
-            description = await _describe_image_for_upload(content, fname_lower)
+            description = await describe_image_for_upload(content, fname_lower)
             all_chunks = chunk_text(description, source=file.filename, page=1)
             pages_processed = 1
         else:
-            all_chunks, pages_processed = _process_uploaded_file(content, fname_lower, file.filename)
+            all_chunks, pages_processed = process_uploaded_file(content, fname_lower, file.filename)
     except HTTPException as e:
         return _admin_html(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db), error=e.detail)
 
@@ -1247,16 +1035,4 @@ async def admin_download_template(_: None = Depends(_require_admin)):
     return FileResponse("documents/plantilla.md", filename="plantilla.md", media_type="text/markdown")
 
 
-# ─── Bot handler registration (imported by lifespan) ──────────────────────────
-
-def _register_handlers(tg_app):
-    from bot import cmd_start, cmd_help, cmd_sources, cmd_clear, cmd_contactar, handle_message, handle_voice, handle_photo
-    from telegram.ext import CommandHandler, MessageHandler, filters
-    tg_app.add_handler(CommandHandler("start", cmd_start))
-    tg_app.add_handler(CommandHandler("help", cmd_help))
-    tg_app.add_handler(CommandHandler("sources", cmd_sources))
-    tg_app.add_handler(CommandHandler("clear", cmd_clear))
-    tg_app.add_handler(CommandHandler("contactar", cmd_contactar))
-    tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    tg_app.add_handler(MessageHandler(filters.VOICE, handle_voice))
-    tg_app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+# ─── Bot handler registration (moved to bot.py:register_handlers) ──────────────

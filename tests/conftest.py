@@ -52,7 +52,7 @@ def _app_client():
 
     with patch("main.init_db", new_callable=AsyncMock), \
          _patch_lifespan_db(), \
-         patch("main._get_ngrok_domain", new_callable=AsyncMock, return_value="localhost"):
+         patch("services.ngrok.get_ngrok_domain", new_callable=AsyncMock, return_value="localhost"):
         with TestClient(main_module.app) as client:
             yield client
 
@@ -78,5 +78,5 @@ def authed_api_client(_app_client):
     async def _mock_require_tenant(*args, **kwargs):
         return mock_tenant
 
-    with patch("main.require_tenant", side_effect=_mock_require_tenant):
+    with patch("dependencies.require_tenant", side_effect=_mock_require_tenant):
         yield _app_client, mock_tenant
