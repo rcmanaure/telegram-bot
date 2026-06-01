@@ -34,6 +34,9 @@ class Tenant(Base):
     created_at = Column(DateTime, server_default=func.now())
     active = Column(Boolean, default=True)
 
+    # Vision / web search
+    web_search_enabled = Column(Boolean, default=False, server_default="false")
+
     # WhatsApp / multi-channel
     wa_phone_number_id = Column(String(100), nullable=True)
     wa_access_token = Column(String(500), nullable=True)
@@ -93,6 +96,19 @@ class Conversation(Base):
     role = Column(String(20), nullable=False)
     content = Column(Text, nullable=False)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class SystemConfig(Base):
+    """Encrypted key-value store for system-level settings (LLM, embeddings, etc.).
+    Values are encrypted with Fernet (ENCRYPTION_KEY env var).
+    """
+    __tablename__ = "system_config"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    key = Column(String(100), unique=True, nullable=False, index=True)
+    encrypted_value = Column(Text, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
 
 
 class WaServiceWindow(Base):

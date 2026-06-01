@@ -299,35 +299,51 @@ async def generate_answer(
     conversation_history: list[dict],
     expertise_area: str = "",
     channel: str = "telegram",
+    image_b64: str | None = None,
+    image_mime: str = "image/jpeg",
 ) -> str:
     """
     Generate an answer using retrieved context + conversation history.
-    Uses the configured LLM provider so we can swap models easily.
+    When image_b64 is set, sends the image alongside the question (vision models).
     """
     if not context_chunks:
         return "No encontré información relevante en los documentos para responder tu pregunta."
 
     system_prompt = _build_system_prompt(expertise_area, channel=channel)
 
-    # Format context for the prompt
     context_text = "\n\n---\n\n".join([
         f"[Source: {c['source']}, Page {c['page']}]\n{c['content']}"
         for c in context_chunks
     ])
 
-    # system → history → (context + question) LAST
-    # LLMs expect the current user turn to be the final message.
+    text_content = (
+        f"<document_context>\n{context_text}\n</document_context>\n\n"
+        f"<user_question>\n{question}\n</user_question>"
+    )
+
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(conversation_history[-6:])
-    messages.append({
-        "role": "user",
-        "content": (
-            f"<document_context>\n{context_text}\n</document_context>\n\n"
-            f"<user_question>\n{question}\n</user_question>"
-        ),
-    })
 
-    return await call_chat(messages, max_tokens=800, temperature=0.1, channel=channel)
+    if image_b64:
+        # OpenAI vision format: content is a list with text + image_url parts
+        messages.append({
+            "role": "user",
+            "content": [
+                {"type": "text", "text": text_content},
+                {"type": "image_url", "image_url": {"url": f"data:{image_mime};base64,{image_b64}"}},
+            ],
+        })
+    else:
+        messages.append({"role": "user", "content": text_content})
+
+    vision_model = settings.llm_vision_model or None
+    return await call_chat(
+        messages,
+        max_tokens=800,
+        temperature=0.1,
+        channel=channel,
+        model=vision_model if image_b64 else None,
+    )
 
 
 # ─── Speech-to-Text (Groq Whisper) ───────────────────────────────────────────
@@ -468,11 +484,14 @@ async def rag_query(
     language_code: str | None = None,
     tenant_id: int | None = None,
     channel: str = "telegram",
+    image_b64: str | None = None,
+    image_mime: str = "image/jpeg",
 ) -> tuple[str, list[dict], str | None]:
     """
     Full RAG pipeline: retrieve context → generate answer → save history.
     Returns (answer, retrieved_chunks, intent | None).
     intent is None when answered from docs; otherwise the triage classification.
+    When image_b64 is set, the image is passed to generate_answer() for vision models.
     """
     # Pre-RAG: explicit escalation shortcut — skip vector search
     if _ESCALATION_PATTERN.search(question):
@@ -489,8 +508,6 @@ async def rag_query(
         question[:60],
         [(round(c["similarity"], 3), c["source"], c["content"][:40]) for c in context[:3]],
     )
-    # Drop chunks that are too dissimilar — prevents off-topic questions from
-    # reaching the LLM with unrelated context that the model might ignore.
     context = [c for c in context if c["similarity"] >= MIN_SIMILARITY]
     history = await get_history(db, user_id, namespace)
 
@@ -501,7 +518,10 @@ async def rag_query(
             await _log_unanswered(db, namespace, question, user_id, intent, tenant_id)
         return answer, [], intent
 
-    answer = await generate_answer(context, question, history, expertise_area, channel=channel)
+    answer = await generate_answer(
+        context, question, history, expertise_area,
+        channel=channel, image_b64=image_b64, image_mime=image_mime,
+    )
     answer = validate_output(answer, user_id=user_id)
     await save_turn(db, user_id, namespace, question, answer, channel=channel)
     return answer, context, None

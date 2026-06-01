@@ -65,6 +65,38 @@
 - [x] **STT-1** Groq Whisper integration (core) — `src/config.py` + `src/rag.py:transcribe_voice` + `src/bot.py:handle_voice + _process_question` + `src/main.py` register `filters.VOICE`; see CEO plan `~/.gstack/projects/rcmanaure-telegram-bot/ceo-plans/2026-05-26-groq-stt.md`
 - [ ] **STT-2** Per-tenant Groq API key (`Tenant.groq_api_key` nullable, admin UI field, falls back to global key) — trigger: first paying client hits quota or requests separate billing; Effort M (CC: ~10min)
 
+## Admin UI Redesign + Secure Config (branch feat/admin-redesign)
+
+- [ ] **A1** `requirements.txt` — add `cryptography>=42.0.0`
+- [ ] **A2** `src/crypto.py` — new: `get_fernet()`, `encrypt_value()`, `decrypt_value()` (fallback plaintext), `generate_key()`
+- [ ] **A3** `src/config_overlay.py` — `_overlay`, `get_setting()`, `reload_from_db()` (per-row try/except)
+- [ ] **A4** `src/db.py` — add `SystemConfig(key, encrypted_value)` model
+- [ ] **A5** Alembic migration — `system_config` table + encrypt existing WA creds (warn if ENCRYPTION_KEY absent)
+- [ ] **A6** `src/llm.py` — replace `settings.x` with `get_setting(key, fallback)`; `embedding_dim` int-cast
+- [ ] **A7** `src/main.py` lifespan — call `reload_from_db()` after `init_db()`
+- [ ] **A8** `src/main.py` — new endpoints: `/admin/settings` (POST), `/admin/settings/test-connection`, `/admin/tenant/{id}/toggle-active`, `/admin/health-data`
+- [ ] **A9** `src/main.py:_admin_html()` — tabbed redesign (?tab= URL param), card layout, credential masking
+- [ ] **A10** `src/channels/whatsapp.py` — `decrypt_value(tenant.wa_access_token)` with plaintext fallback
+- [ ] **A11** `src/main.py:admin_update_tenant()` — encrypt WA creds before save
+- [ ] **A12** `.env.example` — add `ENCRYPTION_KEY=` + generation command
+- [ ] **A13** Tests — crypto round-trip, hot-reload after save, toggle-active, health endpoint
+- [ ] **KEY-ROTATION (P3, Deferred)** Script to re-encrypt all SystemConfig + Tenant WA creds when ENCRYPTION_KEY changes; no implementation until first key rotation request
+
+## Vision + Ollama Cloud (próxima branch después de feat/whatsapp-multi-channel)
+
+- [ ] **PREREQ-WS** Validar endpoint Ollama cloud web search antes de V7 — `curl -H "Authorization: Bearer $OLLAMA_API_KEY" https://ollama.com/api/web_search -d '{"query":"test","num_results":3}'`. Si falla, usar Tavily o Brave Search. **Bloquea V7.**
+- [ ] **V1** `config.py` + `requirements.txt` — `LLM_VISION_MODEL: str = ""`, `WEB_SEARCH_URL: str = ""`, agregar `filetype`
+- [ ] **V1.5** `llm.py:call_chat()` — param `model: str | None = None`
+- [ ] **V2** `rag.py:generate_answer()` — `image_b64: str | None = None`, content array OpenAI vision format: `[{type:text}, {type:image_url, image_url:{url:data:image/..;base64,...}}]`
+- [ ] **V2.5** `rag.py:rag_query()` — `image_b64` + `tenant: Tenant | None` params
+- [ ] **V3** `bot.py` — `handle_photo()` + `filters.PHOTO`; guard > 5MB; capturar httpx error → "No pude descargar la imagen."
+- [ ] **V4** `main.py:_process_wa_message()` — remover early return para imagen; capturar errores de descarga y modelo
+- [ ] **V5** Upload endpoint (async) — jpg/png detect; vision describe pre-step; guard desc > 100 chars
+- [ ] **V6** Alembic migration — `Tenant.web_search_enabled boolean default false` (probar en DB limpia)
+- [ ] **V7** `rag.py:rag_query()` — web search fallback con rescue total; **requiere PREREQ-WS**
+- [ ] **V8** Admin UI — toggle web_search_enabled; image accept en file inputs; `.env.example` Ollama block
+- [ ] **V10** Tests — handle_photo, vision generate_answer, image upload, web search triage
+
 ## Deferred (cuando haya > 10 clientes)
 
 - [ ] Dynamic tenant reload sin restart (`POST /admin/tenants/{slug}/activate`)
