@@ -254,7 +254,8 @@ async def _triage_response(
         raw = await call_chat(messages, max_tokens=150, temperature=0.2)
         parsed = extract_json_from_llm_response(raw)
         return parsed["intent"], parsed["reply"]
-    except Exception:
+    except Exception as e:
+        logger.warning("_triage_response failed: %s", e)
         area_clause = f" Mi área de expertise: {expertise_area}." if expertise_area else ""
         return "off_topic", f"Eso está fuera de mi área de expertise.{area_clause} Consultá directamente con nosotros."
 
@@ -355,6 +356,7 @@ async def save_turn(
     user_msg: str,
     assistant_msg: str,
     channel: str = "telegram",
+    tenant_id: int | None = None,
 ):
     db.add(Conversation(
         user_id=user_id,
@@ -362,6 +364,7 @@ async def save_turn(
         role="user",
         content=user_msg,
         channel=channel,
+        tenant_id=tenant_id,
     ))
     db.add(Conversation(
         user_id=user_id,
@@ -369,6 +372,7 @@ async def save_turn(
         role="assistant",
         content=assistant_msg,
         channel=channel,
+        tenant_id=tenant_id,
     ))
     await db.commit()
 
