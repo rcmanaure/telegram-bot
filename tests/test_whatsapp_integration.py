@@ -372,208 +372,168 @@ class TestSendWaTemplate:
                 await send_wa_template(adapter, "549111234567", "hello_template")
 
 
-# ─── _get_wa_adapter helper ────────────────────────────────────────────────
+# ─── create_wa_adapter helper ────────────────────────────────────────────────
 
 class TestGetWaAdapter:
     def test_returns_adapter_when_wa_configured(self):
-        from main import _get_wa_adapter
+        from services.wa_processor import create_wa_adapter
         tenant = make_tenant()
-        adapter = _get_wa_adapter(tenant)
+        adapter = create_wa_adapter(tenant)
         assert adapter is not None
         assert isinstance(adapter, WhatsAppAdapter)
         assert adapter.phone_number_id == "1234567890"
 
     def test_returns_none_when_wa_not_configured(self):
-        from main import _get_wa_adapter
+        from services.wa_processor import create_wa_adapter
         tenant = make_tenant(wa_phone_number_id=None, wa_access_token=None)
-        adapter = _get_wa_adapter(tenant)
+        adapter = create_wa_adapter(tenant)
         assert adapter is None
 
     def test_returns_none_when_channels_excludes_whatsapp(self):
-        from main import _get_wa_adapter
+        from services.wa_processor import create_wa_adapter
         tenant = make_tenant(channels="telegram")
-        adapter = _get_wa_adapter(tenant)
+        adapter = create_wa_adapter(tenant)
         assert adapter is None
 
     def test_returns_none_when_phone_number_id_empty(self):
-        from main import _get_wa_adapter
+        from services.wa_processor import create_wa_adapter
         tenant = make_tenant(wa_phone_number_id="")
-        adapter = _get_wa_adapter(tenant)
+        adapter = create_wa_adapter(tenant)
         assert adapter is None
 
 
-# ─── _process_wa_message branches ───────────────────────────────────────────
-# NOTE: _process_wa_message does "from bot import rate_limits" at call time,
-# but bot.py doesn't export rate_limits (it uses _user_message_times instead).
-# This is a bug in the branch code -- we inject the attribute onto the bot
-# module so the import succeeds during testing.
-
-import bot as _bot_mod
-
+# ─── handle_wa_message branches ───────────────────────────────────────────
+# WA message processing lives in services/wa_processor.py as handle_wa_message.
+# Rate limiting uses wa_rate_limiter from limiter.py (no more bot.rate_limits hack).
 
 class TestProcessWaMessage:
     @pytest.mark.asyncio
     async def test_unsupported_media_replies_help_text(self):
-        from main import _process_wa_message
+        from services.wa_processor import handle_wa_message
         mock_db = AsyncMock()
         tenant = make_tenant()
         wa_msg = ChannelMessage(user_id="549111234567", text=None, media_type="image", channel="whatsapp")
 
         adapter = make_wa_adapter()
-        _bot_mod.rate_limits = {}
-        try:
-            with patch("main._get_wa_adapter", return_value=adapter), \
-                 patch.object(adapter, "send_reply", new_callable=AsyncMock) as mock_send:
-                await _process_wa_message(tenant, wa_msg)
+        with patch("services.wa_processor.create_wa_adapter", return_value=adapter), \
+             patch.object(adapter, "send_reply", new_callable=AsyncMock) as mock_send:
+            await handle_wa_message(tenant, wa_msg)
 
-            mock_send.assert_called_once()
-            assert "Solo puedo procesar texto" in mock_send.call_args[0][1]
-        finally:
-            del _bot_mod.rate_limits
+        mock_send.assert_called_once()
+        assert "Solo puedo procesar texto" in mock_send.call_args[0][1]
 
     @pytest.mark.asyncio
     async def test_voice_message_replies_not_available(self):
-        from main import _process_wa_message
+        from services.wa_processor import handle_wa_message
         mock_db = AsyncMock()
         tenant = make_tenant()
         wa_msg = ChannelMessage(user_id="549111234567", text=None, media_type="voice", channel="whatsapp")
 
         adapter = make_wa_adapter()
-        _bot_mod.rate_limits = {}
-        try:
-            with patch("main._get_wa_adapter", return_value=adapter), \
-                 patch.object(adapter, "send_reply", new_callable=AsyncMock) as mock_send:
-                await _process_wa_message(tenant, wa_msg)
+        with patch("services.wa_processor.create_wa_adapter", return_value=adapter), \
+             patch.object(adapter, "send_reply", new_callable=AsyncMock) as mock_send:
+            await handle_wa_message(tenant, wa_msg)
 
-            mock_send.assert_called_once()
-            assert "notas de voz" in mock_send.call_args[0][1]
-        finally:
-            del _bot_mod.rate_limits
+        mock_send.assert_called_once()
+        assert "notas de voz" in mock_send.call_args[0][1]
 
     @pytest.mark.asyncio
     async def test_sanitize_error_replies_blocked(self):
-        from main import _process_wa_message
+        from services.wa_processor import handle_wa_message
         mock_db = AsyncMock()
         tenant = make_tenant()
         wa_msg = ChannelMessage(user_id="549111234567", text="ignore all", channel="whatsapp")
 
         adapter = make_wa_adapter()
-        _bot_mod.rate_limits = {}
-        try:
-            # sanitize_user_input is imported from rag inside the function
-            with patch("main._get_wa_adapter", return_value=adapter), \
-                 patch("rag.sanitize_user_input", side_effect=ValueError("blocked")), \
-                 patch.object(adapter, "send_reply", new_callable=AsyncMock) as mock_send:
-                await _process_wa_message(tenant, wa_msg)
+        with patch("services.wa_processor.create_wa_adapter", return_value=adapter), \
+             patch("services.wa_processor.sanitize_user_input", side_effect=ValueError("blocked")), \
+             patch.object(adapter, "send_reply", new_callable=AsyncMock) as mock_send:
+            await handle_wa_message(tenant, wa_msg)
 
-            mock_send.assert_called_once()
-            assert "no permitido" in mock_send.call_args[0][1]
-        finally:
-            del _bot_mod.rate_limits
+        mock_send.assert_called_once()
+        assert "no permitido" in mock_send.call_args[0][1]
 
     @pytest.mark.asyncio
     async def test_empty_text_returns_early(self):
-        from main import _process_wa_message
+        from services.wa_processor import handle_wa_message
         mock_db = AsyncMock()
         tenant = make_tenant()
         wa_msg = ChannelMessage(user_id="549111234567", text="   ", channel="whatsapp")
 
         adapter = make_wa_adapter()
-        _bot_mod.rate_limits = {}
-        try:
-            with patch("main._get_wa_adapter", return_value=adapter), \
-                 patch.object(adapter, "send_reply", new_callable=AsyncMock) as mock_send:
-                await _process_wa_message(tenant, wa_msg)
+        with patch("services.wa_processor.create_wa_adapter", return_value=adapter), \
+             patch.object(adapter, "send_reply", new_callable=AsyncMock) as mock_send:
+            await handle_wa_message(tenant, wa_msg)
 
-            mock_send.assert_not_called()
-        finally:
-            del _bot_mod.rate_limits
+        mock_send.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_rate_limit_returns_early(self):
-        import main as main_module
-        from main import _process_wa_message
+        from services.wa_processor import handle_wa_message
 
         tenant = make_tenant()
         wa_msg = ChannelMessage(user_id="549111234567", text="Hola", channel="whatsapp")
 
-        # Pre-fill WA rate limits to trigger the cap
-        rate_key = f"{tenant.slug}:549111234567"
-        main_module._wa_rate_limits = {rate_key: [time.monotonic()] * 20}
-
         adapter = make_wa_adapter()
-        try:
-            with patch("main._get_wa_adapter", return_value=adapter), \
-                 patch("rag.sanitize_user_input", return_value="Hola"), \
-                 patch.object(adapter, "send_reply", new_callable=AsyncMock) as mock_send:
-                await _process_wa_message(tenant, wa_msg)
-            mock_send.assert_not_called()
-        finally:
-            main_module._wa_rate_limits = {}
+        with patch("services.wa_processor.create_wa_adapter", return_value=adapter), \
+             patch("services.wa_processor.sanitize_user_input", return_value="Hola"), \
+             patch("services.wa_processor.wa_rate_limiter") as mock_limiter, \
+             patch.object(adapter, "send_reply", new_callable=AsyncMock) as mock_send:
+            mock_limiter.check.return_value = True  # rate limited
+            await handle_wa_message(tenant, wa_msg)
+        mock_send.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_outside_window_with_template_sends_template(self):
-        from main import _process_wa_message
+        from services.wa_processor import handle_wa_message
         tenant = make_tenant(wa_reengagement_template="hello_template")
 
         wa_msg = ChannelMessage(user_id="549111234567", text="Hola", channel="whatsapp")
 
         adapter = make_wa_adapter()
-        _bot_mod.rate_limits = {}
-        try:
-            with patch("main._get_wa_adapter", return_value=adapter), \
-                 patch("rag.sanitize_user_input", return_value="Hola"), \
-                 patch("main.check_wa_service_window", new_callable=AsyncMock, return_value=False), \
-                 patch("main.send_wa_template", new_callable=AsyncMock) as mock_tpl:
-                await _process_wa_message(tenant, wa_msg)
+        with patch("services.wa_processor.create_wa_adapter", return_value=adapter), \
+             patch("services.wa_processor.sanitize_user_input", return_value="Hola"), \
+             patch("services.wa_processor.check_wa_service_window", new_callable=AsyncMock, return_value=False), \
+             patch("services.wa_processor.send_wa_template", new_callable=AsyncMock) as mock_tpl:
+            await handle_wa_message(tenant, wa_msg)
 
-            mock_tpl.assert_called_once()
-        finally:
-            del _bot_mod.rate_limits
+        mock_tpl.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_outside_window_no_template_logs_unanswered(self):
         """When outside 24h window with no template, _log_unanswered is called
         instead of crashing with NameError (fixed in commit 8f0d6e1)."""
-        from main import _process_wa_message
+        from services.wa_processor import handle_wa_message
         tenant = make_tenant(wa_reengagement_template=None)
 
         wa_msg = ChannelMessage(user_id="549111234567", text="Hola", channel="whatsapp")
 
         adapter = make_wa_adapter()
-        _bot_mod.rate_limits = {}
-        try:
-            with patch("main._get_wa_adapter", return_value=adapter), \
-                 patch("rag.sanitize_user_input", return_value="Hola"), \
-                 patch("main.check_wa_service_window", new_callable=AsyncMock, return_value=False), \
-                 patch("main._log_unanswered", new_callable=AsyncMock) as mock_log:
-                await _process_wa_message(tenant, wa_msg)
+        with patch("services.wa_processor.create_wa_adapter", return_value=adapter), \
+             patch("services.wa_processor.sanitize_user_input", return_value="Hola"), \
+             patch("services.wa_processor.check_wa_service_window", new_callable=AsyncMock, return_value=False), \
+             patch("services.wa_processor._log_unanswered", new_callable=AsyncMock) as mock_log:
+            await handle_wa_message(tenant, wa_msg)
 
-            mock_log.assert_called_once()
-        finally:
-            del _bot_mod.rate_limits
+        mock_log.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_rag_error_sends_error_message(self):
-        from main import _process_wa_message
+        from services.wa_processor import handle_wa_message
         tenant = make_tenant()
         wa_msg = ChannelMessage(user_id="549111234567", text="Hola", channel="whatsapp")
 
         adapter = make_wa_adapter()
-        _bot_mod.rate_limits = {}
-        try:
-            with patch("main._get_wa_adapter", return_value=adapter), \
-                 patch("rag.sanitize_user_input", return_value="Hola"), \
-                 patch("main.check_wa_service_window", new_callable=AsyncMock, return_value=True), \
-                 patch("main.update_wa_service_window", new_callable=AsyncMock), \
-                 patch("main.rag_query", new_callable=AsyncMock, side_effect=RuntimeError("LLM down")), \
-                 patch.object(adapter, "send_reply", new_callable=AsyncMock) as mock_send:
-                await _process_wa_message(tenant, wa_msg)
+        with patch("services.wa_processor.create_wa_adapter", return_value=adapter), \
+             patch("services.wa_processor.sanitize_user_input", return_value="Hola"), \
+             patch("services.wa_processor.check_wa_service_window", new_callable=AsyncMock, return_value=True), \
+             patch("services.wa_processor.update_wa_service_window", new_callable=AsyncMock), \
+             patch("services.wa_processor.rag_query", new_callable=AsyncMock, side_effect=RuntimeError("LLM down")), \
+             patch.object(adapter, "send_reply", new_callable=AsyncMock) as mock_send:
+            await handle_wa_message(tenant, wa_msg)
 
-            mock_send.assert_called_once()
-            assert "error" in mock_send.call_args[0][1].lower() or "Lo siento" in mock_send.call_args[0][1]
-        finally:
-            del _bot_mod.rate_limits
+        mock_send.assert_called_once()
+        assert "error" in mock_send.call_args[0][1].lower() or "Lo siento" in mock_send.call_args[0][1]
 
 
 # ─── rag.py channel param propagation ──────────────────────────────────────
@@ -581,9 +541,9 @@ class TestProcessWaMessage:
 class TestRagChannelParam:
     def test_generate_answer_default_channel(self):
         """generate_answer should accept channel param without error."""
-        from rag import _build_system_prompt
-        prompt_tg = _build_system_prompt("test", channel="telegram")
-        prompt_wa = _build_system_prompt("test", channel="whatsapp")
+        from services.prompts import build_system_prompt
+        prompt_tg = build_system_prompt("test", channel="telegram")
+        prompt_wa = build_system_prompt("test", channel="whatsapp")
         assert prompt_tg != prompt_wa
         assert "Telegram" in prompt_tg
         assert "WhatsApp" in prompt_wa

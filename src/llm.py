@@ -74,15 +74,22 @@ async def call_chat(
     max_tokens: int = 800,
     temperature: float = 0.1,
     channel: str = "telegram",
+    model: str | None = None,
 ) -> str:
     """
     Call chat/completions with primary model, then fallback on failure.
     Returns the assistant message content string.
     Raises RuntimeError on all-model failure.
+
+    When model= is set (e.g. for vision), only that model is tried — no fallback.
+    Text-only fallback models must not receive image payloads.
     """
-    models = [settings.llm_model]
-    if settings.llm_fallback_model:
-        models.append(settings.llm_fallback_model)
+    if model:
+        models = [model]
+    else:
+        models = [settings.llm_model]
+        if settings.llm_fallback_model:
+            models.append(settings.llm_fallback_model)
 
     # Conditional HTTP-Referer header: only sent when using OpenRouter
     # (E2: other providers may reject or ignore it)

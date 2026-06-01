@@ -16,6 +16,10 @@ import httpx
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from dependencies import require_tenant
+import config
+import state
+
 
 # ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -268,14 +272,14 @@ async def test_triage_response_network_failure_returns_fallback():
 # ─── _build_system_prompt ─────────────────────────────────────────────────────
 
 def test_build_system_prompt_includes_expertise_area():
-    from rag import _build_system_prompt
-    prompt = _build_system_prompt("nutrición deportiva")
+    from services.prompts import build_system_prompt
+    prompt = build_system_prompt("nutrición deportiva")
     assert "nutrición deportiva" in prompt
 
 
 def test_build_system_prompt_empty_area_no_trailing_dot_clause():
-    from rag import _build_system_prompt
-    prompt = _build_system_prompt("")
+    from services.prompts import build_system_prompt
+    prompt = build_system_prompt("")
     assert "Mi área de expertise: ." not in prompt
 
 
@@ -552,7 +556,7 @@ async def test_handle_message_generic_exception_returns_generic_message():
 def test_upload_accepts_markdown_file(authed_api_client):
     client, _ = authed_api_client
     md_content = b"# Bienvenidos\n\n" + b"A" * 200
-    with patch("main.index_chunks", new=AsyncMock(return_value=3)):
+    with patch("routes.api.index_chunks", new=AsyncMock(return_value=3)):
         r = client.post(
             "/upload",
             files={"file": ("docs.md", md_content, "text/markdown")},
@@ -564,7 +568,7 @@ def test_upload_accepts_markdown_file(authed_api_client):
 
 def test_upload_accepts_txt_file(authed_api_client):
     client, _ = authed_api_client
-    with patch("main.index_chunks", new=AsyncMock(return_value=1)):
+    with patch("routes.api.index_chunks", new=AsyncMock(return_value=1)):
         r = client.post(
             "/upload",
             files={"file": ("notas.txt", b"A" * 300, "text/plain")},
@@ -593,7 +597,7 @@ def test_upload_pdf_with_no_extractable_text(authed_api_client):
     mock_reader = MagicMock()
     mock_reader.pages = [mock_page]
 
-    with patch("main.PdfReader", return_value=mock_reader):
+    with patch("services.upload.PdfReader", return_value=mock_reader):
         r = client.post(
             "/upload",
             files={"file": ("scan.pdf", b"%PDF-1.4 minimal", "application/pdf")},
@@ -618,14 +622,14 @@ def test_stats_returns_empty_list_when_no_documents(api_client):
         return mock_tenant
 
     main_module.app.dependency_overrides[get_db] = db_override
-    main_module.app.dependency_overrides[main_module.require_tenant] = _tenant_override
+    main_module.app.dependency_overrides[require_tenant] = _tenant_override
     try:
         r = api_client.get("/stats", headers={"X-API-Key": "test-key"})
         assert r.status_code == 200
         assert r.json()["indexed_documents"] == []
     finally:
         main_module.app.dependency_overrides.pop(get_db, None)
-        main_module.app.dependency_overrides.pop(main_module.require_tenant, None)
+        main_module.app.dependency_overrides.pop(require_tenant, None)
 
 
 def test_delete_namespace_returns_status_and_namespace(api_client):
@@ -641,7 +645,7 @@ def test_delete_namespace_returns_status_and_namespace(api_client):
         return mock_tenant
 
     main_module.app.dependency_overrides[get_db] = db_override
-    main_module.app.dependency_overrides[main_module.require_tenant] = _tenant_override
+    main_module.app.dependency_overrides[require_tenant] = _tenant_override
     try:
         r = api_client.delete("/namespace", headers={"X-API-Key": "test-key"})
         assert r.status_code == 200
@@ -650,7 +654,7 @@ def test_delete_namespace_returns_status_and_namespace(api_client):
         assert body["namespace"] == "mi-tenant"
     finally:
         main_module.app.dependency_overrides.pop(get_db, None)
-        main_module.app.dependency_overrides.pop(main_module.require_tenant, None)
+        main_module.app.dependency_overrides.pop(require_tenant, None)
 
 
 def test_patch_tenant_updates_expertise_area(api_client):
@@ -668,7 +672,7 @@ def test_patch_tenant_updates_expertise_area(api_client):
         return mock_tenant
 
     main_module.app.dependency_overrides[get_db] = db_override
-    main_module.app.dependency_overrides[main_module.require_tenant] = _tenant_override
+    main_module.app.dependency_overrides[require_tenant] = _tenant_override
     try:
         r = api_client.patch(
             "/tenant",
@@ -679,7 +683,7 @@ def test_patch_tenant_updates_expertise_area(api_client):
         assert r.json()["expertise_area"] == "healthcare y seguros"
     finally:
         main_module.app.dependency_overrides.pop(get_db, None)
-        main_module.app.dependency_overrides.pop(main_module.require_tenant, None)
+        main_module.app.dependency_overrides.pop(require_tenant, None)
 
 
 # ─── Admin UI ─────────────────────────────────────────────────────────────────
@@ -701,7 +705,7 @@ def test_admin_panel_accessible_with_correct_credentials(api_client):
     db_override, _ = _make_db_mock(scalars_all=[])
     main_module.app.dependency_overrides[get_db] = db_override
     try:
-        with patch.object(main_module.settings, "admin_password", "changeme"):
+        with patch.object(config.settings, "admin_password", "changeme"):
             r = api_client.get("/admin", headers=_admin_auth("changeme"))
         assert r.status_code == 200
         assert b"Admin" in r.content
@@ -716,7 +720,7 @@ def test_admin_create_tenant_missing_slug_shows_error(api_client):
     db_override, _ = _make_db_mock(scalars_all=[])
     main_module.app.dependency_overrides[get_db] = db_override
     try:
-        with patch.object(main_module.settings, "admin_password", "changeme"):
+        with patch.object(config.settings, "admin_password", "changeme"):
             r = api_client.post(
                 "/admin/tenants",
                 data={"slug": "", "bot_token": "123:ABC"},
@@ -735,7 +739,7 @@ def test_admin_create_tenant_invalid_plan_shows_error(api_client):
     db_override, _ = _make_db_mock(scalars_all=[])
     main_module.app.dependency_overrides[get_db] = db_override
     try:
-        with patch.object(main_module.settings, "admin_password", "changeme"):
+        with patch.object(config.settings, "admin_password", "changeme"):
             r = api_client.post(
                 "/admin/tenants",
                 data={"slug": "nuevo-tenant", "bot_token": "123:ABC", "plan": "enterprise"},
@@ -764,7 +768,7 @@ def test_admin_create_tenant_duplicate_slug_shows_error(api_client):
 
     main_module.app.dependency_overrides[get_db] = db_override
     try:
-        with patch.object(main_module.settings, "admin_password", "changeme"):
+        with patch.object(config.settings, "admin_password", "changeme"):
             r = api_client.post(
                 "/admin/tenants",
                 data={"slug": "duplicado", "bot_token": "123:ABC", "plan": "free"},
@@ -827,7 +831,7 @@ def test_webhook_valid_tenant_no_app_registered_returns_ok(api_client):
 
     db_override, _ = _make_db_mock(scalar_one_or_none=mock_tenant)
     main_module.app.dependency_overrides[get_db] = db_override
-    main_module.telegram_apps.pop(token, None)
+    state.telegram_apps.pop(token, None)
     try:
         r = api_client.post(
             "/webhook/ghost-tenant",
@@ -1243,7 +1247,7 @@ async def test_handle_voice_success():
 
 @pytest.mark.asyncio
 async def test_transcribe_voice_success():
-    from rag import transcribe_voice
+    from services.stt import transcribe_voice
 
     mock_response = MagicMock()
     mock_response.raise_for_status = MagicMock()
@@ -1251,8 +1255,8 @@ async def test_transcribe_voice_success():
     mock_http = AsyncMock()
     mock_http.post = AsyncMock(return_value=mock_response)
 
-    with patch("rag.http_client", mock_http), \
-         patch("rag.settings") as mock_settings:
+    with patch("services.stt.http_client", mock_http), \
+         patch("services.stt.settings") as mock_settings:
         mock_settings.groq_api_key = "test-key"
         result = await transcribe_voice(b"audio bytes")
 
@@ -1262,7 +1266,7 @@ async def test_transcribe_voice_success():
 
 @pytest.mark.asyncio
 async def test_transcribe_voice_429():
-    from rag import transcribe_voice
+    from services.stt import transcribe_voice
 
     mock_resp = MagicMock()
     mock_resp.status_code = 429
@@ -1272,8 +1276,8 @@ async def test_transcribe_voice_429():
     mock_http = AsyncMock()
     mock_http.post = AsyncMock(return_value=mock_resp)
 
-    with patch("rag.http_client", mock_http), \
-         patch("rag.settings") as mock_settings:
+    with patch("services.stt.http_client", mock_http), \
+         patch("services.stt.settings") as mock_settings:
         mock_settings.groq_api_key = "test-key"
         with pytest.raises(RuntimeError, match="rate-limited"):
             await transcribe_voice(b"audio bytes")
@@ -1281,13 +1285,13 @@ async def test_transcribe_voice_429():
 
 @pytest.mark.asyncio
 async def test_transcribe_voice_timeout():
-    from rag import transcribe_voice
+    from services.stt import transcribe_voice
 
     mock_http = AsyncMock()
     mock_http.post = AsyncMock(side_effect=httpx.TimeoutException("timeout"))
 
-    with patch("rag.http_client", mock_http), \
-         patch("rag.settings") as mock_settings:
+    with patch("services.stt.http_client", mock_http), \
+         patch("services.stt.settings") as mock_settings:
         mock_settings.groq_api_key = "test-key"
         with pytest.raises(RuntimeError, match="timed out"):
             await transcribe_voice(b"audio bytes")
@@ -1318,74 +1322,74 @@ async def test_handle_message_regression():
 # ─── Rate limit ───────────────────────────────────────────────────────────────
 
 def test_per_user_rate_limit_burst():
-    from bot import _check_rate_limit, _user_message_times
+    from limiter import RateLimiter
+    limiter = RateLimiter(max_messages=20, window_seconds=60)
     uid = "rl_test_user_burst"
-    _user_message_times.pop(uid, None)
     # First 19 calls must NOT be rate limited
     for _ in range(19):
-        assert _check_rate_limit(uid) is False
-    # 20th call triggers the limit
-    assert _check_rate_limit(uid) is True
+        assert limiter.check(uid) is False
+    # 20th call triggers the limit (>= MAX)
+    assert limiter.check(uid) is True
 
 
 def test_per_user_rate_limit_window_rollover():
-    from bot import _check_rate_limit, _user_message_times
+    from limiter import RateLimiter
     from unittest.mock import patch
 
+    limiter = RateLimiter(max_messages=20, window_seconds=60)
     uid = "rl_test_user_rollover"
-    _user_message_times.pop(uid, None)
 
-    base_time = datetime(2026, 1, 1, 12, 0, 0)
+    base_time = 1000.0
 
-    # Fill the window at t=0
-    with patch("bot.datetime") as mock_dt:
-        mock_dt.utcnow.return_value = base_time
-        mock_dt.side_effect = None
+    # Fill the window at t=base_time
+    with patch("limiter.time") as mock_time:
+        mock_time.monotonic.return_value = base_time
+        mock_time.side_effect = None
         for _ in range(20):
-            _check_rate_limit(uid)
-        assert _check_rate_limit(uid) is True  # still limited
+            mock_time.monotonic.return_value = base_time
+            limiter.check(uid)
+        assert limiter.check(uid) is True  # still limited
 
     # Advance clock past the window — all entries should expire
-    with patch("bot.datetime") as mock_dt:
-        mock_dt.utcnow.return_value = base_time + timedelta(seconds=61)
-        mock_dt.side_effect = None
-        assert _check_rate_limit(uid) is False
+    with patch("limiter.time") as mock_time:
+        mock_time.monotonic.return_value = base_time + 61
+        assert limiter.check(uid) is False
 
 
 def test_per_user_rate_limit_independent_users():
-    from bot import _check_rate_limit, _user_message_times
+    from limiter import RateLimiter
+    limiter = RateLimiter(max_messages=20, window_seconds=60)
     uid_a = "rl_user_a"
     uid_b = "rl_user_b"
-    _user_message_times.pop(uid_a, None)
-    _user_message_times.pop(uid_b, None)
     # Fill user_a's limit
-    for _ in range(21):
-        _check_rate_limit(uid_a)
+    for _ in range(20):
+        limiter.check(uid_a)
+    assert limiter.check(uid_a) is True
     # user_b is unaffected
-    assert _check_rate_limit(uid_b) is False
+    assert limiter.check(uid_b) is False
 
 
 def test_rate_limit_dict_cleanup_after_window_expires():
-    from bot import _check_rate_limit, _user_message_times, sweep_rate_limit_dict
+    from limiter import RateLimiter
     from unittest.mock import patch
 
+    limiter = RateLimiter(max_messages=20, window_seconds=60)
     uid = "rl_cleanup_test_user"
-    _user_message_times.pop(uid, None)
 
-    base_time = datetime(2026, 1, 1, 12, 0, 0)
+    base_time = 1000.0
 
-    # Send one message at t=0
-    with patch("bot.datetime") as mock_dt:
-        mock_dt.utcnow.return_value = base_time
-        _check_rate_limit(uid)
-    assert uid in _user_message_times
+    # Send one message at t=base_time
+    with patch("limiter.time") as mock_time:
+        mock_time.monotonic.return_value = base_time
+        limiter.check(uid)
+    assert uid in limiter._timestamps
 
-    # Sweep at t+61 — entry is stale (last message was at t=0, window = 60s)
-    with patch("bot.datetime") as mock_dt:
-        mock_dt.utcnow.return_value = base_time + timedelta(seconds=61)
-        removed = sweep_rate_limit_dict()
+    # Sweep at base_time+61 — entry is stale
+    with patch("limiter.time") as mock_time:
+        mock_time.monotonic.return_value = base_time + 61
+        removed = limiter.sweep()
     assert removed >= 1
-    assert uid not in _user_message_times
+    assert uid not in limiter._timestamps
 
 
 # ─── History sanitization ─────────────────────────────────────────────────────
@@ -1630,7 +1634,7 @@ def test_admin_upload_nonexistent_tenant(api_client):
     db_override, mock_db = _make_db_mock(scalars_all=[mock_tenant], scalar_one_or_none=None)
     main_module.app.dependency_overrides[get_db] = db_override
     try:
-        with patch.object(main_module.settings, "admin_password", "changeme"):
+        with patch.object(config.settings, "admin_password", "changeme"):
             r = api_client.post(
                 "/admin/upload/999",
                 files={"file": ("test.md", b"# Hello\n\nSome content here that is long enough.", "text/markdown")},
@@ -1653,10 +1657,10 @@ def test_admin_upload_accepts_markdown(api_client):
 
     db_override, mock_db = _make_db_mock(scalars_all=[mock_tenant], scalar_one_or_none=mock_tenant)
 
-    with patch("main.index_chunks", new_callable=AsyncMock, return_value=5) as mock_index:
+    with patch("routes.admin.index_chunks", new_callable=AsyncMock, return_value=5) as mock_index:
         main_module.app.dependency_overrides[get_db] = db_override
         try:
-            with patch.object(main_module.settings, "admin_password", "changeme"):
+            with patch.object(config.settings, "admin_password", "changeme"):
                 r = api_client.post(
                     "/admin/upload/1",
                     files={"file": ("test.md", b"# Hello\n\nSome content here that is long enough for chunking.", "text/markdown")},
@@ -1681,7 +1685,7 @@ def test_admin_upload_rejects_unsupported_format(api_client):
     db_override, mock_db = _make_db_mock(scalars_all=[mock_tenant], scalar_one_or_none=mock_tenant)
     main_module.app.dependency_overrides[get_db] = db_override
     try:
-        with patch.object(main_module.settings, "admin_password", "changeme"):
+        with patch.object(config.settings, "admin_password", "changeme"):
             r = api_client.post(
                 "/admin/upload/1",
                 files={"file": ("test.docx", b"content", "application/octet-stream")},

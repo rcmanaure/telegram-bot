@@ -38,6 +38,14 @@ class Settings(BaseSettings):
     app_port: int = 8000
     app_domain: str = "localhost:8000"
 
+    # ─── Vision ──────────────────────────────────────────────────────────────────
+    # Empty = fall back to LLM_MODEL. Set to a vision-capable model (e.g. llava).
+    llm_vision_model: str = ""
+
+    # ─── Web search (E3) ─────────────────────────────────────────────────────────
+    # Provider-neutral. Validate Ollama endpoint before use (see TODOS PREREQ-WS).
+    web_search_url: str = ""
+
     # ─── STT ─────────────────────────────────────────────────────────────────────
     groq_api_key: str = ""
 
