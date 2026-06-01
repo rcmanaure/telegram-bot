@@ -593,7 +593,7 @@ def test_upload_pdf_with_no_extractable_text(authed_api_client):
     mock_reader = MagicMock()
     mock_reader.pages = [mock_page]
 
-    with patch("main.PdfReader", return_value=mock_reader):
+    with patch("services.upload.PdfReader", return_value=mock_reader):
         r = client.post(
             "/upload",
             files={"file": ("scan.pdf", b"%PDF-1.4 minimal", "application/pdf")},
@@ -1318,74 +1318,74 @@ async def test_handle_message_regression():
 # ─── Rate limit ───────────────────────────────────────────────────────────────
 
 def test_per_user_rate_limit_burst():
-    from bot import _check_rate_limit, _user_message_times
+    from limiter import RateLimiter
+    limiter = RateLimiter(max_messages=20, window_seconds=60)
     uid = "rl_test_user_burst"
-    _user_message_times.pop(uid, None)
     # First 19 calls must NOT be rate limited
     for _ in range(19):
-        assert _check_rate_limit(uid) is False
-    # 20th call triggers the limit
-    assert _check_rate_limit(uid) is True
+        assert limiter.check(uid) is False
+    # 20th call triggers the limit (>= MAX)
+    assert limiter.check(uid) is True
 
 
 def test_per_user_rate_limit_window_rollover():
-    from bot import _check_rate_limit, _user_message_times
+    from limiter import RateLimiter
     from unittest.mock import patch
 
+    limiter = RateLimiter(max_messages=20, window_seconds=60)
     uid = "rl_test_user_rollover"
-    _user_message_times.pop(uid, None)
 
-    base_time = datetime(2026, 1, 1, 12, 0, 0)
+    base_time = 1000.0
 
-    # Fill the window at t=0
-    with patch("bot.datetime") as mock_dt:
-        mock_dt.utcnow.return_value = base_time
-        mock_dt.side_effect = None
+    # Fill the window at t=base_time
+    with patch("limiter.time") as mock_time:
+        mock_time.monotonic.return_value = base_time
+        mock_time.side_effect = None
         for _ in range(20):
-            _check_rate_limit(uid)
-        assert _check_rate_limit(uid) is True  # still limited
+            mock_time.monotonic.return_value = base_time
+            limiter.check(uid)
+        assert limiter.check(uid) is True  # still limited
 
     # Advance clock past the window — all entries should expire
-    with patch("bot.datetime") as mock_dt:
-        mock_dt.utcnow.return_value = base_time + timedelta(seconds=61)
-        mock_dt.side_effect = None
-        assert _check_rate_limit(uid) is False
+    with patch("limiter.time") as mock_time:
+        mock_time.monotonic.return_value = base_time + 61
+        assert limiter.check(uid) is False
 
 
 def test_per_user_rate_limit_independent_users():
-    from bot import _check_rate_limit, _user_message_times
+    from limiter import RateLimiter
+    limiter = RateLimiter(max_messages=20, window_seconds=60)
     uid_a = "rl_user_a"
     uid_b = "rl_user_b"
-    _user_message_times.pop(uid_a, None)
-    _user_message_times.pop(uid_b, None)
     # Fill user_a's limit
-    for _ in range(21):
-        _check_rate_limit(uid_a)
+    for _ in range(20):
+        limiter.check(uid_a)
+    assert limiter.check(uid_a) is True
     # user_b is unaffected
-    assert _check_rate_limit(uid_b) is False
+    assert limiter.check(uid_b) is False
 
 
 def test_rate_limit_dict_cleanup_after_window_expires():
-    from bot import _check_rate_limit, _user_message_times, sweep_rate_limit_dict
+    from limiter import RateLimiter
     from unittest.mock import patch
 
+    limiter = RateLimiter(max_messages=20, window_seconds=60)
     uid = "rl_cleanup_test_user"
-    _user_message_times.pop(uid, None)
 
-    base_time = datetime(2026, 1, 1, 12, 0, 0)
+    base_time = 1000.0
 
-    # Send one message at t=0
-    with patch("bot.datetime") as mock_dt:
-        mock_dt.utcnow.return_value = base_time
-        _check_rate_limit(uid)
-    assert uid in _user_message_times
+    # Send one message at t=base_time
+    with patch("limiter.time") as mock_time:
+        mock_time.monotonic.return_value = base_time
+        limiter.check(uid)
+    assert uid in limiter._timestamps
 
-    # Sweep at t+61 — entry is stale (last message was at t=0, window = 60s)
-    with patch("bot.datetime") as mock_dt:
-        mock_dt.utcnow.return_value = base_time + timedelta(seconds=61)
-        removed = sweep_rate_limit_dict()
+    # Sweep at base_time+61 — entry is stale
+    with patch("limiter.time") as mock_time:
+        mock_time.monotonic.return_value = base_time + 61
+        removed = limiter.sweep()
     assert removed >= 1
-    assert uid not in _user_message_times
+    assert uid not in limiter._timestamps
 
 
 # ─── History sanitization ─────────────────────────────────────────────────────
