@@ -2,6 +2,7 @@
 Telegram bot handlers — used by the webhook endpoint in main.py.
 Each handler receives tenant context via ctx.bot_data["tenant"].
 """
+import base64
 import logging
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
@@ -31,7 +32,7 @@ def _check_rate_limit(user_id: str) -> bool:
     cutoff = now - timedelta(seconds=_RATE_LIMIT_WINDOW_S)
     while times and times[0] <= cutoff:
         times.popleft()
-    return len(times) > _RATE_LIMIT_MAX
+    return len(times) >= _RATE_LIMIT_MAX
 
 
 def sweep_rate_limit_dict() -> int:
@@ -146,11 +147,17 @@ async def cmd_clear(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ─── Shared RAG query helper ──────────────────────────────────────────────────
 
+_PHOTO_DEFAULT_QUESTION = "¿Qué querés saber sobre esta imagen?"
+_MAX_PHOTO_BYTES = 5 * 1024 * 1024  # 5 MB
+
+
 async def _process_question(
     update: Update,
     ctx: ContextTypes.DEFAULT_TYPE,
     question: str,
     reply_suffix: str = "",
+    image_b64: str | None = None,
+    image_mime: str = "image/jpeg",
 ) -> None:
     tenant = _get_tenant(ctx)
     uid = str(update.effective_user.id)
@@ -172,6 +179,8 @@ async def _process_question(
                 expertise_area=tenant.expertise_area or "",
                 language_code=language_code,
                 tenant_id=tenant.id,
+                image_b64=image_b64,
+                image_mime=image_mime,
             )
 
         if chunks and chunks[0]["similarity"] > 0.75:
@@ -252,3 +261,47 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             update.message.voice.file_id if update.message.voice else "unknown",
         )
         await update.message.reply_text("Lo siento, tuve un problema. Intentá de nuevo.")
+
+
+# ─── Photo handler ────────────────────────────────────────────────────────────
+
+async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    photos = update.message.photo
+    if not photos:
+        return
+
+    # Telegram sends multiple sizes; use the largest
+    photo = max(photos, key=lambda p: p.file_size or 0)
+
+    if photo.file_size and photo.file_size > _MAX_PHOTO_BYTES:
+        await update.message.reply_text("La imagen es demasiado grande (máx 5 MB).")
+        return
+
+    await ctx.bot.send_chat_action(update.effective_chat.id, "typing")
+
+    try:
+        tg_file = await ctx.bot.get_file(photo.file_id)
+        image_bytes: bytes = bytes(await tg_file.download_as_bytearray())
+    except TelegramError:
+        await update.message.reply_text("No pude descargar la imagen. Intentá de nuevo.")
+        return
+
+    image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+
+    # Sniff MIME type; default to jpeg for unknown formats
+    try:
+        import filetype as _ft
+        kind = _ft.guess(image_bytes)
+        mime = kind.mime if kind else "image/jpeg"
+    except Exception:
+        mime = "image/jpeg"
+
+    question = update.message.caption or _PHOTO_DEFAULT_QUESTION
+    try:
+        question = sanitize_user_input(question)
+    except ValueError:
+        await update.message.reply_text("Mensaje no permitido.")
+        return
+
+    logger.info("handle_photo user=%s bytes=%d mime=%s", update.effective_user.id, len(image_bytes), mime)
+    await _process_question(update, ctx, question, image_b64=image_b64, image_mime=mime)
