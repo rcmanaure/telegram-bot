@@ -247,6 +247,52 @@ async def health():
     return {"status": "ok", "model": settings.llm_model, "fallback_model": settings.llm_fallback_model}
 
 
+_IMAGE_EXTS = (".jpg", ".jpeg", ".png")
+_VISION_DESCRIBE_PROMPT = (
+    "Describe this image in complete detail including all visible text, numbers, labels, "
+    "layout, and content. Be exhaustive."
+)
+
+
+async def _describe_image_for_upload(content: bytes, filename: str) -> str:
+    """Call vision model to describe an image. Returns description text.
+    Raises HTTPException 422 if description is too short to be useful."""
+    import base64 as _b64
+    from llm import call_chat
+
+    try:
+        import filetype as _ft
+        kind = _ft.guess(content)
+        mime = kind.mime if kind else "image/jpeg"
+    except Exception:
+        mime = "image/jpeg"
+
+    b64 = _b64.b64encode(content).decode("utf-8")
+    vision_model = settings.llm_vision_model or None
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": _VISION_DESCRIBE_PROMPT},
+                {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
+            ],
+        }
+    ]
+    try:
+        description = await call_chat(messages, max_tokens=1000, temperature=0.1, model=vision_model)
+    except RuntimeError as e:
+        raise HTTPException(422, f"Vision model failed to describe image: {e}")
+
+    if not description:
+        raise HTTPException(422, "No se pudo describir la imagen. El modelo no pudo procesarla.")
+
+    if len(description.strip()) < 100:
+        raise HTTPException(422, "No se pudo extraer contenido de la imagen. Verificá que el modelo soporte visión.")
+
+    return description
+
+
 def _process_uploaded_file(content: bytes, filename: str, source_name: str) -> tuple[list[dict], int]:
     """Parse uploaded file content into chunks. Returns (chunks, pages_processed)."""
     fname = filename.lower()
@@ -292,7 +338,13 @@ async def upload_document(
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(413, "File too large. Maximum size is 10MB.")
 
-    all_chunks, pages_processed = _process_uploaded_file(content, file.filename.lower(), file.filename)
+    fname_lower = file.filename.lower()
+    if any(fname_lower.endswith(ext) for ext in _IMAGE_EXTS):
+        description = await _describe_image_for_upload(content, fname_lower)
+        all_chunks = chunk_text(description, source=file.filename, page=1)
+        pages_processed = 1
+    else:
+        all_chunks, pages_processed = _process_uploaded_file(content, fname_lower, file.filename)
 
     if not all_chunks:
         raise HTTPException(400, "No extractable text in file")
@@ -422,24 +474,27 @@ async def _process_wa_message(
     user_id = wa_msg.user_id
     namespace = tenant.slug
 
-    # Unsupported media — reply with help text (no DB needed)
-    if wa_msg.media_type == "image" or (wa_msg.text is None and wa_msg.media_type != "voice"):
-        adapter = _get_wa_adapter(tenant)
-        if adapter:
+    # Create adapter once for the entire message lifecycle
+    adapter = _get_wa_adapter(tenant)
+    if not adapter:
+        logger.warning("wa_no_adapter tenant=%s", tenant.slug)
+        return
+
+    async with adapter:
+        # Unsupported media (video, sticker, document) — not image or voice
+        if wa_msg.text is None and wa_msg.media_type not in ("voice", "image"):
             try:
                 await adapter.send_reply(
                     user_id,
-                    "Solo puedo procesar texto y notas de voz. "
-                    "Escribí tu consulta o enviá una nota de voz.",
+                    "Solo puedo procesar texto, imágenes y notas de voz. "
+                    "Escribí tu consulta o enviá una imagen o nota de voz.",
                 )
             except ChannelSendError:
                 logger.warning("wa_send_failed user=%s — media fallback", user_id)
-        return
+            return
 
-    # Voice note — transcribe (T8: deferred, placeholder, no DB needed)
-    if wa_msg.media_type == "voice":
-        adapter = _get_wa_adapter(tenant)
-        if adapter:
+        # Voice note — transcribe (T8: deferred, placeholder, no DB needed)
+        if wa_msg.media_type == "voice":
             try:
                 await adapter.send_reply(
                     user_id,
@@ -447,23 +502,49 @@ async def _process_wa_message(
                 )
             except ChannelSendError:
                 logger.warning("wa_send_failed user=%s — voice fallback", user_id)
-        return
+            return
 
-    # Text message — process through RAG (needs DB session)
-    text = wa_msg.text or ""
-    if not text.strip():
-        return
+        # Image message — download and base64-encode for vision model
+        image_b64: str | None = None
+        image_mime: str = "image/jpeg"
+        if wa_msg.media_type == "image" and wa_msg.media_url:
+            try:
+                import base64 as _b64
+                image_bytes = await adapter.download_media(wa_msg.media_url)
+                if len(image_bytes) > 5 * 1024 * 1024:
+                    try:
+                        await adapter.send_reply(user_id, "La imagen es demasiado grande (máx 5 MB).")
+                    except ChannelSendError:
+                        pass
+                    return
+                image_b64 = _b64.b64encode(image_bytes).decode("utf-8")
+                try:
+                    import filetype as _ft
+                    kind = _ft.guess(image_bytes)
+                    image_mime = kind.mime if kind else "image/jpeg"
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.warning("wa_image_download_failed user=%s: %s", user_id, e)
+                try:
+                    await adapter.send_reply(user_id, "No pude descargar la imagen. Intentá de nuevo.")
+                except ChannelSendError:
+                    pass
+                return
 
-    try:
-        text = sanitize_user_input(text)
-    except ValueError:
-        adapter = _get_wa_adapter(tenant)
-        if adapter:
+        # Text or image-with-caption message — process through RAG (needs DB session)
+        text = wa_msg.text or ("¿Qué querés saber sobre esta imagen?" if image_b64 else "")
+        if not text.strip():
+            return
+
+        try:
+            text = sanitize_user_input(text)
+        except ValueError:
             try:
                 await adapter.send_reply(user_id, "Tu mensaje contiene contenido no permitido.")
             except ChannelSendError:
                 pass
-        return
+            return
 
     # Rate limit (20/60s per tenant:user, independent of TG)
     rate_key = f"{namespace}:{user_id}"
@@ -481,16 +562,14 @@ async def _process_wa_message(
         # 24h service window check
         within_window = await check_wa_service_window(db, tenant.id, user_id)
         if not within_window:
-            adapter = _get_wa_adapter(tenant)
-            if adapter:
-                if tenant.wa_reengagement_template:
-                    try:
-                        await send_wa_template(adapter, user_id, tenant.wa_reengagement_template)
-                    except ChannelSendError:
-                        logger.warning("wa_template_failed user=%s template=%s", user_id, tenant.wa_reengagement_template)
-                else:
-                    logger.warning("wa_outside_window_no_template user=%s — logging unanswered", user_id)
-                    await _log_unanswered(db, namespace, text, user_id, "needs_human", tenant.id)
+            if tenant.wa_reengagement_template:
+                try:
+                    await send_wa_template(adapter, user_id, tenant.wa_reengagement_template)
+                except ChannelSendError:
+                    logger.warning("wa_template_failed user=%s template=%s", user_id, tenant.wa_reengagement_template)
+            else:
+                logger.warning("wa_outside_window_no_template user=%s — logging unanswered", user_id)
+                await _log_unanswered(db, namespace, text, user_id, "needs_human", tenant.id)
             return
 
         # Update service window timestamp
@@ -506,37 +585,35 @@ async def _process_wa_message(
                 expertise_area=tenant.expertise_area or "",
                 tenant_id=tenant.id,
                 channel="whatsapp",
+                image_b64=image_b64,
+                image_mime=image_mime,
             )
         except Exception as e:
             logger.error("wa_rag_error user=%s: %s", user_id, e)
-            adapter = _get_wa_adapter(tenant)
-            if adapter:
-                try:
-                    await adapter.send_reply(user_id, "Lo siento, hubo un error. Intentá de nuevo en un momento.")
-                except ChannelSendError:
-                    pass
+            try:
+                await adapter.send_reply(user_id, "Lo siento, hubo un error. Intentá de nuevo en un momento.")
+            except ChannelSendError:
+                pass
             return
 
         # Send reply
-        adapter = _get_wa_adapter(tenant)
-        if adapter:
-            # Format sources footer for WA
-            source_footer = ""
-            if chunks:
-                sources = set(c["source"] for c in chunks if c.get("source"))
-                if sources:
-                    source_footer = "\n\n📎 Fuentes: " + ", ".join(sources)
+        # Format sources footer for WA
+        source_footer = ""
+        if chunks:
+            sources = set(c["source"] for c in chunks if c.get("source"))
+            if sources:
+                source_footer = "\n\n📎 Fuentes: " + ", ".join(sources)
 
+        try:
+            await adapter.send_reply(user_id, answer + source_footer)
+        except ChannelSendError as e:
+            logger.warning("wa_send_failed user=%s: %s — retrying once", user_id, e)
+            # Retry once with backoff
+            await asyncio.sleep(2)
             try:
                 await adapter.send_reply(user_id, answer + source_footer)
-            except ChannelSendError as e:
-                logger.warning("wa_send_failed user=%s: %s — retrying once", user_id, e)
-                # Retry once with backoff
-                await asyncio.sleep(2)
-                try:
-                    await adapter.send_reply(user_id, answer + source_footer)
-                except ChannelSendError:
-                    logger.error("wa_send_failed_retry user=%s — giving up", user_id)
+            except ChannelSendError:
+                logger.error("wa_send_failed_retry user=%s — giving up", user_id)
 
 
 def _get_wa_adapter(tenant: Tenant) -> WhatsAppAdapter | None:
@@ -676,7 +753,7 @@ def _admin_html(
             doc_list = "<em style='color:#94a3b8'>Sin documentos</em>"
         delete_btn = f"""
         <form method="post" action="/admin/delete-docs/{t.id}" style="margin-top:6px"
-              onsubmit="return confirm('Eliminar TODOS los documentos y conversaciones de {t.slug}?')">
+              onsubmit="return confirm('Eliminar TODOS los documentos y conversaciones de {html_module.escape(t.slug)}?')">
           <button type="submit" style="padding:4px 12px;background:#dc2626;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85rem">
             Eliminar docs
           </button>
@@ -684,32 +761,39 @@ def _admin_html(
         rows += f"""
         <tr>
           <td>{t.id}</td>
-          <td><strong>{t.slug}</strong></td>
+          <td><strong>{html_module.escape(t.slug)}</strong></td>
           <td>{"✅ activo" if t.active else "❌ inactivo"}</td>
           <td>{t.plan}</td>
           <td>
             <form method="post" action="/admin/tenant/{t.id}" style="display:grid;gap:6px">
-              <input name="expertise_area" value="{t.expertise_area or ''}" placeholder="área de expertise"
+              <input name="expertise_area" value="{html_module.escape(t.expertise_area or '')}" placeholder="área de expertise"
                      style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
-              <input name="contact_url" value="{t.contact_url or ''}" placeholder="https://... (URL contacto)"
+              <input name="contact_url" value="{html_module.escape(t.contact_url or '')}" placeholder="https://... (URL contacto)"
                      style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
-              <input name="operator_chat_id" value="{t.operator_chat_id or ''}" placeholder="chat_id operador"
+              <input name="operator_chat_id" value="{html_module.escape(t.operator_chat_id or '')}" placeholder="chat_id operador"
                      style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
               <textarea name="example_questions" rows="3" placeholder="Preguntas frecuentes (una por línea, máx 5)"
                         style="padding:4px 8px;border:1px solid #ccc;border-radius:4px;width:100%;box-sizing:border-box">{html_module.escape(chr(10).join(t.example_questions) if t.example_questions else '')}</textarea>
               <details style="margin-top:6px"><summary style="cursor:pointer;font-size:0.85rem;color:#475569">WhatsApp Config</summary>
               <div style="display:grid;gap:4px;margin-top:4px">
-                <input name="wa_phone_number_id" value="{t.wa_phone_number_id or ''}" placeholder="Phone Number ID"
+                <input name="wa_phone_number_id" value="{html_module.escape(t.wa_phone_number_id or '')}" placeholder="Phone Number ID"
                        style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
-                <input name="wa_access_token" value="{t.wa_access_token or ''}" placeholder="Access Token" type="password"
+                <input name="wa_access_token" value="{html_module.escape(t.wa_access_token or '')}" placeholder="Access Token" type="password"
                        style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
-                <input name="wa_app_secret" value="{t.wa_app_secret or ''}" placeholder="App Secret" type="password"
+                <input name="wa_app_secret" value="{html_module.escape(t.wa_app_secret or '')}" placeholder="App Secret" type="password"
                        style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
-                <input name="wa_verify_token" value="{t.wa_verify_token or ''}" placeholder="Verify Token"
+                <input name="wa_verify_token" value="{html_module.escape(t.wa_verify_token or '')}" placeholder="Verify Token"
                        style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
-                <input name="wa_reengagement_template" value="{t.wa_reengagement_template or ''}" placeholder="Re-engagement Template Name"
+                <input name="wa_reengagement_template" value="{html_module.escape(t.wa_reengagement_template or '')}" placeholder="Re-engagement Template Name"
                        style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
               </div>
+              </details>
+              <details style="margin-top:6px"><summary style="cursor:pointer;font-size:0.85rem;color:#475569">Web Search (Ollama Cloud)</summary>
+              <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
+                <input type="checkbox" name="web_search_enabled" id="ws_{t.id}" {'checked' if t.web_search_enabled else ''}>
+                <label for="ws_{t.id}" style="font-size:0.85rem">Habilitar búsqueda web cuando no hay contexto en documentos</label>
+              </div>
+              <div style="font-size:0.75rem;color:#64748b;margin-top:2px">Requiere WEB_SEARCH_URL configurado en .env</div>
               </details>
               <button type="submit" style="padding:4px 12px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer">
                 Guardar
@@ -719,7 +803,7 @@ def _admin_html(
           <td>
             <div style="margin-bottom:8px;font-size:0.85rem">{doc_list}</div>
             <form method="post" action="/admin/upload/{t.id}" enctype="multipart/form-data" style="display:grid;gap:6px">
-              <input type="file" name="file" accept=".pdf,.md,.txt" style="font-size:0.85rem">
+              <input type="file" name="file" accept=".pdf,.md,.txt,.jpg,.jpeg,.png" style="font-size:0.85rem">
               <button type="submit" style="padding:4px 12px;background:#16a34a;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85rem">
                 Subir documento
               </button>
@@ -734,7 +818,7 @@ def _admin_html(
     key_html = f"""
       <div class="alert key">
         <strong>API Key generada (guardala, no se vuelve a mostrar):</strong><br>
-        <code style="font-size:0.95rem;word-break:break-all">{new_api_key}</code>
+        <code style="font-size:0.95rem;word-break:break-all">{html_module.escape(new_api_key)}</code>
       </div>""" if new_api_key else ""
 
     return f"""<!DOCTYPE html>
@@ -990,6 +1074,9 @@ async def admin_update_tenant(
     wa_verify_token = (form.get("wa_verify_token") or "").strip() or None
     wa_reengagement_template = (form.get("wa_reengagement_template") or "").strip() or None
 
+    # Vision / web search
+    web_search_enabled = form.get("web_search_enabled") == "on"
+
     if contact_url and not contact_url.startswith(("http://", "https://")):
         result = await db.execute(select(Tenant).order_by(Tenant.id))
         tenants = result.scalars().all()
@@ -1009,6 +1096,7 @@ async def admin_update_tenant(
     tenant.wa_app_secret = wa_app_secret
     tenant.wa_verify_token = wa_verify_token
     tenant.wa_reengagement_template = wa_reengagement_template
+    tenant.web_search_enabled = web_search_enabled
 
     # Enable WhatsApp channel if WA credentials are provided
     if wa_phone_number_id and wa_access_token:
@@ -1051,15 +1139,15 @@ async def admin_queries(
     for q in queries:
         ts = q.created_at.strftime("%Y-%m-%d %H:%M") if q.created_at else ""
         rows_html += (
-            f"<tr><td>{ts}</td><td>{q.intent_category}</td>"
-            f"<td>{q.user_id}</td><td>{q.question}</td></tr>"
+            f"<tr><td>{ts}</td><td>{html_module.escape(q.intent_category)}</td>"
+            f"<td>{html_module.escape(q.user_id)}</td><td>{html_module.escape(q.question)}</td></tr>"
         )
 
     return f"""<!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="utf-8">
-  <title>Consultas — {tenant.slug}</title>
+  <title>Consultas — {html_module.escape(tenant.slug)}</title>
   <style>
     body {{ font-family: system-ui, sans-serif; max-width: 1100px; margin: 40px auto; padding: 0 20px; color: #1e293b; }}
     h1 {{ font-size: 1.4rem; margin-bottom: 4px; }}
@@ -1101,7 +1189,13 @@ async def admin_upload_document(
                            error="Archivo demasiado grande. Máximo 10MB.")
 
     try:
-        all_chunks, pages_processed = _process_uploaded_file(content, file.filename.lower(), file.filename)
+        fname_lower = file.filename.lower()
+        if any(fname_lower.endswith(ext) for ext in _IMAGE_EXTS):
+            description = await _describe_image_for_upload(content, fname_lower)
+            all_chunks = chunk_text(description, source=file.filename, page=1)
+            pages_processed = 1
+        else:
+            all_chunks, pages_processed = _process_uploaded_file(content, fname_lower, file.filename)
     except HTTPException as e:
         return _admin_html(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db), error=e.detail)
 
@@ -1156,7 +1250,7 @@ async def admin_download_template(_: None = Depends(_require_admin)):
 # ─── Bot handler registration (imported by lifespan) ──────────────────────────
 
 def _register_handlers(tg_app):
-    from bot import cmd_start, cmd_help, cmd_sources, cmd_clear, cmd_contactar, handle_message, handle_voice
+    from bot import cmd_start, cmd_help, cmd_sources, cmd_clear, cmd_contactar, handle_message, handle_voice, handle_photo
     from telegram.ext import CommandHandler, MessageHandler, filters
     tg_app.add_handler(CommandHandler("start", cmd_start))
     tg_app.add_handler(CommandHandler("help", cmd_help))
@@ -1165,3 +1259,4 @@ def _register_handlers(tg_app):
     tg_app.add_handler(CommandHandler("contactar", cmd_contactar))
     tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     tg_app.add_handler(MessageHandler(filters.VOICE, handle_voice))
+    tg_app.add_handler(MessageHandler(filters.PHOTO, handle_photo))

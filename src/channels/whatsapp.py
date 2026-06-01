@@ -67,6 +67,15 @@ class WhatsAppAdapter:
         self._base_url = "https://graph.facebook.com/v21.0"
         self._http = httpx.AsyncClient(timeout=30.0)
 
+    async def aclose(self):
+        await self._http.aclose()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        await self.aclose()
+
     # ─── parse_incoming ─────────────────────────────────────────────────────
 
     async def parse_incoming(self, webhook_data: dict) -> list[ChannelMessage]:
