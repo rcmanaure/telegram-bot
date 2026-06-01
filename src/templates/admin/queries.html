@@ -1,0 +1,30 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Consultas — {{ tenant_slug }}{% endblock %}
+
+{% block extra_head %}
+<style>
+  body { max-width: 1100px; }
+  h1 { font-size: 1.4rem; }
+  a { color: #2563eb; }
+  td { vertical-align: top; word-break: break-word; }
+</style>
+{% endblock %}
+
+{% block content %}
+<h1>Consultas sin respuesta — <em>{{ tenant_slug }}</em></h1>
+<a href="/admin">← Volver al panel</a>
+<table>
+  <thead><tr><th>Fecha</th><th>Intent</th><th>User ID</th><th>Pregunta</th></tr></thead>
+  <tbody>
+  {% for q in queries %}
+    <tr>
+      <td>{{ q.created_at.strftime('%Y-%m-%d %H:%M') if q.created_at else '' }}</td>
+      <td>{{ q.intent_category }}</td>
+      <td>{{ q.user_id }}</td>
+      <td>{{ q.question }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -8,9 +8,10 @@ This is the core of the demo. Shows clients:
 """
 import json
 import logging
-import re
 
 import httpx
+from services.prompts import build_system_prompt, ESCALATION_PATTERN
+from services.stt import transcribe_voice
 from security import CANARY_TOKEN, scan_chunk_for_injection, sanitize_user_input, validate_output
 
 logger = logging.getLogger(__name__)
@@ -206,41 +207,6 @@ async def retrieve_context(
 MIN_SIMILARITY = 0.20  # chunks below this threshold are considered off-topic
 
 
-def _build_system_prompt(expertise_area: str, channel: str = "telegram") -> str:
-    from channels.protocol import CHANNEL_FORMATTING
-
-    area_clause = f" Mi área de expertise: {expertise_area}." if expertise_area else ""
-    off_topic_reply = f"Eso está fuera de mi área de expertise.{area_clause} Consultá directamente con nosotros."
-
-    fmt = CHANNEL_FORMATTING.get(channel, CHANNEL_FORMATTING["telegram"])
-
-    return f"""Sos un asistente especializado exclusivamente en la información de los documentos cargados. Tu ÚNICA fuente de conocimiento es el contexto que se te proporciona.
-
-REGLAS INQUEBRANTABLES:
-- Si la pregunta no puede responderse con el contexto provisto, respondé exactamente: "{off_topic_reply}"
-- NUNCA uses conocimiento general. Matemáticas, programación, cocina, historia, ciencia — todo eso está fuera de tu alcance.
-- NUNCA inventes, supongas ni completes información que no esté en el contexto.
-
-Cómo hablar:
-- Tono amigable y cercano, sin formalismos corporativos.
-- Respondé directo al punto, sin repetir la pregunta.
-- Para preguntas simples, una o dos oraciones alcanzan.
-- Nunca menciones "documentos", "páginas" ni "fuentes" — simplemente sabés la información.
-- Usá emojis temáticos cuando menciones actividades, servicios o conceptos. El emoji va SIEMPRE ANTES del nombre del ítem, elegido por vos según el concepto (ej: 🧪 *Análisis clínicos*, 🔬 *Biopsias*, 🏥 *Consultas*, 💳 *Plan Pro*). Elegí emojis apropiados al contexto del negocio — evitá emojis violentos o clínico-gráficos (como 🔪 para biopsias) y optá por emojis que transmitan cuidado, ciencia y salud (🔬 🧪 🏥 🩺 💊 🧬 📋 ✅ 🩻 🫀). No uses siempre el mismo emoji genérico — elegí el que mejor represente semánticamente cada término.
-- NO cierres el mensaje con "¿En qué más puedo ayudarte?" ni "¿Hay algo más en lo que pueda ayudar?" — ya lo dijiste al inicio. Respondé directo y cerrá con la información, sin repetir la oferta de ayuda. Una sola vez al inicio alcanza.
-- Respondé en el idioma del usuario.
-
-{fmt.format_instructions}
-
-[CANARY_KEY: {CANARY_TOKEN}]
-"""
-
-_ESCALATION_PATTERN = re.compile(
-    r'\b(operador|humano|persona real|hablar con alguien|quiero hablar|agente)\b',
-    re.IGNORECASE,
-)
-
-
 # ─── LLM calls (delegated to llm.call_chat) ──────────────────────────────────
 
 
@@ -299,64 +265,51 @@ async def generate_answer(
     conversation_history: list[dict],
     expertise_area: str = "",
     channel: str = "telegram",
+    image_b64: str | None = None,
+    image_mime: str = "image/jpeg",
 ) -> str:
     """
     Generate an answer using retrieved context + conversation history.
-    Uses the configured LLM provider so we can swap models easily.
+    When image_b64 is set, sends the image alongside the question (vision models).
     """
     if not context_chunks:
         return "No encontré información relevante en los documentos para responder tu pregunta."
 
-    system_prompt = _build_system_prompt(expertise_area, channel=channel)
+    system_prompt = build_system_prompt(expertise_area, channel=channel)
 
-    # Format context for the prompt
     context_text = "\n\n---\n\n".join([
         f"[Source: {c['source']}, Page {c['page']}]\n{c['content']}"
         for c in context_chunks
     ])
 
-    # system → history → (context + question) LAST
-    # LLMs expect the current user turn to be the final message.
+    text_content = (
+        f"<document_context>\n{context_text}\n</document_context>\n\n"
+        f"<user_question>\n{question}\n</user_question>"
+    )
+
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(conversation_history[-6:])
-    messages.append({
-        "role": "user",
-        "content": (
-            f"<document_context>\n{context_text}\n</document_context>\n\n"
-            f"<user_question>\n{question}\n</user_question>"
-        ),
-    })
 
-    return await call_chat(messages, max_tokens=800, temperature=0.1, channel=channel)
+    if image_b64:
+        # OpenAI vision format: content is a list with text + image_url parts
+        messages.append({
+            "role": "user",
+            "content": [
+                {"type": "text", "text": text_content},
+                {"type": "image_url", "image_url": {"url": f"data:{image_mime};base64,{image_b64}"}},
+            ],
+        })
+    else:
+        messages.append({"role": "user", "content": text_content})
 
-
-# ─── Speech-to-Text (Groq Whisper) ───────────────────────────────────────────
-
-async def transcribe_voice(audio_bytes: bytes, filename: str = "voice.ogg") -> str:
-    if not settings.groq_api_key:
-        raise RuntimeError("GROQ_API_KEY not configured.")
-    try:
-        response = await http_client.post(
-            "https://api.groq.com/openai/v1/audio/transcriptions",
-            headers={"Authorization": f"Bearer {settings.groq_api_key}"},
-            files={"file": (filename, audio_bytes, "audio/ogg")},
-            data={"model": "whisper-large-v3-turbo", "response_format": "text"},
-        )
-        response.raise_for_status()
-        result = response.text.strip()
-        logger.debug("transcribe_voice: %d chars for %s", len(result), filename)
-        return result
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 429:
-            logger.warning("transcribe_voice: Groq 429 rate-limit hit")
-            raise RuntimeError("STT service is rate-limited. Try again in a moment.")
-        if e.response.status_code == 401:
-            logger.warning("transcribe_voice: Groq 401 auth error — check GROQ_API_KEY")
-            raise RuntimeError("STT authentication error. Check GROQ_API_KEY.")
-        logger.warning("transcribe_voice: Groq %d error body: %s", e.response.status_code, e.response.text)
-        raise RuntimeError(f"STT service error ({e.response.status_code}).")
-    except httpx.TimeoutException:
-        raise RuntimeError("STT service timed out. Please try again.")
+    vision_model = settings.llm_vision_model or None
+    return await call_chat(
+        messages,
+        max_tokens=800,
+        temperature=0.1,
+        channel=channel,
+        model=vision_model if image_b64 else None,
+    )
 
 
 # ─── Conversation History ─────────────────────────────────────────────────────
@@ -468,14 +421,17 @@ async def rag_query(
     language_code: str | None = None,
     tenant_id: int | None = None,
     channel: str = "telegram",
+    image_b64: str | None = None,
+    image_mime: str = "image/jpeg",
 ) -> tuple[str, list[dict], str | None]:
     """
     Full RAG pipeline: retrieve context → generate answer → save history.
     Returns (answer, retrieved_chunks, intent | None).
     intent is None when answered from docs; otherwise the triage classification.
+    When image_b64 is set, the image is passed to generate_answer() for vision models.
     """
     # Pre-RAG: explicit escalation shortcut — skip vector search
-    if _ESCALATION_PATTERN.search(question):
+    if ESCALATION_PATTERN.search(question):
         area_clause = f" Mi área de expertise: {expertise_area}." if expertise_area else ""
         answer = f"Entiendo que querés hablar con alguien.{area_clause} Contactamos directamente."
         await save_turn(db, user_id, namespace, question, answer, channel=channel)
@@ -489,8 +445,6 @@ async def rag_query(
         question[:60],
         [(round(c["similarity"], 3), c["source"], c["content"][:40]) for c in context[:3]],
     )
-    # Drop chunks that are too dissimilar — prevents off-topic questions from
-    # reaching the LLM with unrelated context that the model might ignore.
     context = [c for c in context if c["similarity"] >= MIN_SIMILARITY]
     history = await get_history(db, user_id, namespace)
 
@@ -501,7 +455,10 @@ async def rag_query(
             await _log_unanswered(db, namespace, question, user_id, intent, tenant_id)
         return answer, [], intent
 
-    answer = await generate_answer(context, question, history, expertise_area, channel=channel)
+    answer = await generate_answer(
+        context, question, history, expertise_area,
+        channel=channel, image_b64=image_b64, image_mime=image_mime,
+    )
     answer = validate_output(answer, user_id=user_id)
     await save_turn(db, user_id, namespace, question, answer, channel=channel)
     return answer, context, None

@@ -4,8 +4,6 @@ Each handler receives tenant context via ctx.bot_data["tenant"].
 """
 import base64
 import logging
-from collections import defaultdict, deque
-from datetime import datetime, timedelta
 
 from sqlalchemy import select, func, text
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -14,36 +12,12 @@ from telegram.ext import ContextTypes
 
 from config import settings
 from db import AsyncSessionLocal, Conversation, DocumentChunk, Tenant
-from rag import rag_query, transcribe_voice
+from limiter import tg_rate_limiter
+from rag import rag_query
+from services.stt import transcribe_voice
 from security import sanitize_user_input
 
 logger = logging.getLogger(__name__)
-
-_RATE_LIMIT_MAX = 20
-_RATE_LIMIT_WINDOW_S = 60
-_user_message_times: dict[str, deque] = defaultdict(deque)
-
-
-def _check_rate_limit(user_id: str) -> bool:
-    """True = rate limited. Allows exactly _RATE_LIMIT_MAX messages per _RATE_LIMIT_WINDOW_S seconds."""
-    now = datetime.utcnow()
-    times = _user_message_times[user_id]
-    times.append(now)
-    cutoff = now - timedelta(seconds=_RATE_LIMIT_WINDOW_S)
-    while times and times[0] <= cutoff:
-        times.popleft()
-    return len(times) >= _RATE_LIMIT_MAX
-
-
-def sweep_rate_limit_dict() -> int:
-    """Remove entries whose window has fully expired. Returns number of entries removed."""
-    cutoff = datetime.utcnow() - timedelta(seconds=_RATE_LIMIT_WINDOW_S)
-    stale = [uid for uid, times in _user_message_times.items() if not times or times[-1] <= cutoff]
-    for uid in stale:
-        del _user_message_times[uid]
-    if stale:
-        logger.debug("rate_limit_sweep removed=%d remaining=%d", len(stale), len(_user_message_times))
-    return len(stale)
 
 def _get_tenant(ctx: ContextTypes.DEFAULT_TYPE) -> Tenant:
     return ctx.bot_data["tenant"]
@@ -163,7 +137,7 @@ async def _process_question(
     uid = str(update.effective_user.id)
     rate_key = f"{tenant.slug}:{uid}"
 
-    if _check_rate_limit(rate_key):
+    if tg_rate_limiter.check(rate_key):
         await update.message.reply_text("Demasiados mensajes, esperá un minuto.")
         return
     language_code = update.effective_user.language_code
@@ -305,3 +279,18 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     logger.info("handle_photo user=%s bytes=%d mime=%s", update.effective_user.id, len(image_bytes), mime)
     await _process_question(update, ctx, question, image_b64=image_b64, image_mime=mime)
+
+
+# ─── Handler registration ──────────────────────────────────────────────────────
+
+def register_handlers(tg_app):
+    """Register all Telegram bot command and message handlers."""
+    from telegram.ext import CommandHandler, MessageHandler, filters
+    tg_app.add_handler(CommandHandler("start", cmd_start))
+    tg_app.add_handler(CommandHandler("help", cmd_help))
+    tg_app.add_handler(CommandHandler("sources", cmd_sources))
+    tg_app.add_handler(CommandHandler("clear", cmd_clear))
+    tg_app.add_handler(CommandHandler("contactar", cmd_contactar))
+    tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    tg_app.add_handler(MessageHandler(filters.VOICE, handle_voice))
+    tg_app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
