@@ -19,6 +19,8 @@ import secrets as secrets_mod
 from fastapi import FastAPI, Header, HTTPException, UploadFile, File, Form, Depends, Request
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.staticfiles import StaticFiles
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 from pydantic import BaseModel
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy import select, func, text
@@ -124,6 +126,38 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.state.limiter = limiter
+
+# ─── Jinja2 templates + static files ──────────────────────────────────────────
+
+import os
+_templates_dir = os.path.join(os.path.dirname(__file__), "templates")
+_static_dir = os.path.join(os.path.dirname(__file__), "static")
+_jinja_env = Environment(
+    loader=FileSystemLoader(_templates_dir),
+    autoescape=select_autoescape(["html"]),
+)
+app.mount("/static", StaticFiles(directory=_static_dir), name="static")
+
+
+def _render_admin(tenants, doc_stats=None, message="", error="", new_api_key=""):
+    """Render admin panel HTML via Jinja2 template. All values auto-escaped."""
+    template = _jinja_env.get_template("admin/index.html")
+    html = template.render(
+        tenants=tenants,
+        doc_stats=doc_stats or {},
+        message=message,
+        error=error,
+        new_api_key=new_api_key,
+    )
+    return HTMLResponse(content=html)
+
+
+def _render_queries(tenant, queries):
+    """Render queries page via Jinja2 template."""
+    template = _jinja_env.get_template("admin/queries.html")
+    html = template.render(tenant_slug=tenant.slug, queries=queries)
+    return HTMLResponse(content=html)
+
 
 @app.exception_handler(RateLimitExceeded)
 async def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
@@ -372,193 +406,6 @@ def _require_admin(credentials: HTTPBasicCredentials = Depends(_basic)):
         )
 
 
-import html as html_module
-
-
-def _admin_html(
-    tenants: list,
-    doc_stats: dict[int, list[dict]] | None = None,
-    message: str = "",
-    error: str = "",
-    new_api_key: str = "",
-) -> str:
-    if doc_stats is None:
-        doc_stats = {}
-    rows = ""
-    for t in tenants:
-        entries = doc_stats.get(t.id, [])
-        if entries:
-            doc_list = "".join(
-                f'<div>{html_module.escape(e["source"])} ({e["chunks"]} chunks)</div>' for e in entries
-            )
-        else:
-            doc_list = "<em style='color:#94a3b8'>Sin documentos</em>"
-        delete_btn = f"""
-        <form method="post" action="/admin/delete-docs/{t.id}" style="margin-top:6px"
-              onsubmit="return confirm('Eliminar TODOS los documentos y conversaciones de {html_module.escape(t.slug)}?')">
-          <button type="submit" style="padding:4px 12px;background:#dc2626;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85rem">
-            Eliminar docs
-          </button>
-        </form>""" if entries else ""
-        rows += f"""
-        <tr>
-          <td>{t.id}</td>
-          <td><strong>{html_module.escape(t.slug)}</strong></td>
-          <td>{"✅ activo" if t.active else "❌ inactivo"}</td>
-          <td>{t.plan}</td>
-          <td>
-            <form method="post" action="/admin/tenant/{t.id}" style="display:grid;gap:6px">
-              <input name="expertise_area" value="{html_module.escape(t.expertise_area or '')}" placeholder="área de expertise"
-                     style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
-              <input name="contact_url" value="{html_module.escape(t.contact_url or '')}" placeholder="https://... (URL contacto)"
-                     style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
-              <input name="operator_chat_id" value="{html_module.escape(t.operator_chat_id or '')}" placeholder="chat_id operador"
-                     style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
-              <textarea name="example_questions" rows="3" placeholder="Preguntas frecuentes (una por línea, máx 5)"
-                        style="padding:4px 8px;border:1px solid #ccc;border-radius:4px;width:100%;box-sizing:border-box">{html_module.escape(chr(10).join(t.example_questions) if t.example_questions else '')}</textarea>
-              <details style="margin-top:6px"><summary style="cursor:pointer;font-size:0.85rem;color:#475569">WhatsApp Config</summary>
-              <div style="display:grid;gap:4px;margin-top:4px">
-                <input name="wa_phone_number_id" value="{html_module.escape(t.wa_phone_number_id or '')}" placeholder="Phone Number ID"
-                       style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
-                <input name="wa_access_token" value="{html_module.escape(t.wa_access_token or '')}" placeholder="Access Token" type="password"
-                       style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
-                <input name="wa_app_secret" value="{html_module.escape(t.wa_app_secret or '')}" placeholder="App Secret" type="password"
-                       style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
-                <input name="wa_verify_token" value="{html_module.escape(t.wa_verify_token or '')}" placeholder="Verify Token"
-                       style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
-                <input name="wa_reengagement_template" value="{html_module.escape(t.wa_reengagement_template or '')}" placeholder="Re-engagement Template Name"
-                       style="padding:4px 8px;border:1px solid #ccc;border-radius:4px">
-              </div>
-              </details>
-              <details style="margin-top:6px"><summary style="cursor:pointer;font-size:0.85rem;color:#475569">Web Search (Ollama Cloud)</summary>
-              <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
-                <input type="checkbox" name="web_search_enabled" id="ws_{t.id}" {'checked' if t.web_search_enabled else ''}>
-                <label for="ws_{t.id}" style="font-size:0.85rem">Habilitar búsqueda web cuando no hay contexto en documentos</label>
-              </div>
-              <div style="font-size:0.75rem;color:#64748b;margin-top:2px">Requiere WEB_SEARCH_URL configurado en .env</div>
-              </details>
-              <button type="submit" style="padding:4px 12px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer">
-                Guardar
-              </button>
-            </form>
-          </td>
-          <td>
-            <div style="margin-bottom:8px;font-size:0.85rem">{doc_list}</div>
-            <form method="post" action="/admin/upload/{t.id}" enctype="multipart/form-data" style="display:grid;gap:6px">
-              <input type="file" name="file" accept=".pdf,.md,.txt,.jpg,.jpeg,.png" style="font-size:0.85rem">
-              <button type="submit" style="padding:4px 12px;background:#16a34a;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:0.85rem">
-                Subir documento
-              </button>
-            </form>
-            {delete_btn}
-          </td>
-          <td><a href="/admin/queries/{t.id}" style="color:#2563eb;font-size:0.85rem">Ver consultas</a></td>
-        </tr>"""
-
-    msg_html = f'<div class="alert ok">{message}</div>' if message else ""
-    err_html = f'<div class="alert err">{error}</div>' if error else ""
-    key_html = f"""
-      <div class="alert key">
-        <strong>API Key generada (guardala, no se vuelve a mostrar):</strong><br>
-        <code style="font-size:0.95rem;word-break:break-all">{html_module.escape(new_api_key)}</code>
-      </div>""" if new_api_key else ""
-
-    return f"""<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="utf-8">
-  <title>Admin — RAG Bot</title>
-  <style>
-    body {{ font-family: system-ui, sans-serif; max-width: 1000px; margin: 40px auto; padding: 0 20px; color: #1e293b; }}
-    h1 {{ font-size: 1.5rem; margin-bottom: 4px; }}
-    h2 {{ font-size: 1.1rem; margin: 32px 0 12px; }}
-    p.sub {{ color: #64748b; margin-bottom: 24px; }}
-    table {{ width: 100%; border-collapse: collapse; margin-bottom: 40px; }}
-    th {{ text-align: left; padding: 8px 12px; background: #f1f5f9; border-bottom: 2px solid #e2e8f0; }}
-    td {{ padding: 10px 12px; border-bottom: 1px solid #e2e8f0; vertical-align: middle; }}
-    tr:hover td {{ background: #f8fafc; }}
-    .alert {{ padding: 12px 16px; border-radius: 6px; margin-bottom: 16px; }}
-    .ok  {{ background: #dcfce7; color: #166534; border: 1px solid #86efac; }}
-    .err {{ background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; }}
-    .key {{ background: #fef9c3; color: #713f12; border: 1px solid #fde047; }}
-    .card {{ background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px 24px; margin-bottom: 32px; }}
-    .row {{ display:flex; gap:12px; flex-wrap:wrap; margin-bottom:12px; }}
-    label {{ display:block; font-size:0.85rem; font-weight:600; margin-bottom:4px; color:#475569; }}
-    input[type=text] {{ padding:6px 10px; border:1px solid #cbd5e1; border-radius:4px; width:100%; box-sizing:border-box; }}
-    .field {{ flex:1; min-width:180px; }}
-    .btn {{ padding:8px 20px; background:#2563eb; color:#fff; border:none; border-radius:4px; cursor:pointer; font-size:0.9rem; }}
-    .btn:hover {{ background:#1d4ed8; }}
-  </style>
-</head>
-<body>
-  <h1>RAG Bot — Panel de Administración</h1>
-  <p class="sub">Gestioná los tenants del sistema.</p>
-
-  {msg_html}{err_html}{key_html}
-
-  <h2>➕ Nuevo tenant</h2>
-  <div class="card">
-    <form method="post" action="/admin/tenants">
-      <div class="row">
-        <div class="field">
-          <label for="slug">Slug <small>(identificador único, sin espacios)</small></label>
-          <input type="text" id="slug" name="slug" placeholder="mi-empresa" required>
-        </div>
-        <div class="field">
-          <label for="bot_token">Telegram Bot Token</label>
-          <input type="text" id="bot_token" name="bot_token" placeholder="123456:ABC..." required>
-        </div>
-      </div>
-      <div class="row">
-        <div class="field">
-          <label for="expertise_area">Área de expertise</label>
-          <input type="text" id="expertise_area" name="expertise_area" placeholder="servicios de salud y seguros">
-        </div>
-        <div class="field">
-          <label for="plan">Plan</label>
-          <select id="plan" name="plan" style="padding:6px 10px;border:1px solid #cbd5e1;border-radius:4px;width:100%">
-            <option value="free">Free</option>
-            <option value="basic">Basic</option>
-            <option value="pro">Pro</option>
-          </select>
-        </div>
-      </div>
-      <div class="row">
-        <div class="field">
-          <label for="contact_url">URL de contacto <small>(http/https)</small></label>
-          <input type="text" id="contact_url" name="contact_url" placeholder="https://wa.me/549...">
-        </div>
-        <div class="field">
-          <label for="operator_chat_id">Chat ID del operador <small>(para digest diario)</small></label>
-          <input type="text" id="operator_chat_id" name="operator_chat_id" placeholder="123456789">
-        </div>
-      </div>
-      <div class="row">
-        <div class="field" style="flex:2">
-          <label for="example_questions">Preguntas de ejemplo <small>(una por línea, máx 5)</small></label>
-          <textarea id="example_questions" name="example_questions" rows="4"
-                    style="padding:6px 10px;border:1px solid #cbd5e1;border-radius:4px;width:100%;box-sizing:border-box"
-                    placeholder="¿Cuáles son los horarios?&#10;¿Qué planes tienen?&#10;¿Cómo me registro?"></textarea>
-        </div>
-      </div>
-      <button type="submit" class="btn">Crear tenant</button>
-    </form>
-  </div>
-
-  <p style="margin-bottom:24px">
-    <a href="/admin/template" style="color:#2563eb;font-size:0.9rem" download>Descargar plantilla de documento (.md)</a>
-    <span style="color:#64748b;font-size:0.8rem">— para que los tenants completen con su info</span>
-  </p>
-
-  <h2>📋 Tenants existentes</h2>
-  <table>
-    <thead><tr><th>ID</th><th>Slug</th><th>Estado</th><th>Plan</th><th>Configuración</th><th>Documentos</th><th>Consultas</th></tr></thead>
-    <tbody>{rows}</tbody>
-  </table>
-</body>
-</html>"""
-
-
 async def _all_tenants(db: AsyncSession) -> list:
     result = await db.execute(select(Tenant).order_by(Tenant.id))
     return result.scalars().all()
@@ -591,7 +438,7 @@ async def admin_panel(
     db: AsyncSession = Depends(get_db),
     _: None = Depends(_require_admin),
 ):
-    return _admin_html(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db))
+    return _render_admin(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db))
 
 
 @app.post("/admin/tenants", response_class=HTMLResponse, include_in_schema=False)
@@ -611,17 +458,17 @@ async def admin_create_tenant(
     example_questions = [q.strip() for q in raw_questions.splitlines() if q.strip()][:5] or None
 
     if not slug or not bot_token:
-        return _admin_html(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db), error="Slug y Bot Token son obligatorios.")
+        return _render_admin(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db), error="Slug y Bot Token son obligatorios.")
 
     if plan not in VALID_PLANS:
-        return _admin_html(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db), error=f"Plan inválido '{plan}'. Opciones: {', '.join(VALID_PLANS)}.")
+        return _render_admin(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db), error=f"Plan inválido '{plan}'. Opciones: {', '.join(VALID_PLANS)}.")
 
     if contact_url and not contact_url.startswith(("http://", "https://")):
-        return _admin_html(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db), error="URL de contacto debe empezar con http:// o https://")
+        return _render_admin(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db), error="URL de contacto debe empezar con http:// o https://")
 
     existing = await db.execute(select(Tenant).where(Tenant.slug == slug))
     if existing.scalar_one_or_none():
-        return _admin_html(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db), error=f"Ya existe un tenant con slug '{slug}'.")
+        return _render_admin(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db), error=f"Ya existe un tenant con slug '{slug}'.")
 
     raw_api_key = secrets_mod.token_urlsafe(32)
     api_key_hash = hashlib.sha256(raw_api_key.encode()).hexdigest()
@@ -652,7 +499,7 @@ async def admin_create_tenant(
 
     ok = await init_tenant_bot(tenant, domain)
     if not ok:
-        return _admin_html(
+        return _render_admin(
             await _all_tenants(db),
             doc_stats=await _get_all_doc_stats(db),
             error=f"Tenant '{slug}' creado en DB pero falló al inicializar el bot. Revisá el Bot Token.",
@@ -660,7 +507,7 @@ async def admin_create_tenant(
         )
 
     logger.info("Admin created tenant %s", slug)
-    return _admin_html(
+    return _render_admin(
         await _all_tenants(db),
         doc_stats=await _get_all_doc_stats(db),
         message=f"✓ Tenant '{slug}' creado y bot registrado.",
@@ -695,7 +542,7 @@ async def admin_update_tenant(
     if contact_url and not contact_url.startswith(("http://", "https://")):
         result = await db.execute(select(Tenant).order_by(Tenant.id))
         tenants = result.scalars().all()
-        return _admin_html(tenants, doc_stats=await _get_all_doc_stats(db), error="URL de contacto debe empezar con http:// o https://")
+        return _render_admin(tenants, doc_stats=await _get_all_doc_stats(db), error="URL de contacto debe empezar con http:// o https://")
 
     result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
     tenant = result.scalar_one_or_none()
@@ -728,7 +575,7 @@ async def admin_update_tenant(
     if tg_app:
         tg_app.bot_data["tenant"] = tenant
 
-    return _admin_html(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db), message=f"✓ Tenant '{tenant.slug}' actualizado.")
+    return _render_admin(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db), message=f"✓ Tenant '{tenant.slug}' actualizado.")
 
 
 @app.get("/admin/queries/{tenant_id}", response_class=HTMLResponse, include_in_schema=False)
@@ -749,39 +596,7 @@ async def admin_queries(
         .limit(100)
     )
     queries = result.scalars().all()
-
-    rows_html = ""
-    for q in queries:
-        ts = q.created_at.strftime("%Y-%m-%d %H:%M") if q.created_at else ""
-        rows_html += (
-            f"<tr><td>{ts}</td><td>{html_module.escape(q.intent_category)}</td>"
-            f"<td>{html_module.escape(q.user_id)}</td><td>{html_module.escape(q.question)}</td></tr>"
-        )
-
-    return f"""<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="utf-8">
-  <title>Consultas — {html_module.escape(tenant.slug)}</title>
-  <style>
-    body {{ font-family: system-ui, sans-serif; max-width: 1100px; margin: 40px auto; padding: 0 20px; color: #1e293b; }}
-    h1 {{ font-size: 1.4rem; margin-bottom: 4px; }}
-    a {{ color: #2563eb; }}
-    table {{ width: 100%; border-collapse: collapse; margin-top: 24px; }}
-    th {{ text-align: left; padding: 8px 12px; background: #f1f5f9; border-bottom: 2px solid #e2e8f0; }}
-    td {{ padding: 8px 12px; border-bottom: 1px solid #e2e8f0; vertical-align: top; word-break: break-word; }}
-    tr:hover td {{ background: #f8fafc; }}
-  </style>
-</head>
-<body>
-  <h1>Consultas sin respuesta — <em>{tenant.slug}</em></h1>
-  <a href="/admin">← Volver al panel</a>
-  <table>
-    <thead><tr><th>Fecha</th><th>Intent</th><th>User ID</th><th>Pregunta</th></tr></thead>
-    <tbody>{rows_html}</tbody>
-  </table>
-</body>
-</html>"""
+    return _render_queries(tenant, queries)
 
 
 @app.post("/admin/upload/{tenant_id}", response_class=HTMLResponse, include_in_schema=False)
@@ -795,12 +610,12 @@ async def admin_upload_document(
     result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
     tenant = result.scalar_one_or_none()
     if not tenant:
-        return _admin_html(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db),
+        return _render_admin(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db),
                            error=f"Tenant {tenant_id} no encontrado.")
 
     content = await file.read()
     if len(content) > MAX_UPLOAD_BYTES:
-        return _admin_html(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db),
+        return _render_admin(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db),
                            error="Archivo demasiado grande. Máximo 10MB.")
 
     try:
@@ -812,10 +627,10 @@ async def admin_upload_document(
         else:
             all_chunks, pages_processed = process_uploaded_file(content, fname_lower, file.filename)
     except HTTPException as e:
-        return _admin_html(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db), error=e.detail)
+        return _render_admin(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db), error=e.detail)
 
     if not all_chunks:
-        return _admin_html(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db),
+        return _render_admin(await _all_tenants(db), doc_stats=await _get_all_doc_stats(db),
                            error="No se pudo extraer texto del archivo.")
 
     # Upsert: delete old chunks for this source, then insert new ones atomically
@@ -826,7 +641,7 @@ async def admin_upload_document(
     stored = await index_chunks(db, all_chunks, tenant.slug, auto_commit=False)
     await db.commit()
     logger.info("Admin uploaded %s for tenant %s (%d chunks)", file.filename, tenant.slug, stored)
-    return _admin_html(
+    return _render_admin(
         await _all_tenants(db),
         doc_stats=await _get_all_doc_stats(db),
         message=f"✓ {stored} chunks indexados desde {file.filename} para '{tenant.slug}'.",
@@ -850,7 +665,7 @@ async def admin_delete_docs(
     await db.commit()
 
     logger.info("Admin deleted all docs for tenant %s", tenant.slug)
-    return _admin_html(
+    return _render_admin(
         await _all_tenants(db),
         doc_stats=await _get_all_doc_stats(db),
         message=f"✓ Documentos y conversaciones eliminados para '{tenant.slug}'.",
