@@ -45,6 +45,35 @@ async def lifespan(app: FastAPI):
     async with _AsyncSessionLocal() as db:
         await reload_from_db(db)
 
+    # Auto-clean orphaned chunks with browser duplicate suffixes
+    # (e.g. "file(1).md" when "file.md" already exists)
+    from services.upload import normalize_source_name
+    from sqlalchemy import text, func
+    from db import DocumentChunk
+    async with _AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(DocumentChunk.namespace, DocumentChunk.source)
+            .group_by(DocumentChunk.namespace, DocumentChunk.source)
+        )
+        dupe_sources = []
+        for namespace, source in result.fetchall():
+            normalized = normalize_source_name(source)
+            if normalized != source:
+                dupe_sources.append((namespace, source, normalized))
+        for namespace, source, normalized in dupe_sources:
+            await db.execute(
+                text("DELETE FROM document_chunks WHERE namespace = :ns AND source = :src"),
+                {"ns": namespace, "src": source},
+            )
+            logger.info(
+                "Cleaned orphaned chunks: %s/%s → normalized to %s (%s)",
+                namespace, source, normalized,
+                "delete — original already exists under normalized name",
+            )
+        if dupe_sources:
+            await db.commit()
+            logger.info("Startup cleanup: removed %d orphaned source(s)", len(dupe_sources))
+
     # Use APP_DOMAIN directly in prod; discover via ngrok in local dev
     from services.ngrok import get_ngrok_domain
     if not settings.app_domain.startswith("localhost"):
