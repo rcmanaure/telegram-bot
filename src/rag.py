@@ -307,7 +307,9 @@ async def _triage_response(
                 "tell the user what topics you can help with and invite them to ask more specifically. "
                 "This includes questions ABOUT the expertise area when no specific document matches.\n"
                 "- off_topic: question clearly and obviously unrelated to your area of expertise. "
-                "When in doubt, choose 'ambiguous' over 'off_topic'.\n"
+                "When in doubt, choose 'ambiguous' over 'off_topic'. "
+                "For off_topic replies: be warm and redirect politely. Say what you DO cover, "
+                "not just what you don't. Never be dismissive or blunt.\n"
                 "- needs_human: user explicitly wants to speak with a real person.\n\n"
                 "Examples:\n"
                 "'hi' → greeting\n"
@@ -327,8 +329,8 @@ async def _triage_response(
         return parsed["intent"], parsed["reply"]
     except Exception as e:
         logger.warning("_triage_response failed: %s", e)
-        area_clause = f" Mi área de expertise: {expertise_area}." if expertise_area else ""
-        return "ambiguous", f"No encontré información específica sobre eso en mis documentos.{area_clause} Probá reformulando tu consulta."
+        area_clause = f" Nos especializamos en {expertise_area}." if expertise_area else ""
+        return "ambiguous", f"Ese tipo de consulta no está dentro de los servicios que ofrecemos.{area_clause} Si necesitás algo relacionado con nuestra área, con gusto te ayudamos."
 
 
 async def generate_answer(

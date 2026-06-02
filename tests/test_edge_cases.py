@@ -265,7 +265,7 @@ async def test_triage_response_network_failure_returns_fallback():
         intent, text = await _triage_response("¿Qué hacés?", "fitness")
 
     assert intent == "ambiguous"
-    assert "expertise" in text.lower() or "documents" in text.lower()
+    assert "especializamos" in text.lower() or "expertise" in text.lower()
     assert "fitness" in text
 
 
