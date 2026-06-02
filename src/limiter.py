@@ -56,7 +56,17 @@ class RateLimiter:
 
 # ─── SlowAPI limiter for HTTP endpoints ────────────────────────────────────────
 
-limiter = Limiter(key_func=get_remote_address)
+def _api_key_func(request):
+    """Per-tenant rate limiting: use X-API-Key hash for authed API routes,
+    fall back to IP address for unauthed routes (webhooks, admin)."""
+    api_key = request.headers.get("X-API-Key", "")
+    if api_key:
+        import hashlib
+        return hashlib.sha256(api_key.encode()).hexdigest()[:16]
+    return get_remote_address(request)
+
+
+limiter = Limiter(key_func=_api_key_func)
 
 
 def rate_limit_handler(request, exc: RateLimitExceeded):
