@@ -364,3 +364,68 @@ async def test_flush_by_prefix_no_matching_keys():
     # Original entry untouched
     assert buf.get_entry("tg:123:_pending_") is not None
     buf.clear()
+
+
+# ─── Self-cancel bug regression test ────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_flush_does_not_cancel_its_own_task():
+    """_flush must not cancel the asyncio.Task it's running inside.
+
+    Regression: _flush used to call entry.flush_task.cancel() unconditionally.
+    When called from _flush_after (the debounce timer), entry.flush_task IS the
+    current task. Cancelling it raised CancelledError at the next await
+    (on_flush), which escaped except Exception (CancelledError is BaseException
+    in Python 3.9+). The on_flush callback never ran — user got no response
+    after sending an image.
+    """
+    buf = ImageBuffer()
+    flushed = []
+
+    async def on_flush(images_dicts, question):
+        flushed.append((images_dicts, question))
+
+    buf.add_image("k1", b64="abc", mime="image/jpeg", question="q", on_flush=on_flush, buffer_window=0.05)
+
+    # Wait for the debounce timer to fire and on_flush to complete
+    await asyncio.sleep(0.2)
+
+    # on_flush MUST have been called — the old bug silently cancelled it
+    assert len(flushed) == 1
+    assert flushed[0][0] == [{"b64": "abc", "mime": "image/jpeg"}]
+    buf.clear()
+
+
+@pytest.mark.asyncio
+async def test_flush_cancels_debounce_timer_when_called_externally():
+    """When _flush is called from flush_by_prefix (not the timer task),
+    the pending debounce timer task should be cancelled to avoid double-flush.
+    """
+    buf = ImageBuffer()
+    flushed = []
+
+    async def on_flush(images_dicts, question):
+        flushed.append((images_dicts, question))
+
+    # Add image with a long buffer window (won't fire naturally during test)
+    buf.add_image("tg:99:_pending_", b64="x", mime="image/jpeg", question="", on_flush=on_flush, buffer_window=60)
+
+    # The debounce timer is still pending
+    entry = buf.get_entry("tg:99:_pending_")
+    assert entry is not None
+    assert entry.flush_task is not None
+    assert not entry.flush_task.done()
+
+    # Text message arrives → flush_by_prefix triggers immediate flush
+    count = await buf.flush_by_prefix("tg:99:", override_question="¿Cuánto cuesta?")
+    assert count == 1
+    assert len(flushed) == 1
+
+    # The debounce timer task should have been cancelled by _flush.
+    # cancel() is cooperative — give the event loop a tick to finalize.
+    await asyncio.sleep(0)
+    assert entry.flush_task.done()
+
+    # Confirm no double-flush
+    assert len(flushed) == 1
+    buf.clear()
