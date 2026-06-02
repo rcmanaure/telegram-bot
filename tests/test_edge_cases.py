@@ -1047,7 +1047,7 @@ async def test_rag_query_greeting_does_not_log_unanswered():
 
 @pytest.mark.asyncio
 async def test_rag_query_image_no_vision_model_returns_guard_message():
-    """When image_b64 is set but LLM_VISION_MODEL is empty, rag_query returns
+    """When images is set but LLM_VISION_MODEL is empty, rag_query returns
     a clear Spanish message instead of sending the image to a text-only model."""
     from rag import rag_query
 
@@ -1065,7 +1065,7 @@ async def test_rag_query_image_no_vision_model_returns_guard_message():
             mock_settings.llm_vision_model = ""
             answer, chunks, intent = await rag_query(
                 mock_db, "¿Qué es esto?", "ns", "u1",
-                image_b64="dGVzdA==",  # base64 "test"
+                images=[{"b64": "dGVzdA==", "mime": "image/jpeg"}],
             )
 
     assert intent == "no_vision_model"
@@ -1079,7 +1079,7 @@ async def test_rag_query_image_no_vision_model_returns_guard_message():
 
 @pytest.mark.asyncio
 async def test_rag_query_image_with_vision_model_proceeds():
-    """When image_b64 is set AND LLM_VISION_MODEL is configured, rag_query
+    """When images is set AND LLM_VISION_MODEL is configured, rag_query
     proceeds normally (does NOT fire the guard)."""
     from rag import rag_query
 
@@ -1097,18 +1097,50 @@ async def test_rag_query_image_with_vision_model_proceeds():
         mock_settings.llm_vision_model = "gemma4:31b"
         answer, chunks, intent = await rag_query(
             mock_db, "¿Qué es esto?", "ns", "u1",
-            image_b64="dGVzdA==",
+            images=[{"b64": "dGVzdA==", "mime": "image/jpeg"}],
         )
 
-    # Guard did NOT fire — generate_answer was called with image_b64
+    # Guard did NOT fire — generate_answer was called with images
     mock_generate.assert_called_once()
     call_kwargs = mock_generate.call_args
-    assert call_kwargs.kwargs.get("image_b64") == "dGVzdA==" or call_kwargs[1].get("image_b64") == "dGVzdA=="
+    images_arg = call_kwargs.kwargs.get("images") or call_kwargs[1].get("images")
+    assert images_arg is not None
+    assert len(images_arg) == 1
+    assert images_arg[0]["b64"] == "dGVzdA=="
+
+
+@pytest.mark.asyncio
+async def test_generate_answer_image_includes_do_not_ask_for_image_instruction():
+    """When images is set, generate_answer must include an instruction
+    telling the LLM NOT to ask the user to send an image (they already did)."""
+    from rag import generate_answer
+
+    chunks = [{"content": "Cotizaciones: envíe la orden médica o una imagen", "source": "policy.md", "page": 1}]
+    with patch("rag.call_chat", new=AsyncMock(return_value="🔬 Apéndice Cecal — $90.00 USD")) as mock_chat, \
+         patch("rag.build_system_prompt", return_value="system prompt"), \
+         patch("rag.settings") as mock_settings:
+        mock_settings.llm_vision_model = "gemma4:31b"
+        await generate_answer(
+            chunks, "¿cuánto cuesta la biopsia de apéndice cecal?", [],
+            images=[{"b64": "dGVzdA==", "mime": "image/jpeg"}],
+        )
+
+    # Verify the LLM call included the anti-prompting instruction
+    call_args = mock_chat.call_args
+    messages = call_args[0][0]
+    user_msg = messages[-1]
+    # The content is a list with text + image_url parts
+    content_parts = user_msg["content"]
+    text_part = next(p for p in content_parts if p["type"] == "text")
+    assert "YA la envió" in text_part["text"] or "NUNCA le digas" in text_part["text"]
+    # Verify partially legible guidance is included
+    assert "PARCIALMENTE legible" in text_part["text"]
+    assert "extraé lo que puedas" in text_part["text"]
 
 
 @pytest.mark.asyncio
 async def test_rag_query_image_no_text_context_goes_to_vision():
-    """When image_b64 is set but no text context found, rag_query sends the
+    """When images is set but no text context found, rag_query sends the
     image to the vision model instead of falling to triage."""
     from rag import rag_query
 
@@ -1128,13 +1160,16 @@ async def test_rag_query_image_no_text_context_goes_to_vision():
         mock_settings.llm_vision_model = "gemma4:31b"
         answer, chunks, intent = await rag_query(
             mock_db, "¿Qué significa este resultado?", "ns", "u1",
-            image_b64="dGVzdA==",
+            images=[{"b64": "dGVzdA==", "mime": "image/jpeg"}],
         )
 
-    # generate_answer was called with empty context BUT with image_b64
+    # generate_answer was called with empty context BUT with images
     mock_generate.assert_called_once()
     call_kwargs = mock_generate.call_args
-    assert call_kwargs.kwargs.get("image_b64") == "dGVzdA==" or call_kwargs[1].get("image_b64") == "dGVzdA=="
+    images_arg = call_kwargs.kwargs.get("images") or call_kwargs[1].get("images")
+    assert images_arg is not None
+    assert len(images_arg) == 1
+    assert images_arg[0]["b64"] == "dGVzdA=="
     # Triage should NOT have been called — no _log_unanswered
     assert "resultado" in answer.lower()
 
@@ -1161,7 +1196,7 @@ async def test_rag_query_illegible_image_returns_clear_message():
         mock_settings.llm_vision_model = "gemma4:31b"
         answer, chunks, intent = await rag_query(
             mock_db, "¿Qué es esto?", "ns", "u1",
-            image_b64="dGVzdA==",
+            images=[{"b64": "dGVzdA==", "mime": "image/jpeg"}],
         )
 
     assert "No puedo leer la imagen" in answer
@@ -1190,6 +1225,33 @@ def test_is_illegible_response_allows_normal_response():
     assert not _is_illegible_response("El resultado muestra un nivel de glucosa de 120 mg/dL.")
     assert not _is_illegible_response("This is a biopsy report showing normal tissue.")
     assert not _is_illegible_response("La factura indica un total de $80.00 USD.")
+
+
+def test_is_illegible_response_allows_partially_legible():
+    """Partially legible responses should NOT trigger the full-illegible fallback.
+    The LLM already handles them via the image instruction (extract what it can)."""
+    from rag import _is_illegible_response
+    assert not _is_illegible_response(
+        "Puedo leer algunos estudios: Biopsia de Apéndice $90.00, pero algunas partes "
+        "están ilegibles y no puedo descifrar los montos de otros estudios."
+    )
+    assert not _is_illegible_response(
+        "I can read the procedure names but some amounts are illegible"
+    )
+    assert not _is_illegible_response(
+        "Parte de la imagen es borrosa, pero puedo ver: Hemograma $25.00"
+    )
+    assert not _is_illegible_response(
+        "Some sections are blurry but I can identify: Glucose test $15.00"
+    )
+
+
+def test_partially_legible_does_not_prevent_full_illegible_detection():
+    """Full illegibility phrases without partial qualifiers still trigger."""
+    from rag import _is_illegible_response
+    assert _is_illegible_response("No puedo leer la imagen, está borrosa.")
+    assert _is_illegible_response("La imagen es ilegible")
+    assert _is_illegible_response("The image is blurry and unreadable")
 
 
 @pytest.mark.asyncio

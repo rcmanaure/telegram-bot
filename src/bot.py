@@ -12,6 +12,7 @@ from telegram.ext import ContextTypes
 
 from config import settings
 from db import AsyncSessionLocal, Conversation, DocumentChunk, Tenant
+from image_buffer import image_buffer
 from limiter import tg_rate_limiter
 from rag import rag_query
 from services.stt import transcribe_voice
@@ -121,7 +122,6 @@ async def cmd_clear(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ─── Shared RAG query helper ──────────────────────────────────────────────────
 
-_PHOTO_DEFAULT_QUESTION = "¿Qué querés saber sobre esta imagen?"
 _MAX_PHOTO_BYTES = 5 * 1024 * 1024  # 5 MB
 
 
@@ -130,8 +130,7 @@ async def _process_question(
     ctx: ContextTypes.DEFAULT_TYPE,
     question: str,
     reply_suffix: str = "",
-    image_b64: str | None = None,
-    image_mime: str = "image/jpeg",
+    images: list[dict] | None = None,
 ) -> None:
     tenant = _get_tenant(ctx)
     uid = str(update.effective_user.id)
@@ -153,8 +152,7 @@ async def _process_question(
                 expertise_area=tenant.expertise_area or "",
                 language_code=language_code,
                 tenant_id=tenant.id,
-                image_b64=image_b64,
-                image_mime=image_mime,
+                images=images,
                 tenant=tenant,
             )
 
@@ -194,6 +192,19 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text("Mensaje no permitido.")
         return
+
+    # If the user has pending images in the buffer, flush them now with
+    # the text as the question. This handles the common flow:
+    #   user sends photo → user types "¿cuánto cuesta esto?"
+    uid = str(update.effective_user.id)
+    buf_prefix = f"tg:{uid}:"
+    flushed = await image_buffer.flush_by_prefix(buf_prefix, override_question=text)
+    if flushed:
+        # The flushed images will be processed via on_flush → _process_question.
+        # The text message itself is the question for those images — skip
+        # processing it again as a standalone query.
+        return
+
     await _process_question(update, ctx, text)
 
 
@@ -231,6 +242,16 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Mensaje no permitido.")
             return
         echo = f"\n\n_🎤 Escuché: «{transcript[:120]}{'...' if len(transcript) > 120 else ''}»_"
+
+        # If the user has pending images in the buffer, flush them with
+        # the voice transcript as the question
+        uid = str(update.effective_user.id)
+        buf_prefix = f"tg:{uid}:"
+        flushed = await image_buffer.flush_by_prefix(buf_prefix, override_question=transcript)
+        if flushed:
+            # Images will be processed with the voice transcript as question
+            return
+
         await _process_question(update, ctx, transcript, reply_suffix=echo)
     except Exception:
         logger.exception(
@@ -240,7 +261,7 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Lo siento, tuve un problema. Intentá de nuevo.")
 
 
-# ─── Photo handler ────────────────────────────────────────────────────────────
+# ─── Photo handler (with multi-image buffer) ────────────────────────────────
 
 async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     photos = update.message.photo
@@ -254,6 +275,7 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("La imagen es demasiado grande (máx 5 MB).")
         return
 
+    # Send typing indicator immediately (before buffer + download)
     await ctx.bot.send_chat_action(update.effective_chat.id, "typing")
 
     try:
@@ -273,15 +295,41 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception:
         mime = "image/jpeg"
 
-    question = update.message.caption or _PHOTO_DEFAULT_QUESTION
-    try:
-        question = sanitize_user_input(question)
-    except ValueError:
-        await update.message.reply_text("Mensaje no permitido.")
-        return
+    # Caption as question (empty string if no caption — buffer provides default)
+    question = update.message.caption or ""
+    if question.strip():
+        try:
+            question = sanitize_user_input(question)
+        except ValueError:
+            await update.message.reply_text("Mensaje no permitido.")
+            return
 
-    logger.info("handle_photo user=%s bytes=%d mime=%s", update.effective_user.id, len(image_bytes), mime)
-    await _process_question(update, ctx, question, image_b64=image_b64, image_mime=mime)
+    # Determine buffer key: group by media_group_id (album) or user-level pending
+    uid = str(update.effective_user.id)
+    media_group_id = getattr(update.message, "media_group_id", None)
+    if media_group_id:
+        buf_key = f"tg:{uid}:{media_group_id}"
+    else:
+        buf_key = f"tg:{uid}:_pending_"
+
+    # Flush callback: process collected images through RAG
+    async def on_flush(images_dicts: list[dict], combined_question: str) -> None:
+        await _process_question(update, ctx, combined_question, images=images_dicts)
+
+    error = image_buffer.add_image(
+        key=buf_key,
+        b64=image_b64,
+        mime=mime,
+        question=question,
+        on_flush=on_flush,
+    )
+    if error:
+        await update.message.reply_text(error)
+
+    logger.info(
+        "handle_photo user=%s bytes=%d mime=%s group_id=%s buf_key=%s",
+        uid, len(image_bytes), mime, media_group_id, buf_key,
+    )
 
 
 # ─── Handler registration ──────────────────────────────────────────────────────

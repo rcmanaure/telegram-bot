@@ -279,13 +279,33 @@ _ILLEGIBLE_PATTERNS = [
     re.compile(r"unable\s+to\s+(read|see|interpret|view|process)\s+(the\s+)?(image|photo|picture)", re.IGNORECASE),
 ]
 
+# Patterns that indicate PARTIAL legibility — the model could read some text
+# but not all. These should NOT trigger the full-illegible fallback; instead
+# the LLM is already instructed (via image instruction) to extract what it can.
+_PARTIALLY_LEGIBLE_PATTERNS = [
+    re.compile(r"(parcialmente|parte|algunas?\s+(partes?|secciones?|palabras?|líneas?|campos?)).*(ilegible|borros[oa]|no\s+puedo|indecifr|dif[ií]cil|indistinguible)", re.IGNORECASE),
+    re.compile(r"(ilegible|borros[oa]|indecifrable|no\s+se\s+(lee|ve|puede)).*(parcial|algunas?\s+|parte)", re.IGNORECASE),
+    re.compile(r"(puedo\s+)?(leer|ver|distinguir|identificar).*(pero|aunque|sin embargo|no\s+puedo).*(otra|el\s+resto|lo\s+demás|algunas?\s+partes?)", re.IGNORECASE),
+    re.compile(r"(some|parts?|sections?).*(illegible|blurry|unreadable|unclear|cannot\s+read)", re.IGNORECASE),
+    re.compile(r"(can\s+read|can\s+see|able\s+to\s+read).*(but|however|although).*(some|other|rest|remaining).*(cannot|unreadable|illegible|blurry|unclear)", re.IGNORECASE),
+    re.compile(r"(no\s+puedo\s+(leer|descifrar|distinguir)).*(algunas?\s+|ciertos?\s+|parte).*(partes?|secciones?|palabras?|nombres?|montos?)", re.IGNORECASE),
+]
+
 
 def _is_illegible_response(answer: str) -> bool:
     """Check if the vision model's response indicates it couldn't read the image.
-    Matches common phrases in both Spanish and English."""
+    Matches common phrases in both Spanish and English.
+
+    Returns True for fully illegible, False for normal or partially legible.
+    Partially legible responses are NOT caught here — the LLM handles them via
+    the image instruction (extract what it can, note what's illegible).
+    """
     if not answer or len(answer.strip()) < 15:
         return True
+    # If partially legible, do NOT treat as fully illegible
     answer_lower = answer.lower()
+    if any(p.search(answer_lower) for p in _PARTIALLY_LEGIBLE_PATTERNS):
+        return False
     return any(p.search(answer_lower) for p in _ILLEGIBLE_PATTERNS)
 
 
@@ -417,19 +437,18 @@ async def generate_answer(
     conversation_history: list[dict],
     expertise_area: str = "",
     channel: str = "telegram",
-    image_b64: str | None = None,
-    image_mime: str = "image/jpeg",
+    images: list[dict] | None = None,
     from_web: bool = False,
     low_confidence: bool = False,
 ) -> str:
     """
     Generate an answer using retrieved context + conversation history.
-    When image_b64 is set, sends the image alongside the question (vision models).
+    When images is set, sends the images alongside the question (vision models).
     When from_web is True, adds web-source framing to the system prompt.
     When low_confidence is True, context came from a second-pass retrieval with
     lower similarity threshold — the LLM should note the approximate match.
     """
-    if not context_chunks and not image_b64:
+    if not context_chunks and not images:
         return "No encontré información relevante en los documentos para responder tu pregunta."
 
     system_prompt = build_system_prompt(expertise_area, channel=channel, from_web=from_web)
@@ -445,21 +464,40 @@ async def generate_answer(
             f"<user_question>\n{question}\n</user_question>"
         )
     else:
-        # Image-only: no text context, but image is present
+        # Image-only: no text context, but images are present
         text_content = f"<user_question>\n{question}\n</user_question>"
+
+    # When user sent image(s), add explicit instruction so the LLM processes
+    # the images instead of quoting policies like "envíe la imagen por WhatsApp"
+    if images:
+        count_text = f"{len(images)} imágenes" if len(images) > 1 else "una imagen"
+        image_instruction = (
+            f"\n\n[INSTRUCCIÓN IMPORTANTE: El usuario ya envió {count_text}. "
+            "Analizá la(s) imagen(es) que recibiste y respondé basándote en lo que ves. "
+            "NUNCA le digas al usuario que envíe una imagen o que contacte por WhatsApp "
+            "para enviar una imagen — YA la envió. Si la imagen contiene una orden "
+            "médica o documento, extraé la información y respondé con los precios "
+            "que encontrés en el contexto. "
+            "Si la imagen está PARCIALMENTE legible (podés leer algunas partes pero no todas): "
+            "1) Proporcioná la información que SÍ podés leer. "
+            "2) Aclará explícitamente qué partes no se pudieron leer (ej: 'No se pudo leer el monto de X'). "
+            "3) Sugerí enviar una imagen más clara solo para las partes que no se pudieron leer. "
+            "NUNCA descartes toda la imagen si podés leer algo — siempre extraé lo que puedas.]"
+        )
+        text_content += image_instruction
 
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(conversation_history[-6:])
 
-    if image_b64:
-        # OpenAI vision format: content is a list with text + image_url parts
-        messages.append({
-            "role": "user",
-            "content": [
-                {"type": "text", "text": text_content},
-                {"type": "image_url", "image_url": {"url": f"data:{image_mime};base64,{image_b64}"}},
-            ],
-        })
+    if images:
+        # OpenAI vision format: content is a list with text + multiple image_url parts
+        content: list[dict] = [{"type": "text", "text": text_content}]
+        for img in images:
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{img['mime']};base64,{img['b64']}"},
+            })
+        messages.append({"role": "user", "content": content})
     else:
         messages.append({"role": "user", "content": text_content})
 
@@ -469,7 +507,7 @@ async def generate_answer(
         max_tokens=800,
         temperature=0.1,
         channel=channel,
-        model=vision_model if image_b64 else None,
+        model=vision_model if images else None,
     )
 
 
@@ -761,15 +799,14 @@ async def rag_query(
     language_code: str | None = None,
     tenant_id: int | None = None,
     channel: str = "telegram",
-    image_b64: str | None = None,
-    image_mime: str = "image/jpeg",
+    images: list[dict] | None = None,
     tenant: "Tenant | None" = None,
 ) -> tuple[str, list[dict], str | None]:
     """
     Full RAG pipeline: retrieve context → generate answer → save history.
     Returns (answer, retrieved_chunks, intent | None).
     intent is None when answered from docs; otherwise the triage classification.
-    When image_b64 is set, the image is passed to generate_answer() for vision models.
+    When images is set, the images are passed to generate_answer() for vision models.
     When tenant is provided and web_search_enabled, falls back to web search
     when no context is found in the knowledge base.
     """
@@ -790,10 +827,11 @@ async def rag_query(
     # Vision guard: if user sent an image but no vision model is configured,
     # skip the LLM call entirely — sending image payloads to text-only models
     # produces opaque 404 errors from the provider.
-    if image_b64 and not get_setting("llm_vision_model", settings.llm_vision_model):
+    if images and not get_setting("llm_vision_model", settings.llm_vision_model):
         logger.info("vision_guard ns=%s user=%s — no vision model configured", namespace, user_id)
         answer = "No puedo procesar imágenes en este momento. Por favor, enviá tu consulta por texto."
-        await save_turn(db, user_id, namespace, question or "📷 [imagen]", answer, channel=channel, tenant_id=tenant_id)
+        img_label = "📷 [varias imágenes]" if len(images) > 1 else "📷 [imagen]"
+        await save_turn(db, user_id, namespace, question or img_label, answer, channel=channel, tenant_id=tenant_id)
         return answer, [], "no_vision_model"
 
     # Query reformulation: resolve pronouns/references using conversation history
@@ -831,23 +869,28 @@ async def rag_query(
             is_low_confidence = True
 
     if not context:
-        # Image-only path: when user sent an image but no text context was found,
-        # still process the image through the vision model instead of falling to triage.
-        if image_b64:
+        # Image-only path: when user sent image(s) but no text context was found,
+        # still process the images through the vision model instead of falling to triage.
+        if images:
             answer = await generate_answer(
                 [], question, history, expertise_area,
-                channel=channel, image_b64=image_b64, image_mime=image_mime,
+                channel=channel, images=images,
             )
             answer = validate_output(answer, user_id=user_id)
             if CANARY_TOKEN in answer:
                 answer = answer.replace(CANARY_TOKEN, "[REDACTED]")
                 logger.warning("canary_redacted user_id=%s image_only", user_id)
-            # Check if vision model couldn't read the image
+            # Check if vision model couldn't read the image(s)
             if _is_illegible_response(answer):
-                answer = "No puedo leer la imagen. La calidad o resolución puede ser insuficiente. " \
-                         "Intentá enviarla con mejor iluminación o enfoque, o describí tu consulta por texto."
-                logger.info("vision_illegible ns=%s user=%s", namespace, user_id)
-            await save_turn(db, user_id, namespace, question or "📷 [imagen]", answer, channel=channel, tenant_id=tenant_id)
+                if len(images) == 1:
+                    answer = "No puedo leer la imagen. La calidad o resolución puede ser insuficiente. " \
+                             "Intentá enviarla con mejor iluminación o enfoque, o describí tu consulta por texto."
+                else:
+                    answer = "No puedo leer las imágenes. La calidad o resolución puede ser insuficiente. " \
+                             "Intentá enviarlas con mejor iluminación o enfoque, o describí tu consulta por texto."
+                logger.info("vision_illegible ns=%s user=%s images=%d", namespace, user_id, len(images))
+            img_label = "📷 [varias imágenes]" if len(images) > 1 else "📷 [imagen]"
+            await save_turn(db, user_id, namespace, question or img_label, answer, channel=channel, tenant_id=tenant_id)
             return answer, [], None
 
         # Web search fallback: if tenant has web search enabled and URL is configured,
@@ -858,7 +901,7 @@ async def rag_query(
             if web_results:
                 answer = await generate_answer(
                     web_results, question, history, expertise_area,
-                    channel=channel, image_b64=image_b64, image_mime=image_mime,
+                    channel=channel, images=images,
                     from_web=True,
                 )
                 answer = validate_output(answer, user_id=user_id)
@@ -883,7 +926,7 @@ async def rag_query(
 
     answer = await generate_answer(
         context, question, history, expertise_area,
-        channel=channel, image_b64=image_b64, image_mime=image_mime,
+        channel=channel, images=images,
         low_confidence=is_low_confidence,
     )
     answer = validate_output(answer, user_id=user_id)
@@ -891,10 +934,14 @@ async def rag_query(
     if CANARY_TOKEN in answer:
         answer = answer.replace(CANARY_TOKEN, "[REDACTED]")
         logger.warning("canary_redacted user_id=%s context_answer", user_id)
-    # Check if vision model couldn't read the image (applies when image was sent alongside text context)
-    if image_b64 and _is_illegible_response(answer):
-        answer = "No puedo leer la imagen. La calidad o resolución puede ser insuficiente. " \
-                 "Intentá enviarla con mejor iluminación o enfoque, o describí tu consulta por texto."
-        logger.info("vision_illegible ns=%s user=%s", namespace, user_id)
+    # Check if vision model couldn't read the image(s) (applies when image was sent alongside text context)
+    if images and _is_illegible_response(answer):
+        if len(images) == 1:
+            answer = "No puedo leer la imagen. La calidad o resolución puede ser insuficiente. " \
+                     "Intentá enviarla con mejor iluminación o enfoque, o describí tu consulta por texto."
+        else:
+            answer = "No puedo leer las imágenes. La calidad o resolución puede ser insuficiente. " \
+                     "Intentá enviarlas con mejor iluminación o enfoque, o describí tu consulta por texto."
+        logger.info("vision_illegible ns=%s user=%s images=%d", namespace, user_id, len(images))
     await save_turn(db, user_id, namespace, question, answer, channel=channel)
     return answer, context, None
