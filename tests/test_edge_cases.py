@@ -283,6 +283,17 @@ def test_build_system_prompt_empty_area_no_trailing_dot_clause():
     assert "Mi área de expertise: ." not in prompt
 
 
+def test_build_system_prompt_includes_partial_match_guidance():
+    """System prompt must instruct the LLM to provide near-match info instead
+    of saying 'not found' when context has a similar term."""
+    from services.prompts import build_system_prompt
+    prompt = build_system_prompt("laboratorio de patología")
+    assert "COINCIDENCIAS PARCIALES" in prompt
+    assert "similar o equivalente" in prompt
+    # Must instruct to offer what's found and note the difference
+    assert "proporcioná" in prompt or "proporcioná la información" in prompt
+
+
 # ─── get_history ──────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
