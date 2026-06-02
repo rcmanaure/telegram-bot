@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.0.0] - 2026-06-02
+
+### Added
+
+- Vision-augmented retrieval — when a user sends an image with no matching text context, the bot extracts key search terms from the image using the vision model and retries the vector search with those terms. Handles medical orders, lab results, and other document photos that would otherwise return "not found."
+- `VISION_EXTRACT_MAX_TOKENS` constant (80 tokens) for search-term extraction prompt.
+- Sanitization guard on vision-extracted query terms — LLM-generated search terms now pass through `sanitize_user_input()` before vector search, consistent with all other user input paths.
+- Case-insensitive and whitespace-normalized comparison between original query and vision-extracted query to avoid redundant searches.
+- 6 new test cases covering vision-augmented retrieval edge cases (no vision model, empty result, whitespace result, multiple images, same-query skip, low-confidence fallback).
+
+### Fixed
+
+- Missing `save_turn` mock in vision guard test caused RuntimeWarning about unawaited coroutine.
+- Magic number `80` in `_extract_search_terms_from_images` extracted to named constant `VISION_EXTRACT_MAX_TOKENS`.
+
 ## [0.3.0.0] - 2026-06-01
 
 ### Added

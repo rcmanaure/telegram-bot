@@ -84,18 +84,18 @@
 
 ## Vision + Ollama Cloud (próxima branch después de feat/whatsapp-multi-channel)
 
-- [ ] **PREREQ-WS** Validar endpoint Ollama cloud web search antes de V7 — `curl -H "Authorization: Bearer $OLLAMA_API_KEY" https://ollama.com/api/web_search -d '{"query":"test","num_results":3}'`. Si falla, usar Tavily o Brave Search. **Bloquea V7.**
-- [ ] **V1** `config.py` + `requirements.txt` — `LLM_VISION_MODEL: str = ""`, `WEB_SEARCH_URL: str = ""`, agregar `filetype`
-- [ ] **V1.5** `llm.py:call_chat()` — param `model: str | None = None`
-- [ ] **V2** `rag.py:generate_answer()` — `image_b64: str | None = None`, content array OpenAI vision format: `[{type:text}, {type:image_url, image_url:{url:data:image/..;base64,...}}]`
-- [ ] **V2.5** `rag.py:rag_query()` — `image_b64` + `tenant: Tenant | None` params
-- [ ] **V3** `bot.py` — `handle_photo()` + `filters.PHOTO`; guard > 5MB; capturar httpx error → "No pude descargar la imagen."
-- [ ] **V4** `main.py:_process_wa_message()` — remover early return para imagen; capturar errores de descarga y modelo
-- [ ] **V5** Upload endpoint (async) — jpg/png detect; vision describe pre-step; guard desc > 100 chars
-- [ ] **V6** Alembic migration — `Tenant.web_search_enabled boolean default false` (probar en DB limpia)
-- [ ] **V7** `rag.py:rag_query()` — web search fallback con rescue total; **requiere PREREQ-WS**
-- [ ] **V8** Admin UI — toggle web_search_enabled; image accept en file inputs; `.env.example` Ollama block
-- [ ] **V10** Tests — handle_photo, vision generate_answer, image upload, web search triage
+- [x] **PREREQ-WS** Validar endpoint Ollama cloud web search antes de V7 — `curl -H "Authorization: Bearer $OLLAMA_API_KEY" https://ollama.com/api/web_search -d '{"query":"test","num_results":3}'`. Si falla, usar Tavily o Brave Search. **Bloquea V7.** **Completed:** v0.2.0.0 (2026-05-29)
+- [x] **V1** `config.py` + `requirements.txt` — `LLM_VISION_MODEL: str = ""`, `WEB_SEARCH_URL: str = ""`, agregar `filetype` **Completed:** v0.3.0.0 (2026-06-01)
+- [x] **V1.5** `llm.py:call_chat()` — param `model: str | None = None` **Completed:** v0.3.0.0 (2026-06-01)
+- [x] **V2** `rag.py:generate_answer()` — `image_b64: str | None = None`, content array OpenAI vision format: `[{type:text}, {type:image_url, image_url:{url:data:image/..;base64,...}}]` **Completed:** v0.3.0.0 (2026-06-01)
+- [x] **V2.5** `rag.py:rag_query()` — `image_b64` + `tenant: Tenant | None` params **Completed:** v0.3.0.0 (2026-06-01)
+- [x] **V3** `bot.py` — `handle_photo()` + `filters.PHOTO`; guard > 5MB; capturar httpx error → "No pude descargar la imagen." **Completed:** v0.3.0.0 (2026-06-01)
+- [x] **V4** `main.py:_process_wa_message()` — remover early return para imagen; capturar errores de descarga y modelo **Completed:** v0.3.0.0 (2026-06-01)
+- [x] **V5** Upload endpoint (async) — jpg/png detect; vision describe pre-step; guard desc > 100 chars **Completed:** v0.3.0.0 (2026-06-01)
+- [x] **V6** Alembic migration — `Tenant.web_search_enabled boolean default false` (probar en DB limpia) **Completed:** v0.3.0.0 (2026-06-01)
+- [x] **V7** `rag.py:rag_query()` — web search fallback con rescue total; **requiere PREREQ-WS** **Completed:** v0.3.0.0 (2026-06-01)
+- [x] **V8** Admin UI — toggle web_search_enabled; image accept en file inputs; `.env.example` Ollama block **Completed:** v0.3.0.0 (2026-06-01)
+- [x] **V10** Tests — handle_photo, vision generate_answer, image upload, web search triage **Completed:** v0.4.0.0 (2026-06-02)
 
 ## Deferred (cuando haya > 10 clientes)
 
