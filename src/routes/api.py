@@ -120,5 +120,6 @@ async def delete_namespace(
     ns = tenant.slug
     await db.execute(text("DELETE FROM document_chunks WHERE namespace = :ns"), {"ns": ns})
     await db.execute(text("DELETE FROM conversations WHERE namespace = :ns"), {"ns": ns})
+    await db.execute(text("DELETE FROM unanswered_queries WHERE namespace = :ns"), {"ns": ns})
     await db.commit()
     return {"status": "deleted", "namespace": ns}

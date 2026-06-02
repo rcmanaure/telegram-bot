@@ -11,6 +11,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.ext.hybrid import hybrid_property
 
 from config import settings
 
@@ -39,12 +40,36 @@ class Tenant(Base):
 
     # WhatsApp / multi-channel
     wa_phone_number_id = Column(String(100), nullable=True)
-    wa_access_token = Column(String(500), nullable=True)
-    wa_app_secret = Column(String(100), nullable=True)
+    _wa_access_token = Column("wa_access_token", String(500), nullable=True)
+    _wa_app_secret = Column("wa_app_secret", String(100), nullable=True)
     wa_business_id = Column(String(100), nullable=True)
     wa_verify_token = Column(String(100), nullable=True)
     wa_reengagement_template = Column(String(200), nullable=True)
     channels = Column(Text, nullable=True, server_default="telegram")
+
+    @hybrid_property
+    def wa_access_token(self):
+        """Decrypt WA access token on read. Falls back to plaintext if ENCRYPTION_KEY not set."""
+        from crypto import decrypt_value
+        return decrypt_value(self._wa_access_token) if self._wa_access_token else self._wa_access_token
+
+    @wa_access_token.setter
+    def wa_access_token(self, value):
+        """Encrypt WA access token on write. Stores plaintext if ENCRYPTION_KEY not set."""
+        from crypto import encrypt_value
+        self._wa_access_token = encrypt_value(value) if value else value
+
+    @hybrid_property
+    def wa_app_secret(self):
+        """Decrypt WA app secret on read. Falls back to plaintext if ENCRYPTION_KEY not set."""
+        from crypto import decrypt_value
+        return decrypt_value(self._wa_app_secret) if self._wa_app_secret else self._wa_app_secret
+
+    @wa_app_secret.setter
+    def wa_app_secret(self, value):
+        """Encrypt WA app secret on write. Stores plaintext if ENCRYPTION_KEY not set."""
+        from crypto import encrypt_value
+        self._wa_app_secret = encrypt_value(value) if value else value
 
 
 class DocumentChunk(Base):
@@ -96,6 +121,10 @@ class Conversation(Base):
     role = Column(String(20), nullable=False)
     content = Column(Text, nullable=False)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index("ix_conversations_ns_user_created", "namespace", "user_id", "created_at"),
+    )
 
 
 class SystemConfig(Base):

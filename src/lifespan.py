@@ -32,6 +32,12 @@ async def lifespan(app: FastAPI):
 
     await init_db()
 
+    # Load config overlay from DB (overrides .env at runtime)
+    from config_overlay import reload_from_db
+    from db import AsyncSessionLocal as _AsyncSessionLocal
+    async with _AsyncSessionLocal() as db:
+        await reload_from_db(db)
+
     # Use APP_DOMAIN directly in prod; discover via ngrok in local dev
     from services.ngrok import get_ngrok_domain
     if not settings.app_domain.startswith("localhost"):
@@ -82,3 +88,24 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass
     await http_client.aclose()
+
+    # Close LLM HTTP clients (chat + embedding)
+    from llm import close_llm_clients
+    try:
+        await close_llm_clients()
+    except Exception:
+        logger.warning("Failed to close LLM clients during shutdown")
+
+    # Close STT HTTP client
+    from services.stt import http_client as stt_http_client
+    try:
+        await stt_http_client.aclose()
+    except Exception:
+        logger.warning("Failed to close STT HTTP client during shutdown")
+
+    # Default admin password warning
+    if settings.admin_password == "changeme":
+        logger.warning(
+            "SECURITY: ADMIN_PASSWORD is still set to the default 'changeme'. "
+            "Change it immediately via the ADMIN_PASSWORD environment variable."
+        )

@@ -98,6 +98,13 @@ async def handle_wa_message(
                     pass
                 return
 
+        # Rate limit (20/60s per tenant:user, independent of TG)
+        # Check BEFORE sanitize so injection probes don't bypass rate limiting
+        rate_key = f"{namespace}:{user_id}"
+        if wa_rate_limiter.check(rate_key):
+            logger.warning("wa_rate_limit key=%s", rate_key)
+            return
+
         # Text or image-with-caption message — process through RAG
         text = wa_msg.text or ("¿Qué querés saber sobre esta imagen?" if image_b64 else "")
         if not text.strip():
@@ -110,12 +117,6 @@ async def handle_wa_message(
                 await adapter.send_reply(user_id, "Tu mensaje contiene contenido no permitido.")
             except ChannelSendError:
                 pass
-            return
-
-        # Rate limit (20/60s per tenant:user, independent of TG)
-        rate_key = f"{namespace}:{user_id}"
-        if wa_rate_limiter.check(rate_key):
-            logger.warning("wa_rate_limit key=%s", rate_key)
             return
 
         # DB operations — fresh session for background task

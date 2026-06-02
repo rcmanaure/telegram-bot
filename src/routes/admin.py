@@ -12,7 +12,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
-from db import get_db, AsyncSessionLocal, DocumentChunk, Tenant, UnansweredQuery
+from db import get_db, AsyncSessionLocal, DocumentChunk, Tenant, UnansweredQuery, SystemConfig
 from limiter import limiter
 from rag import chunk_text, index_chunks, sync_faq_chunks
 from services.ngrok import get_ngrok_domain
@@ -35,7 +35,7 @@ _jinja_env = Environment(
 )
 
 
-def _render_admin(tenants, doc_stats=None, message="", error="", new_api_key=""):
+def _render_admin(tenants, doc_stats=None, message="", error="", new_api_key="", active_tab="tenants"):
     """Render admin panel HTML via Jinja2 template. All values auto-escaped."""
     template = _jinja_env.get_template("admin/index.html")
     html = template.render(
@@ -44,6 +44,7 @@ def _render_admin(tenants, doc_stats=None, message="", error="", new_api_key="")
         message=message,
         error=error,
         new_api_key=new_api_key,
+        active_tab=active_tab,
     )
     return HTMLResponse(content=html)
 
@@ -112,15 +113,19 @@ async def _admin_context(db: AsyncSession) -> tuple:
 # ─── Admin routes ──────────────────────────────────────────────────────────────
 
 @router.get("/admin", response_class=HTMLResponse, include_in_schema=False)
+@limiter.limit("20/minute")
 async def admin_panel(
+    request: Request,
     db: AsyncSession = Depends(get_db),
     _: None = Depends(_require_admin),
 ):
+    active_tab = request.query_params.get("tab", "tenants")
     tenants, doc_stats = await _admin_context(db)
-    return _render_admin(tenants, doc_stats=doc_stats)
+    return _render_admin(tenants, doc_stats=doc_stats, active_tab=active_tab)
 
 
 @router.post("/admin/tenants", response_class=HTMLResponse, include_in_schema=False)
+@limiter.limit("5/minute")
 async def admin_create_tenant(
     request: Request,
     db: AsyncSession = Depends(get_db),
@@ -199,6 +204,7 @@ async def admin_create_tenant(
 
 
 @router.post("/admin/tenant/{tenant_id}", response_class=HTMLResponse, include_in_schema=False)
+@limiter.limit("5/minute")
 async def admin_update_tenant(
     tenant_id: int,
     request: Request,
@@ -262,8 +268,10 @@ async def admin_update_tenant(
 
 
 @router.get("/admin/queries/{tenant_id}", response_class=HTMLResponse, include_in_schema=False)
+@limiter.limit("20/minute")
 async def admin_queries(
     tenant_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     _: None = Depends(_require_admin),
 ):
@@ -283,6 +291,7 @@ async def admin_queries(
 
 
 @router.post("/admin/upload/{tenant_id}", response_class=HTMLResponse, include_in_schema=False)
+@limiter.limit("5/minute")
 async def admin_upload_document(
     tenant_id: int,
     request: Request,
@@ -334,8 +343,10 @@ async def admin_upload_document(
 
 
 @router.post("/admin/delete-docs/{tenant_id}", response_class=HTMLResponse, include_in_schema=False)
+@limiter.limit("5/minute")
 async def admin_delete_docs(
     tenant_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     _: None = Depends(_require_admin),
 ):
@@ -347,6 +358,7 @@ async def admin_delete_docs(
     ns = tenant.slug
     await db.execute(text("DELETE FROM document_chunks WHERE namespace = :ns"), {"ns": ns})
     await db.execute(text("DELETE FROM conversations WHERE namespace = :ns"), {"ns": ns})
+    await db.execute(text("DELETE FROM unanswered_queries WHERE namespace = :ns"), {"ns": ns})
     await db.commit()
 
     logger.info("Admin deleted all docs for tenant %s", tenant.slug)
@@ -358,5 +370,202 @@ async def admin_delete_docs(
 
 
 @router.get("/admin/template", include_in_schema=False)
-async def admin_download_template(_: None = Depends(_require_admin)):
+@limiter.limit("20/minute")
+async def admin_download_template(
+    request: Request,
+    _: None = Depends(_require_admin),
+):
     return FileResponse("documents/plantilla.md", filename="plantilla.md", media_type="text/markdown")
+
+
+# ─── Settings endpoints ───────────────────────────────────────────────────────
+
+@router.post("/admin/settings", response_class=HTMLResponse, include_in_schema=False)
+@limiter.limit("5/minute")
+async def admin_save_settings(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(_require_admin),
+):
+    """Save config overlay settings. Empty values are skipped (preserve existing)."""
+    from config_overlay import reload_from_db
+    from llm import reset_embedding_client
+    from crypto import encrypt_value
+    from db import SystemConfig
+
+    form = await request.form()
+
+    # Overlay key mapping: form field name → overlay key
+    OVERLAY_KEYS = [
+        "llm_base_url", "llm_api_key", "llm_model", "llm_fallback_model",
+        "llm_vision_model", "embedding_base_url", "embedding_api_key",
+        "embedding_model", "embedding_dim", "groq_api_key", "web_search_url",
+    ]
+
+    saved_count = 0
+    for key in OVERLAY_KEYS:
+        value = (form.get(key) or "").strip()
+        if not value:
+            continue  # Skip empty — preserve existing DB value
+
+        # Encrypt and upsert
+        encrypted = encrypt_value(value)
+        existing = await db.execute(
+            select(SystemConfig).where(SystemConfig.key == key)
+        )
+        row = existing.scalar_one_or_none()
+        if row:
+            row.encrypted_value = encrypted
+        else:
+            db.add(SystemConfig(key=key, encrypted_value=encrypted))
+        saved_count += 1
+
+    if saved_count > 0:
+        await db.commit()
+
+    # Reload overlay + reset embedding client (caller-side reset, no circular import)
+    await reload_from_db(db)
+    reset_embedding_client()
+
+    logger.info("Admin saved %d settings overlay(s)", saved_count)
+    tenants, doc_stats = await _admin_context(db)
+    return _render_admin(
+        tenants, doc_stats=doc_stats,
+        message=f"✓ {saved_count} configuración(es) guardada(s).",
+    )
+
+
+@router.post("/admin/settings/test-connection", include_in_schema=False)
+@limiter.limit("5/minute")
+async def admin_test_connection(
+    request: Request,
+    _: None = Depends(_require_admin),
+):
+    """Test LLM or embedding provider connection. Returns JSON result."""
+    from llm import test_connection, validate_config
+    from config_overlay import get_setting
+
+    try:
+        data = await request.json()
+    except Exception:
+        return {"ok": False, "error": "Invalid JSON body"}
+
+    conn_type = data.get("type", "chat")
+    base_url = data.get("base_url") or get_setting("llm_base_url", settings.llm_base_url)
+    api_key = data.get("api_key") or get_setting("llm_api_key", settings.effective_llm_api_key)
+    model = data.get("model") or get_setting("llm_model", settings.llm_model)
+
+    if conn_type == "embedding":
+        base_url = data.get("base_url") or get_setting("embedding_base_url", settings.embedding_base_url)
+        api_key = data.get("api_key") or get_setting("embedding_api_key", settings.effective_embedding_api_key)
+        model = data.get("model") or get_setting("embedding_model", settings.embedding_model)
+        try:
+            t0 = __import__("time").monotonic()
+            await validate_config()
+            elapsed_ms = (__import__("time").monotonic() - t0) * 1000
+            return {"ok": True, "model": model, "latency_ms": round(elapsed_ms), "error": None}
+        except Exception as e:
+            return {"ok": False, "model": model, "latency_ms": 0, "error": str(e)[:200]}
+    else:
+        result = await test_connection(base_url, api_key, model)
+        return result
+
+
+@router.post("/admin/tenant/{tenant_id}/toggle-active", response_class=HTMLResponse, include_in_schema=False)
+@limiter.limit("5/minute")
+async def admin_toggle_active(
+    tenant_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(_require_admin),
+):
+    """Toggle tenant active/inactive. On deactivate, shutdown and remove bot. On activate, init bot."""
+    from state import register_app, remove_app
+
+    result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+    tenant = result.scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(404, "Tenant not found")
+
+    if tenant.active:
+        # Deactivate: shutdown bot, remove from registry
+        tg_app = get_app(tenant.bot_token)
+        if tg_app is not None:
+            try:
+                await tg_app.shutdown()
+            except Exception as e:
+                logger.warning("shutdown failed for tenant %s: %s", tenant.slug, e)
+        remove_app(tenant.bot_token)
+        tenant.active = False
+        logger.info("Admin deactivated tenant %s", tenant.slug)
+    else:
+        # Activate: init bot with domain discovery
+        from rag import http_client
+        domain = await get_ngrok_domain(http_client, max_retries=1) or settings.app_domain
+        ok = await init_tenant_bot(tenant, domain)
+        if ok:
+            tg_app = get_app(tenant.bot_token)
+            if tg_app:
+                register_app(tenant.bot_token, tg_app)
+            tenant.active = True
+            logger.info("Admin activated tenant %s", tenant.slug)
+        else:
+            tenants, doc_stats = await _admin_context(db)
+            return _render_admin(
+                tenants, doc_stats=doc_stats,
+                error=f"Failed to activate tenant '{tenant.slug}'. Check the Bot Token.",
+            )
+
+    db.add(tenant)
+    await db.commit()
+
+    tenants, doc_stats = await _admin_context(db)
+    status = "activado" if tenant.active else "desactivado"
+    return _render_admin(
+        tenants, doc_stats=doc_stats,
+        message=f"✓ Tenant '{tenant.slug}' {status}.",
+    )
+
+
+@router.get("/admin/health-data", include_in_schema=False)
+@limiter.limit("20/minute")
+async def admin_health_data(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(_require_admin),
+):
+    """Health check JSON — LLM, embedding, DB, tenant stats. Called via AJAX."""
+    from llm import test_connection
+    from config_overlay import get_setting
+
+    # LLM test
+    llm_result = await test_connection(
+        get_setting("llm_base_url", settings.llm_base_url),
+        get_setting("llm_api_key", settings.effective_llm_api_key),
+        get_setting("llm_model", settings.llm_model),
+    )
+
+    # DB version
+    try:
+        result = await db.execute(text("SELECT version()"))
+        db_version = result.scalar()
+        db_ok = True
+    except Exception:
+        db_version = "unknown"
+        db_ok = False
+
+    # Tenant stats
+    tenant_result = await db.execute(select(Tenant))
+    all_tenants = tenant_result.scalars().all()
+    active_count = sum(1 for t in all_tenants if t.active)
+
+    # Chunk count
+    chunk_result = await db.execute(select(func.count(DocumentChunk.id)))
+    chunk_count = chunk_result.scalar() or 0
+
+    return {
+        "llm": llm_result,
+        "db": {"ok": db_ok, "version": db_version},
+        "tenants": {"active": active_count, "total": len(all_tenants)},
+        "chunks": {"total": chunk_count},
+    }

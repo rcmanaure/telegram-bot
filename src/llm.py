@@ -21,6 +21,7 @@ import httpx
 from openai import AsyncOpenAI, APIError, APITimeoutError, RateLimitError
 
 from config import settings
+from config_overlay import get_setting, get_setting_int
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,7 @@ logger = logging.getLogger(__name__)
 _chat_client = httpx.AsyncClient(
     timeout=60.0,
     limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+    transport=httpx.AsyncHTTPTransport(retries=2),
 )
 
 # Embedding client is lazy-initialized to avoid crashing at import time
@@ -41,12 +43,18 @@ def _get_embedding_client() -> AsyncOpenAI:
     global _embedding_client
     if _embedding_client is None:
         _embedding_client = AsyncOpenAI(
-            api_key=settings.effective_embedding_api_key,
-            base_url=settings.embedding_base_url,
+            api_key=get_setting("embedding_api_key", settings.effective_embedding_api_key),
+            base_url=get_setting("embedding_base_url", settings.embedding_base_url),
             max_retries=2,
             timeout=30.0,
         )
     return _embedding_client
+
+
+def reset_embedding_client() -> None:
+    """Force recreation of embedding client on next call (after config overlay change)."""
+    global _embedding_client
+    _embedding_client = None
 
 
 # ─── Error messages ──────────────────────────────────────────────────────────
@@ -87,17 +95,20 @@ async def call_chat(
     if model:
         models = [model]
     else:
-        models = [settings.llm_model]
-        if settings.llm_fallback_model:
-            models.append(settings.llm_fallback_model)
+        models = [get_setting("llm_model", settings.llm_model)]
+        fallback = get_setting("llm_fallback_model", settings.llm_fallback_model)
+        if fallback:
+            models.append(fallback)
 
     # Conditional HTTP-Referer header: only sent when using OpenRouter
     # (E2: other providers may reject or ignore it)
+    base_url = get_setting("llm_base_url", settings.llm_base_url)
+    api_key = get_setting("llm_api_key", settings.effective_llm_api_key)
     headers = {
-        "Authorization": f"Bearer {settings.effective_llm_api_key}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    if "openrouter.ai" in settings.llm_base_url:
+    if "openrouter.ai" in base_url:
         headers["HTTP-Referer"] = "https://github.com/ruben-portfolio"
 
     last_error: Exception | None = None
@@ -105,7 +116,7 @@ async def call_chat(
         t0 = time.monotonic()
         try:
             response = await _chat_client.post(
-                f"{settings.llm_base_url}/chat/completions",
+                f"{base_url}/chat/completions",
                 headers=headers,
                 json={
                     "model": model,
@@ -119,15 +130,16 @@ async def call_chat(
             elapsed_ms = (time.monotonic() - t0) * 1000
             logger.info(
                 "llm_call provider=%s model=%s latency_ms=%.0f ok=true",
-                settings.llm_base_url, model, elapsed_ms,
+                base_url, model, elapsed_ms,
             )
-            if model != settings.llm_model:
+            primary_model = get_setting("llm_model", settings.llm_model)
+            if model != primary_model:
                 logger.warning(
                     "llm_failover primary=%s fallback=%s error_type=%s latency_ms=%.0f",
-                    settings.llm_model, model, type(last_error).__name__ if last_error else "unknown", elapsed_ms,
+                    primary_model, model, type(last_error).__name__ if last_error else "unknown", elapsed_ms,
                 )
             return content
-        except (httpx.HTTPError, KeyError, IndexError) as e:
+        except (httpx.HTTPError, KeyError, IndexError, json.JSONDecodeError) as e:
             elapsed_ms = (time.monotonic() - t0) * 1000
             logger.warning(
                 "llm_call_failed provider=%s model=%s error=%s latency_ms=%.0f",
@@ -139,7 +151,7 @@ async def call_chat(
     # All models failed
     logger.error(
         "llm_all_failed provider=%s models=%s",
-        settings.llm_base_url, models,
+        base_url, models,
     )
     raise RuntimeError(_error_message(last_error))
 
@@ -162,7 +174,7 @@ async def call_embeddings(texts: list[str]) -> list[list[float]]:
         batch = texts[i:i + batch_size]
         try:
             response = await _get_embedding_client().embeddings.create(
-                model=settings.embedding_model,
+                model=get_setting("embedding_model", settings.embedding_model),
                 input=batch,
             )
             all_embeddings.extend([item.embedding for item in response.data])
@@ -268,25 +280,33 @@ async def validate_config() -> None:
     - Warn if EMBEDDING_BASE_URL points to Ollama Cloud (no embeddings).
     - Log config summary.
     """
+    llm_url = get_setting("llm_base_url", settings.llm_base_url)
+    llm_m = get_setting("llm_model", settings.llm_model)
+    llm_fb = get_setting("llm_fallback_model", settings.llm_fallback_model)
+    emb_url = get_setting("embedding_base_url", settings.embedding_base_url)
+    emb_m = get_setting("embedding_model", settings.embedding_model)
+    emb_dim = get_setting_int("embedding_dim", settings.embedding_dim)
+
     logger.info(
         "LLM config: provider=%s model=%s fallback=%s",
-        settings.llm_base_url, settings.llm_model, settings.llm_fallback_model or "(disabled)",
+        llm_url, llm_m, llm_fb or "(disabled)",
     )
     logger.info(
         "Embedding config: provider=%s model=%s dim=%d",
-        settings.embedding_base_url, settings.embedding_model, settings.embedding_dim,
+        emb_url, emb_m, emb_dim,
     )
 
     # Warn if EMBEDDING_BASE_URL points to Ollama Cloud (no embedding support)
-    if "ollama.com" in settings.embedding_base_url:
+    if "ollama.com" in emb_url:
         logger.warning(
             "EMBEDDING_BASE_URL (%s) points to Ollama Cloud, which does not support embeddings. "
             "Set EMBEDDING_BASE_URL to an OpenAI-compatible embedding endpoint.",
-            settings.embedding_base_url,
+            emb_url,
         )
 
     # Check embedding dimension
-    if not settings.effective_embedding_api_key:
+    emb_api_key = get_setting("embedding_api_key", settings.effective_embedding_api_key)
+    if not emb_api_key:
         logger.warning(
             "EMBEDDING_API_KEY not set — skipping dimension check. "
             "Set EMBEDDING_API_KEY or OPENROUTER_API_KEY to enable embeddings."
@@ -296,14 +316,14 @@ async def validate_config() -> None:
     try:
         result = await call_embeddings(["dimension check"])
         actual_dim = len(result[0])
-        if actual_dim != settings.embedding_dim:
+        if actual_dim != emb_dim:
             logger.error(
                 "Embedding dimension mismatch: model produces %d-dim vectors, "
                 "but EMBEDDING_DIM=%d. Check EMBEDDING_MODEL and EMBEDDING_DIM.",
-                actual_dim, settings.embedding_dim,
+                actual_dim, emb_dim,
             )
         else:
-            logger.info("Embedding dimension check passed: %d-dim vectors match EMBEDDING_DIM=%d", actual_dim, settings.embedding_dim)
+            logger.info("Embedding dimension check passed: %d-dim vectors match EMBEDDING_DIM=%d", actual_dim, emb_dim)
     except Exception as e:
         logger.error("Embedding dimension check failed: %s", e)
 

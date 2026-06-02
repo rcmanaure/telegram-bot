@@ -264,7 +264,7 @@ class WhatsAppAdapter:
                     "messaging_product": "whatsapp",
                     "recipient_type": "individual",
                     "to": user_id,
-                    "type": "reaction",
+                    "type": "typing",
                 },
             )
         except Exception:

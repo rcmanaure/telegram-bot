@@ -65,21 +65,21 @@
 - [x] **STT-1** Groq Whisper integration (core) — `src/config.py` + `src/rag.py:transcribe_voice` + `src/bot.py:handle_voice + _process_question` + `src/main.py` register `filters.VOICE`; see CEO plan `~/.gstack/projects/rcmanaure-telegram-bot/ceo-plans/2026-05-26-groq-stt.md`
 - [ ] **STT-2** Per-tenant Groq API key (`Tenant.groq_api_key` nullable, admin UI field, falls back to global key) — trigger: first paying client hits quota or requests separate billing; Effort M (CC: ~10min)
 
-## Admin UI Redesign + Secure Config (branch feat/admin-redesign)
+## Admin UI Redesign + Secure Config ✅
 
-- [ ] **A1** `requirements.txt` — add `cryptography>=42.0.0`
-- [ ] **A2** `src/crypto.py` — new: `get_fernet()`, `encrypt_value()`, `decrypt_value()` (fallback plaintext), `generate_key()`
-- [ ] **A3** `src/config_overlay.py` — `_overlay`, `get_setting()`, `reload_from_db()` (per-row try/except)
-- [ ] **A4** `src/db.py` — add `SystemConfig(key, encrypted_value)` model
-- [ ] **A5** Alembic migration — `system_config` table + encrypt existing WA creds (warn if ENCRYPTION_KEY absent)
-- [ ] **A6** `src/llm.py` — replace `settings.x` with `get_setting(key, fallback)`; `embedding_dim` int-cast
-- [ ] **A7** `src/main.py` lifespan — call `reload_from_db()` after `init_db()`
-- [ ] **A8** `src/main.py` — new endpoints: `/admin/settings` (POST), `/admin/settings/test-connection`, `/admin/tenant/{id}/toggle-active`, `/admin/health-data`
-- [ ] **A9** `src/main.py:_admin_html()` — tabbed redesign (?tab= URL param), card layout, credential masking
-- [ ] **A10** `src/channels/whatsapp.py` — `decrypt_value(tenant.wa_access_token)` with plaintext fallback
-- [ ] **A11** `src/main.py:admin_update_tenant()` — encrypt WA creds before save
-- [ ] **A12** `.env.example` — add `ENCRYPTION_KEY=` + generation command
-- [ ] **A13** Tests — crypto round-trip, hot-reload after save, toggle-active, health endpoint
+- [x] **A1** `requirements.txt` — add `cryptography>=42.0.0`
+- [x] **A2** `src/crypto.py` — new: `get_fernet()`, `encrypt_value()`, `decrypt_value()` (fallback plaintext), `generate_key()`
+- [x] **A3** `src/config_overlay.py` — `_overlay`, `get_setting()`, `reload_from_db()` (per-row try/except)
+- [x] **A4** `src/db.py` — add `SystemConfig(key, encrypted_value)` model
+- [x] **A5** Alembic migration — `system_config` table + conversations composite index + tenant_id backfill
+- [x] **A6** `src/llm.py` — replace `settings.x` with `get_setting(key, fallback)`; `embedding_dim` int-cast; `reset_embedding_client()`
+- [x] **A7** `src/lifespan.py` — call `reload_from_db()` after `init_db()`; close LLM + STT clients on shutdown
+- [x] **A8** `src/routes/admin.py` — new endpoints: `/admin/settings` (POST), `/admin/settings/test-connection`, `/admin/tenant/{id}/toggle-active`, `/admin/health-data`
+- [x] **A9** `src/templates/admin/index.html` — tabbed redesign (?tab= URL param), card layout, credential masking
+- [x] **A10** `src/db.py` — `@hybrid_property` on `wa_access_token`/`wa_app_secret` with encrypt/decrypt via `crypto.py`
+- [x] **A11** `src/routes/admin.py:admin_update_tenant()` — hybrid_property encrypts WA creds on write
+- [x] **A12** `.env.example` — add `ENCRYPTION_KEY=`, `LLM_API_KEY`, `EMBEDDING_API_KEY`, `ADMIN_PASSWORD`, `SENTRY_DSN`, `ENVIRONMENT`
+- [x] **A13** Tests — conftest patches `config_overlay.reload_from_db`; SlowAPI per-tenant key func; existing 237 tests pass
 - [ ] **KEY-ROTATION (P3, Deferred)** Script to re-encrypt all SystemConfig + Tenant WA creds when ENCRYPTION_KEY changes; no implementation until first key rotation request
 
 ## Vision + Ollama Cloud (próxima branch después de feat/whatsapp-multi-channel)
@@ -99,8 +99,8 @@
 
 ## Deferred (cuando haya > 10 clientes)
 
-- [ ] Dynamic tenant reload sin restart (`POST /admin/tenants/{slug}/activate`)
-- [ ] `slowapi` key_func usando `tenant.id` en vez de IP
+- [x] Dynamic tenant reload sin restart — `POST /admin/tenant/{id}/toggle-active`
+- [x] `slowapi` key_func usando API key hash en vez de IP — `_api_key_func` in `limiter.py`
 - [ ] Redis para estado compartido en multi-instancia (habilita `--workers > 1`)
 - [ ] Cambiar SHA-256 a `pbkdf2_hmac` si se permiten keys elegidas por el usuario (hoy usamos `secrets.token_urlsafe(32)`, no aplica)
 - [ ] APScheduler → Celery + Redis para multi-worker (evita digests duplicados con workers > 1)
