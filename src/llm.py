@@ -69,6 +69,9 @@ def _error_message(exc: Exception) -> str:
             return "LLM service is rate-limited. Please try again in a moment."
         body = exc.response.json() if exc.response.headers.get("content-type", "").startswith("application/json") else exc.response.text
         msg = body.get("error", {}).get("message", str(body)) if isinstance(body, dict) else body
+        # Vision-specific 404: provider can't process image input
+        if status == 404 and isinstance(msg, str) and "image input" in msg.lower():
+            return "El modelo configurado no soporta procesar imágenes. Verificá LLM_VISION_MODEL en la configuración."
         return f"LLM service error ({status}): {msg}"
     if isinstance(exc, httpx.TimeoutException):
         return "LLM service timed out. Please try again."
