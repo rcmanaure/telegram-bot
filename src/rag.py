@@ -364,6 +364,51 @@ async def _reformulate_query(question: str, history: list[dict]) -> str:
         return question
 
 
+async def _extract_search_terms_from_images(images: list[dict]) -> str:
+    """Use the vision model to extract key search terms from images.
+
+    When a user sends an image with no caption (or a generic default question),
+    the vector search has nothing specific to match against. This function
+    calls the vision model with a low-token extraction prompt to identify the
+    key terms (e.g., study names, medical terms) that can be used as a
+    search query for the RAG vector search.
+
+    Returns a search query string, or empty string on failure.
+    """
+    vision_model = get_setting("llm_vision_model", settings.llm_vision_model)
+    if not vision_model:
+        return ""
+
+    content: list[dict] = [
+        {
+            "type": "text",
+            "text": (
+                "Extraé los términos clave de esta imagen que podrían usarse para "
+                "buscar información en una base de datos. Por ejemplo: nombres de "
+                "estudios médicos, diagnósticos, o procedimientos. Respondé SOLO con "
+                "los términos separados por comas, nada más. Ejemplo: Biopsia de "
+                "apéndice cecal, Anexo de apéndice cecal"
+            ),
+        },
+    ]
+    for img in images:
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:{img['mime']};base64,{img['b64']}"},
+        })
+
+    messages = [{"role": "user", "content": content}]
+    try:
+        result = await call_chat(messages, max_tokens=80, temperature=0.0, model=vision_model)
+        result = result.strip()
+        if result:
+            logger.info("vision_extracted_terms terms=%r", result[:120])
+        return result
+    except Exception as e:
+        logger.warning("vision_extract_failed: %s", e)
+        return ""
+
+
 # ─── LLM calls (delegated to llm.call_chat) ──────────────────────────────────
 
 
@@ -869,8 +914,42 @@ async def rag_query(
             is_low_confidence = True
 
     if not context:
-        # Image-only path: when user sent image(s) but no text context was found,
-        # still process the images through the vision model instead of falling to triage.
+        # Vision-augmented retrieval: when user sent image(s) but no text context
+        # was found, use the vision model to extract key terms from the image,
+        # then retry the vector search with those terms. This handles the common
+        # case where the user sends a photo of a medical order with no caption —
+        # the generic default question won't match any documents, but the actual
+        # study names in the image (e.g. "Biopsia de apéndice cecal") will.
+        if images:
+            vision_query = await _extract_search_terms_from_images(images)
+            if vision_query and vision_query != search_query:
+                logger.info(
+                    "vision_augmented_retrieval ns=%s user=%s original_q=%r vision_q=%r",
+                    namespace, user_id, search_query[:60], vision_query[:60],
+                )
+                vision_context = await retrieve_context(db, vision_query, namespace)
+                vision_raw = vision_context
+                vision_context = [c for c in vision_context if c["similarity"] >= MIN_SIMILARITY]
+                if not vision_context:
+                    # Try low-confidence fallback with vision-extracted terms
+                    vision_context = [c for c in vision_raw if c["similarity"] >= LOW_MIN_SIMILARITY]
+                    if vision_context:
+                        is_low_confidence = True
+                if vision_context:
+                    context = vision_context
+                    raw_results = vision_raw
+                    search_query = vision_query
+                    logger.info(
+                        "vision_retrieval_hit ns=%s q=%r top_scores=%s",
+                        namespace, vision_query[:60],
+                        [(round(c["similarity"], 3), c["source"], c["content"][:40]) for c in context[:3]],
+                    )
+
+    # If vision-augmented retrieval found context, fall through to the main
+    # generate_answer path below. Otherwise, handle the no-context cases.
+    if not context:
+        # Image-only path (after vision-augmented retrieval also failed to find context):
+        # process the images through the vision model without document context.
         if images:
             answer = await generate_answer(
                 [], question, history, expertise_area,
