@@ -695,6 +695,15 @@ async def rag_query(
         await _log_unanswered(db, namespace, question, user_id, "needs_human", tenant_id)
         return answer, [], "needs_human"
 
+    # Vision guard: if user sent an image but no vision model is configured,
+    # skip the LLM call entirely — sending image payloads to text-only models
+    # produces opaque 404 errors from the provider.
+    if image_b64 and not get_setting("llm_vision_model", settings.llm_vision_model):
+        logger.info("vision_guard ns=%s user=%s — no vision model configured", namespace, user_id)
+        answer = "No puedo procesar imágenes en este momento. Por favor, enviá tu consulta por texto."
+        await save_turn(db, user_id, namespace, question or "📷 [imagen]", answer, channel=channel, tenant_id=tenant_id)
+        return answer, [], "no_vision_model"
+
     # Query reformulation: resolve pronouns/references using conversation history
     # Use reformulated query for vector search, original question for LLM answer generation
     history = await get_history(db, user_id, namespace)
