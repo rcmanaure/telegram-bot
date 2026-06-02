@@ -295,20 +295,25 @@ async def _triage_response(
                 "- Do NOT start with greetings ('Hola', 'Hi', '¡Hola!', etc.).\n"
                 "- Do NOT ask 'How can I help you?' or similar open-ended questions.\n"
                 "- Answer directly and concisely.\n"
-                "- Respond in the same language the user wrote in.\n\n"
+                "- Respond in the same language the user wrote in.\n"
+                "- NEVER say the question is off-topic when it relates to the expertise area. "
+                "Questions about the expertise area without document support = 'ambiguous'.\n\n"
                 "IMPORTANT: Respond with ONLY a JSON object, no markdown, no preamble:\n"
                 '{"intent": "<greeting|off_topic|needs_human|ambiguous>", "reply": "<reply text>"}\n\n'
                 "Intent definitions:\n"
                 "- greeting: purely social/phatic messages only (hi, hello, thanks, bye, how are you). "
                 "NOT questions about capabilities or what you can do.\n"
                 "- ambiguous: question that COULD relate to the area but no info was found — "
-                "tell the user what topics you can help with and invite them to ask more specifically.\n"
-                "- off_topic: question clearly unrelated to your area of expertise.\n"
+                "tell the user what topics you can help with and invite them to ask more specifically. "
+                "This includes questions ABOUT the expertise area when no specific document matches.\n"
+                "- off_topic: question clearly and obviously unrelated to your area of expertise. "
+                "When in doubt, choose 'ambiguous' over 'off_topic'.\n"
                 "- needs_human: user explicitly wants to speak with a real person.\n\n"
                 "Examples:\n"
                 "'hi' → greeting\n"
                 "'que planes tienes?' → ambiguous (could be about service plans)\n"
                 "'que puedes hacer?' → ambiguous (asking about capabilities)\n"
+                "'cuánto cuesta una biopsia?' → ambiguous (relates to expertise area even if no doc found)\n"
                 "'como se hace una pizza?' → off_topic\n"
                 "'quiero hablar con un humano' → needs_human"
                 f"{questions_hint}"
@@ -323,7 +328,7 @@ async def _triage_response(
     except Exception as e:
         logger.warning("_triage_response failed: %s", e)
         area_clause = f" Mi área de expertise: {expertise_area}." if expertise_area else ""
-        return "off_topic", f"Eso está fuera de mi área de expertise.{area_clause} Consultá directamente con nosotros."
+        return "ambiguous", f"No encontré información específica sobre eso en mis documentos.{area_clause} Probá reformulando tu consulta."
 
 
 async def generate_answer(
