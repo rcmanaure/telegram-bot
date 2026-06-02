@@ -153,6 +153,24 @@ class WaServiceWindow(Base):
     )
 
 
+class Feedback(Base):
+    """User feedback (thumbs up/down) on bot responses."""
+    __tablename__ = "feedback"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True)
+    user_id = Column(String(64), nullable=False, index=True)
+    namespace = Column(String(128), nullable=False)
+    message_id = Column(String(64), nullable=True)   # TG message_id or WA message ID
+    rating = Column(String(16), nullable=False)        # "positive" or "negative"
+    comment = Column(Text, nullable=True)              # optional follow-up text
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index("ix_feedback_ns_created", "namespace", "created_at"),
+    )
+
+
 # ─── Engine + Session ────────────────────────────────────────────────────────
 
 engine = create_async_engine(

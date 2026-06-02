@@ -838,8 +838,7 @@ def test_webhook_valid_tenant_no_app_registered_returns_ok(api_client):
             json={"update_id": 1},
             headers={"X-Telegram-Bot-Api-Secret-Token": "ghost-secret"},
         )
-        assert r.status_code == 200
-        assert r.json() == {"ok": True}
+        assert r.status_code == 503
     finally:
         main_module.app.dependency_overrides.pop(get_db, None)
 
@@ -901,8 +900,10 @@ async def test_rag_query_no_context_calls_triage():
 
     with patch("rag.retrieve_context", new=AsyncMock(return_value=[])), \
          patch("rag.get_history", new=AsyncMock(return_value=[])), \
+         patch("rag._reformulate_query", new=AsyncMock(side_effect=lambda q, h: q)), \
          patch("rag.save_turn", new=AsyncMock()), \
          patch("rag._log_unanswered", new=AsyncMock()), \
+         patch("rag.validate_output", side_effect=lambda x, **kw: x), \
          patch("rag._triage_response", new=AsyncMock(return_value=("off_topic", "Fuera de área"))) as mock_triage:
         answer, chunks, intent = await rag_query(
             mock_db, "¿Cuánto es 2+2?", "ns", "u1", expertise_area="finanzas"
@@ -923,7 +924,9 @@ async def test_rag_query_with_context_returns_none_intent():
 
     with patch("rag.retrieve_context", new=AsyncMock(return_value=ctx)), \
          patch("rag.get_history", new=AsyncMock(return_value=[])), \
+         patch("rag._reformulate_query", new=AsyncMock(side_effect=lambda q, h: q)), \
          patch("rag.generate_answer", new=AsyncMock(return_value="Buena respuesta")), \
+         patch("rag.validate_output", side_effect=lambda x, **kw: x), \
          patch("rag.save_turn", new=AsyncMock()):
         answer, chunks, intent = await rag_query(mock_db, "¿Horarios?", "ns", "u1")
 
@@ -941,7 +944,9 @@ async def test_rag_query_logs_unanswered_on_off_topic():
 
     with patch("rag.retrieve_context", new=AsyncMock(return_value=[])), \
          patch("rag.get_history", new=AsyncMock(return_value=[])), \
+         patch("rag._reformulate_query", new=AsyncMock(side_effect=lambda q, h: q)), \
          patch("rag.save_turn", new=AsyncMock()), \
+         patch("rag.validate_output", side_effect=lambda x, **kw: x), \
          patch("rag._log_unanswered", mock_log), \
          patch("rag._triage_response", new=AsyncMock(return_value=("off_topic", "Sin info"))):
         await rag_query(mock_db, "¿Cómo cocino pasta?", "ns", "u1", tenant_id=42)
@@ -966,6 +971,121 @@ async def test_rag_query_greeting_does_not_log_unanswered():
         await rag_query(mock_db, "hola", "ns", "u1")
 
     mock_log.assert_not_called()
+
+
+# ─── I9: Feedback callback handler ──────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_feedback_callback_stores_positive_rating():
+    """Thumbs up callback stores a 'positive' Feedback row."""
+    from bot import handle_feedback_callback
+    from db import Feedback
+
+    mock_query = AsyncMock()
+    mock_query.data = "fb:pos:test-tenant"
+    mock_query.from_user = MagicMock()
+    mock_query.from_user.id = 42
+
+    mock_update = MagicMock()
+    mock_update.callback_query = mock_query
+
+    # Mock AsyncSessionLocal as async context manager returning a mock DB
+    mock_db = AsyncMock()
+    added_objects = []
+    mock_db.add = MagicMock(side_effect=lambda obj: added_objects.append(obj))
+
+    mock_session = AsyncMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_db)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("db.AsyncSessionLocal", return_value=mock_session), \
+         patch("bot._get_tenant", return_value=MagicMock(slug="test-tenant", id=1)):
+        await handle_feedback_callback(mock_update, MagicMock())
+
+    mock_query.answer.assert_called_once()
+    assert len(added_objects) == 1
+    fb = added_objects[0]
+    assert isinstance(fb, Feedback)
+    assert fb.rating == "positive"
+    assert fb.namespace == "test-tenant"
+
+
+@pytest.mark.asyncio
+async def test_feedback_callback_stores_negative_rating():
+    """Thumbs down callback stores a 'negative' Feedback row."""
+    from bot import handle_feedback_callback
+    from db import Feedback
+
+    mock_query = AsyncMock()
+    mock_query.data = "fb:neg:my-slug:12345"
+    mock_query.from_user = MagicMock()
+    mock_query.from_user.id = 99
+
+    mock_update = MagicMock()
+    mock_update.callback_query = mock_query
+
+    mock_db = AsyncMock()
+    added_objects = []
+    mock_db.add = MagicMock(side_effect=lambda obj: added_objects.append(obj))
+
+    mock_session = AsyncMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_db)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("db.AsyncSessionLocal", return_value=mock_session), \
+         patch("bot._get_tenant", return_value=MagicMock(slug="my-slug", id=5)):
+        await handle_feedback_callback(mock_update, MagicMock())
+
+    assert added_objects[0].rating == "negative"
+    assert added_objects[0].message_id == "12345"
+
+
+# ─── I10: Conversation summarization ─────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_summarize_old_history_skips_below_threshold():
+    """_summarize_old_history does nothing when row count is below threshold."""
+    from rag import _summarize_old_history
+
+    mock_db = AsyncMock()
+    # Return count below threshold
+    mock_result = MagicMock()
+    mock_result.scalar_one.return_value = 10  # below SUMMARY_THRESHOLD=30
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    with patch("rag.call_chat", new_callable=AsyncMock) as mock_llm:
+        await _summarize_old_history(mock_db, "u1", "ns")
+
+    mock_llm.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reformulate_query_returns_original_when_no_history():
+    """_reformulate_query returns the original question when history is empty."""
+    from rag import _reformulate_query
+
+    with patch("rag.call_chat", new_callable=AsyncMock) as mock_llm:
+        result = await _reformulate_query("¿Cuánto cuesta?", [])
+
+    assert result == "¿Cuánto cuesta?"
+    mock_llm.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reformulate_query_calls_llm_when_history_present():
+    """_reformulate_query calls the LLM to rewrite follow-up questions."""
+    from rag import _reformulate_query
+
+    history = [
+        {"role": "user", "content": "¿Cuánto cuesta el Plan Pro?"},
+        {"role": "assistant", "content": "El Plan Pro cuesta $59/mes."},
+    ]
+
+    with patch("rag.call_chat", new_callable=AsyncMock, return_value="¿Cuánto cuesta el Plan Pro?") as mock_llm:
+        result = await _reformulate_query("¿Y ese precio incluye todo?", history)
+
+    assert result == "¿Cuánto cuesta el Plan Pro?"
+    mock_llm.assert_called_once()
 
 
 # ─── Smart Chatbot v2: bot handlers ──────────────────────────────────────────

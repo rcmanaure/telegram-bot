@@ -4,7 +4,7 @@ import logging
 
 from db import AsyncSessionLocal, Tenant
 from channels.whatsapp import WhatsAppAdapter, check_wa_service_window, update_wa_service_window, send_wa_template
-from channels.protocol import ChannelSendError
+from channels.protocol import ChannelButton, ChannelSendError
 from limiter import wa_rate_limiter
 from rag import rag_query, _log_unanswered
 from security import sanitize_user_input
@@ -38,6 +38,34 @@ async def handle_wa_message(
     """
     user_id = wa_msg.user_id
     namespace = tenant.slug
+
+    # Handle feedback button callbacks (thumbs up/down)
+    if wa_msg.reply_to and wa_msg.reply_to.startswith("fb:"):
+        from db import Feedback
+        parts = wa_msg.reply_to.split(":")
+        if len(parts) >= 3:
+            rating = "positive" if parts[1] == "pos" else "negative"
+            try:
+                async with AsyncSessionLocal() as db:
+                    db.add(Feedback(
+                        tenant_id=tenant.id,
+                        user_id=user_id,
+                        namespace=namespace,
+                        rating=rating,
+                    ))
+                    await db.commit()
+            except Exception:
+                logger.exception("wa_feedback_store_failed user=%s", user_id)
+            # Acknowledge feedback
+            adapter = create_wa_adapter(tenant)
+            if adapter:
+                emoji = "👍" if rating == "positive" else "👎"
+                try:
+                    async with adapter:
+                        await adapter.send_reply(user_id, f"{emoji} ¡Gracias por tu feedback!")
+                except ChannelSendError:
+                    pass
+        return
 
     # Create adapter once for the entire message lifecycle
     adapter = create_wa_adapter(tenant)
@@ -149,6 +177,7 @@ async def handle_wa_message(
                     channel="whatsapp",
                     image_b64=image_b64,
                     image_mime=image_mime,
+                    tenant=tenant,
                 )
             except Exception as e:
                 logger.error("wa_rag_error user=%s: %s", user_id, e)
@@ -158,15 +187,24 @@ async def handle_wa_message(
                     pass
                 return
 
-            # Send reply with sources footer
+            # Send reply with sources footer + feedback buttons
             source_footer = ""
             if chunks:
                 sources = set(c["source"] for c in chunks if c.get("source"))
                 if sources:
                     source_footer = "\n\n📎 Fuentes: " + ", ".join(sources)
 
+            # Add thumbs up/down feedback buttons (WhatsApp allows max 3)
+            buttons = [
+                ChannelButton(label="👍", callback_data=f"fb:pos:{namespace}"),
+                ChannelButton(label="👎", callback_data=f"fb:neg:{namespace}"),
+            ]
+            # Escalation: replace feedback buttons with contact button
+            if intent in {"off_topic", "needs_human"} and tenant.contact_url:
+                buttons = [ChannelButton(label="Contactar", url=tenant.contact_url)]
+
             try:
-                await adapter.send_reply(user_id, answer + source_footer)
+                await adapter.send_reply(user_id, answer + source_footer, buttons=buttons)
             except ChannelSendError as e:
                 logger.warning("wa_send_failed user=%s: %s — retrying once", user_id, e)
                 await asyncio.sleep(2)
