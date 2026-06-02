@@ -172,21 +172,6 @@ async def _process_question(
             reply_markup = InlineKeyboardMarkup([[
                 InlineKeyboardButton("Contactar", url=tenant.contact_url)
             ]])
-        # Normal answers: add thumbs up/down feedback buttons
-        elif intent not in ("greeting",) and intent is not None:
-            # Triaged answers (off_topic, needs_human, ambiguous) — feedback useful
-            ns = tenant.slug
-            reply_markup = InlineKeyboardMarkup([[
-                InlineKeyboardButton("👍", callback_data=f"fb:pos:{ns}"),
-                InlineKeyboardButton("👎", callback_data=f"fb:neg:{ns}"),
-            ]])
-        elif intent is None:
-            # Answered from docs — always show feedback buttons
-            ns = tenant.slug
-            reply_markup = InlineKeyboardMarkup([[
-                InlineKeyboardButton("👍", callback_data=f"fb:pos:{ns}"),
-                InlineKeyboardButton("👎", callback_data=f"fb:neg:{ns}"),
-            ]])
 
         await update.message.reply_text(
             full_reply, parse_mode="Markdown", reply_markup=reply_markup
@@ -299,64 +284,16 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await _process_question(update, ctx, question, image_b64=image_b64, image_mime=mime)
 
 
-# ─── Feedback callback handler ──────────────────────────────────────────────────
-
-async def handle_feedback_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Handle thumbs up/down callback from inline feedback buttons.
-
-    Payload format: fb:{pos|neg}:{namespace}[:{msg_id}]
-    """
-    from db import AsyncSessionLocal, Feedback
-
-    query = update.callback_query
-    await query.answer()
-
-    payload = query.data or ""
-    parts = payload.split(":")
-    if len(parts) < 3 or parts[0] != "fb":
-        logger.warning("handle_feedback_callback: invalid payload %r", payload)
-        return
-
-    rating = "positive" if parts[1] == "pos" else "negative"
-    namespace = parts[2]
-    msg_id = parts[3] if len(parts) > 3 else None
-
-    uid = str(query.from_user.id)
-    tenant = _get_tenant(ctx)
-
-    try:
-        async with AsyncSessionLocal() as db:
-            db.add(Feedback(
-                tenant_id=tenant.id if tenant else None,
-                user_id=uid,
-                namespace=namespace,
-                message_id=msg_id,
-                rating=rating,
-            ))
-            await db.commit()
-    except Exception:
-        logger.exception("handle_feedback_callback: failed to store feedback for uid=%s", uid)
-
-    # Acknowledge feedback — edit message to confirm and remove buttons
-    emoji = "👍" if rating == "positive" else "👎"
-    try:
-        await query.edit_message_reply_markup(reply_markup=None)
-        await query.edit_message_text(f"{emoji} ¡Gracias por tu feedback!")
-    except TelegramError:
-        pass  # Message may have been deleted or already edited
-
-
 # ─── Handler registration ──────────────────────────────────────────────────────
 
 def register_handlers(tg_app):
     """Register all Telegram bot command and message handlers."""
-    from telegram.ext import CallbackQueryHandler, CommandHandler, MessageHandler, filters
+    from telegram.ext import CommandHandler, MessageHandler, filters
     tg_app.add_handler(CommandHandler("start", cmd_start))
     tg_app.add_handler(CommandHandler("help", cmd_help))
     tg_app.add_handler(CommandHandler("sources", cmd_sources))
     tg_app.add_handler(CommandHandler("clear", cmd_clear))
     tg_app.add_handler(CommandHandler("contactar", cmd_contactar))
-    tg_app.add_handler(CallbackQueryHandler(handle_feedback_callback, pattern=r"^fb:"))
     tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     tg_app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     tg_app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
