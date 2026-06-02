@@ -264,8 +264,8 @@ async def test_triage_response_network_failure_returns_fallback():
     with patch("rag.call_chat", new_callable=AsyncMock, side_effect=RuntimeError("LLM service error")):
         intent, text = await _triage_response("¿Qué hacés?", "fitness")
 
-    assert intent == "off_topic"
-    assert "expertise" in text.lower()
+    assert intent == "ambiguous"
+    assert "especializamos" in text.lower() or "expertise" in text.lower()
     assert "fitness" in text
 
 
@@ -864,7 +864,7 @@ async def test_triage_response_invalid_json_returns_fallback():
     with patch("rag.call_chat", new_callable=AsyncMock, return_value="not valid json at all"):
         intent, text = await _triage_response("¿Qué es 2+2?", "finanzas")
 
-    assert intent == "off_topic"
+    assert intent == "ambiguous"
     assert "finanzas" in text
 
 

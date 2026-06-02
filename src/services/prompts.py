@@ -17,8 +17,8 @@ def build_system_prompt(
     When from_web is True, adds web-source framing.
     When example_questions is provided, includes them in the prompt for better triage responses.
     """
-    area_clause = f" Mi área de expertise: {expertise_area}." if expertise_area else ""
-    off_topic_reply = f"Eso está fuera de mi área de expertise.{area_clause} Consultá directamente con nosotros."
+    area_clause = f" Nos especializamos en {expertise_area}." if expertise_area else ""
+    off_topic_reply = f"Ese tipo de consulta no está dentro de los servicios que ofrecemos.{area_clause} Si necesitás algo relacionado con nuestra área, con gusto te ayudamos. Para otras consultas podés contactar directamente con nosotros."
 
     fmt = CHANNEL_FORMATTING.get(channel, CHANNEL_FORMATTING["telegram"])
 
