@@ -1130,6 +1130,9 @@ async def test_generate_answer_image_includes_do_not_ask_for_image_instruction()
     content_parts = user_msg["content"]
     text_part = next(p for p in content_parts if p["type"] == "text")
     assert "YA la envió" in text_part["text"] or "NUNCA le digas" in text_part["text"]
+    # Verify partially legible guidance is included
+    assert "PARCIALMENTE legible" in text_part["text"]
+    assert "extraé lo que puedas" in text_part["text"]
 
 
 @pytest.mark.asyncio
@@ -1216,6 +1219,33 @@ def test_is_illegible_response_allows_normal_response():
     assert not _is_illegible_response("El resultado muestra un nivel de glucosa de 120 mg/dL.")
     assert not _is_illegible_response("This is a biopsy report showing normal tissue.")
     assert not _is_illegible_response("La factura indica un total de $80.00 USD.")
+
+
+def test_is_illegible_response_allows_partially_legible():
+    """Partially legible responses should NOT trigger the full-illegible fallback.
+    The LLM already handles them via the image instruction (extract what it can)."""
+    from rag import _is_illegible_response
+    assert not _is_illegible_response(
+        "Puedo leer algunos estudios: Biopsia de Apéndice $90.00, pero algunas partes "
+        "están ilegibles y no puedo descifrar los montos de otros estudios."
+    )
+    assert not _is_illegible_response(
+        "I can read the procedure names but some amounts are illegible"
+    )
+    assert not _is_illegible_response(
+        "Parte de la imagen es borrosa, pero puedo ver: Hemograma $25.00"
+    )
+    assert not _is_illegible_response(
+        "Some sections are blurry but I can identify: Glucose test $15.00"
+    )
+
+
+def test_partially_legible_does_not_prevent_full_illegible_detection():
+    """Full illegibility phrases without partial qualifiers still trigger."""
+    from rag import _is_illegible_response
+    assert _is_illegible_response("No puedo leer la imagen, está borrosa.")
+    assert _is_illegible_response("La imagen es ilegible")
+    assert _is_illegible_response("The image is blurry and unreadable")
 
 
 @pytest.mark.asyncio
