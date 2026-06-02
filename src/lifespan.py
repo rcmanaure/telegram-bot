@@ -32,6 +32,13 @@ async def lifespan(app: FastAPI):
 
     await init_db()
 
+    # Default admin password warning — MUST run at startup, not shutdown
+    if settings.admin_password == "changeme":
+        logger.warning(
+            "SECURITY: ADMIN_PASSWORD is still set to the default 'changeme'. "
+            "Change it immediately via the ADMIN_PASSWORD environment variable."
+        )
+
     # Load config overlay from DB (overrides .env at runtime)
     from config_overlay import reload_from_db
     from db import AsyncSessionLocal as _AsyncSessionLocal
@@ -102,10 +109,3 @@ async def lifespan(app: FastAPI):
         await stt_http_client.aclose()
     except Exception:
         logger.warning("Failed to close STT HTTP client during shutdown")
-
-    # Default admin password warning
-    if settings.admin_password == "changeme":
-        logger.warning(
-            "SECURITY: ADMIN_PASSWORD is still set to the default 'changeme'. "
-            "Change it immediately via the ADMIN_PASSWORD environment variable."
-        )

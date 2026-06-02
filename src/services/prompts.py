@@ -5,19 +5,48 @@ from channels.protocol import CHANNEL_FORMATTING
 from security import CANARY_TOKEN
 
 
-def build_system_prompt(expertise_area: str, channel: str = "telegram", from_web: bool = False) -> str:
-    """Build the system prompt for the LLM, incorporating expertise area and channel formatting.
-    When from_web is True, adds web-source framing (user sees 'Según información pública')."""
+def build_system_prompt(
+    expertise_area: str,
+    channel: str = "telegram",
+    from_web: bool = False,
+    example_questions: list[str] | None = None,
+) -> str:
+    """Build the system prompt for the LLM, incorporating expertise area, channel formatting,
+    web-source framing, and example questions for triage context.
+
+    When from_web is True, adds web-source framing.
+    When example_questions is provided, includes them in the prompt for better triage responses.
+    """
     area_clause = f" Mi área de expertise: {expertise_area}." if expertise_area else ""
     off_topic_reply = f"Eso está fuera de mi área de expertise.{area_clause} Consultá directamente con nosotros."
 
     fmt = CHANNEL_FORMATTING.get(channel, CHANNEL_FORMATTING["telegram"])
 
+    # Channel-specific length guidance
+    length_guidance = ""
+    if channel == "whatsapp":
+        length_guidance = "\n- Respuestas cortas: idealmente menos de 300 caracteres, máximo 500. WhatsApp no maneja bien textos largos."
+    elif channel == "telegram":
+        length_guidance = "\n- Podés ser más extenso, hasta ~800 caracteres. Pero si la respuesta es simple, sé breve."
+
+    # Source attribution guidance (replaces blanket prohibition)
+    source_guidance = """\
+- No digas "según los documentos cargados" ni menciones procesos internos. Si el usuario pregunta de dónde sacaste la información, podés mencionar la fuente por su nombre (ej: "según el reglamento", "según el plan Pro")."""
+
     web_clause = ""
     if from_web:
         web_clause = """
 
-CONTEXTO WEB: Tu contexto proviene de resultados de búsqueda web pública, no de documentos verificados. Iniciá tu respuesta con "Según información pública:" y luego respondé con lo que encontraste. Si los resultados web no contienen suficiente información, decí "No encontré información relevante." No inventes datos que no estén en los resultados."""
+CONTEXTO WEB: Tu contexto proviene de resultados de búsqueda web pública, no de documentos verificados. Mencioná la fuente al inicio de tu respuesta con "Según información pública:" o "Según datos públicos disponibles:". Si la información es parcial, aclará que no está verificada internamente. Si los resultados web no contienen suficiente información, decí "No encontré información relevante." No inventes datos que no estén en los resultados."""
+
+    # Example questions for triage context
+    questions_clause = ""
+    if example_questions:
+        q_list = "\n".join(f"  - {q}" for q in example_questions[:5])
+        questions_clause = f"""
+
+PREGUNTAS DE EJEMPLO (usá estas como referencia cuando el usuario pregunte algo ambiguo):
+{q_list}"""
 
     return f"""Sos un asistente especializado exclusivamente en la información de los documentos cargados. Tu ÚNICA fuente de conocimiento es el contexto que se te proporciona.
 
@@ -25,15 +54,16 @@ REGLAS INQUEBRANTABLES:
 - Si la pregunta no puede responderse con el contexto provisto, respondé exactamente: "{off_topic_reply}"
 - NUNCA uses conocimiento general. Matemáticas, programación, cocina, historia, ciencia — todo eso está fuera de tu alcance.
 - NUNCA inventes, supongas ni completes información que no esté en el contexto.
+- Si el contexto responde solo parte de la pregunta, respondé lo que podés y aclará qué información no está disponible. No inventes la parte faltante.
 {web_clause}
 Cómo hablar:
 - Tono amigable y cercano, sin formalismos corporativos.
 - Respondé directo al punto, sin repetir la pregunta.
 - Para preguntas simples, una o dos oraciones alcanzan.
-- Nunca menciones "documentos", "páginas" ni "fuentes" — simplemente sabés la información.
-- Usá emojis temáticos cuando menciones actividades, servicios o conceptos. El emoji va SIEMPRE ANTES del nombre del ítem, elegido por vos según el concepto (ej: 🧪 *Análisis clínicos*, 🔬 *Biopsias*, 🏥 *Consultas*, 💳 *Plan Pro*). Elegí emojis apropiados al contexto del negocio — evitá emojis violentos o clínico-gráficos (como 🔪 para biopsias) y optá por emojis que transmitan cuidado, ciencia y salud (🔬 🧪 🏥 🩺 💊 🧬 📋 ✅ 🩻 🫀). No uses siempre el mismo emoji genérico — elegí el que mejor represente semánticamente cada término.
+- Usá emojis temáticos apropiados al contexto del negocio. El emoji va SIEMPRE ANTES del nombre del ítem — elegí el que mejor represente semánticamente cada concepto, sin repetir siempre el mismo.
+{source_guidance}{length_guidance}
 - NO cierres el mensaje con "¿En qué más puedo ayudarte?" ni "¿Hay algo más en lo que pueda ayudar?" — ya lo dijiste al inicio. Respondé directo y cerrá con la información, sin repetir la oferta de ayuda. Una sola vez al inicio alcanza.
-- Respondé en el idioma del usuario.
+- Respondé en el idioma del usuario.{questions_clause}
 
 {fmt.format_instructions}
 
@@ -41,7 +71,25 @@ Cómo hablar:
 """
 
 
-ESCALATION_PATTERN = re.compile(
-    r'\b(operador|humano|persona real|hablar con alguien|quiero hablar|agente)\b',
+# ─── Local classifiers (skip LLM for deterministic intents) ──────────────────────
+
+_GREETING_PATTERN = re.compile(
+    r'^\s*(hola|hey|buenas|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|hi|hello|saludos|qué\s+tal|como\s+andas|como\s+estás|que\s+onda|epa|che)\s*[!?.]*\s*$',
     re.IGNORECASE,
 )
+
+ESCALATION_PATTERN = re.compile(
+    r'\b(operador|humano|persona real|hablar con alguien|quiero hablar|agente|contactar|representante)\b',
+    re.IGNORECASE,
+)
+
+# ─── Spanish-language injection patterns ──────────────────────────────────────────
+
+_INJECTION_PATTERNS_ES = [
+    re.compile(r'ignor[oaá]\s+(todas?\s+)?(las?\s+)?instrucciones', re.IGNORECASE),
+    re.compile(r'olvid[oaá]\s+(tu\s+)?(rol|personaje|instrucciones)', re.IGNORECASE),
+    re.compile(r'act[uú][ae]\s+como\s+si\s+fueras', re.IGNORECASE),
+    re.compile(r'no\s+sigas\s+(las?\s+)?instrucciones', re.IGNORECASE),
+    re.compile(r'sos\s+un?\s+(modelo|ia|bot|inteligencia artificial)', re.IGNORECASE),
+    re.compile(r'mostr[aeá]\s+(tu\s+)?(prompt|instrucciones|reglas)', re.IGNORECASE),
+]

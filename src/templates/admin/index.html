@@ -171,27 +171,27 @@
     <div class="row">
       <div class="field">
         <label>LLM Base URL</label>
-        <input type="text" name="llm_base_url" placeholder="https://openrouter.ai/api/v1">
+        <input type="text" name="llm_base_url" value="{{ current_settings.llm_base_url }}" placeholder="https://openrouter.ai/api/v1">
       </div>
       <div class="field">
         <label>LLM API Key</label>
-        <input type="password" name="llm_api_key" placeholder="Nuevo valor (se encripta)">
+        <input type="password" name="llm_api_key" placeholder="{{ current_settings.llm_api_key }} — dejar vacío para mantener">
       </div>
     </div>
     <div class="row">
       <div class="field">
         <label>Modelo primario</label>
-        <input type="text" name="llm_model" placeholder="openrouter/free">
+        <input type="text" name="llm_model" value="{{ current_settings.llm_model }}" placeholder="openrouter/free">
       </div>
       <div class="field">
         <label>Modelo fallback</label>
-        <input type="text" name="llm_fallback_model" placeholder="openrouter/owl-alpha">
+        <input type="text" name="llm_fallback_model" value="{{ current_settings.llm_fallback_model }}" placeholder="openrouter/owl-alpha">
       </div>
     </div>
     <div class="row">
       <div class="field">
         <label>Modelo vision</label>
-        <input type="text" name="llm_vision_model" placeholder="llava">
+        <input type="text" name="llm_vision_model" value="{{ current_settings.llm_vision_model }}" placeholder="llava">
       </div>
     </div>
 
@@ -199,21 +199,21 @@
     <div class="row">
       <div class="field">
         <label>Embedding Base URL</label>
-        <input type="text" name="embedding_base_url" placeholder="https://openrouter.ai/api/v1">
+        <input type="text" name="embedding_base_url" value="{{ current_settings.embedding_base_url }}" placeholder="https://openrouter.ai/api/v1">
       </div>
       <div class="field">
         <label>Embedding API Key</label>
-        <input type="password" name="embedding_api_key" placeholder="Nuevo valor (se encripta)">
+        <input type="password" name="embedding_api_key" placeholder="{{ current_settings.embedding_api_key }} — dejar vacío para mantener">
       </div>
     </div>
     <div class="row">
       <div class="field">
         <label>Embedding modelo</label>
-        <input type="text" name="embedding_model" placeholder="openai/text-embedding-3-small">
+        <input type="text" name="embedding_model" value="{{ current_settings.embedding_model }}" placeholder="openai/text-embedding-3-small">
       </div>
       <div class="field">
         <label>Embedding dimension</label>
-        <input type="text" name="embedding_dim" placeholder="1536">
+        <input type="text" name="embedding_dim" value="{{ current_settings.embedding_dim }}" placeholder="1536">
         <small style="color:#dc2626">⚠ Cambiar rompe alineación con pgvector</small>
       </div>
     </div>
@@ -222,11 +222,11 @@
     <div class="row">
       <div class="field">
         <label>Groq API Key (STT)</label>
-        <input type="password" name="groq_api_key" placeholder="Nuevo valor (se encripta)">
+        <input type="password" name="groq_api_key" placeholder="{{ current_settings.groq_api_key }} — dejar vacío para mantener">
       </div>
       <div class="field">
         <label>Web Search URL</label>
-        <input type="text" name="web_search_url" placeholder="https://ollama.com/api/web_search">
+        <input type="text" name="web_search_url" value="{{ current_settings.web_search_url }}" placeholder="https://ollama.com/api/web_search">
       </div>
     </div>
 
@@ -289,6 +289,7 @@ async function testConnection() {
     const resp = await fetch('/admin/health-data');
     const data = await resp.json();
     const llm = data.llm || {};
+    const emb = data.embedding || {};
     const db = data.db || {};
     const tenants = data.tenants || {};
     const chunks = data.chunks || {};
@@ -298,6 +299,12 @@ async function testConnection() {
         ${llm.ok
           ? `<span class="badge badge-ok">✅ OK</span> ${llm.model} — ${llm.latency_ms}ms`
           : `<span class="badge badge-err">❌ Error</span> ${llm.error || 'unknown'}`}
+      </div>
+      <div class="card" style="margin-top:12px">
+        <h3 style="margin:0 0 8px;font-size:1rem">Embeddings</h3>
+        ${emb.ok
+          ? `<span class="badge badge-ok">✅ OK</span> ${emb.model} — ${emb.latency_ms}ms`
+          : `<span class="badge badge-err">❌ Error</span> ${emb.error || 'unknown'}`}
       </div>
       <div class="card" style="margin-top:12px">
         <h3 style="margin:0 0 8px;font-size:1rem">Base de datos</h3>

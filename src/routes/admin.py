@@ -37,6 +37,17 @@ _jinja_env = Environment(
 
 def _render_admin(tenants, doc_stats=None, message="", error="", new_api_key="", active_tab="tenants"):
     """Render admin panel HTML via Jinja2 template. All values auto-escaped."""
+    from config_overlay import get_setting as _get_setting
+    # Build current settings dict for the Settings tab (non-secret fields show value, secret fields show masked)
+    current_settings = {}
+    for key in ("llm_base_url", "llm_model", "llm_fallback_model", "llm_vision_model",
+                "embedding_base_url", "embedding_model", "embedding_dim", "web_search_url"):
+        current_settings[key] = _get_setting(key, getattr(settings, key, ""))
+    # Secret fields: show first 3 chars + mask
+    for key in ("llm_api_key", "embedding_api_key", "groq_api_key"):
+        val = _get_setting(key, "")
+        current_settings[key] = (val[:3] + "•••••••") if len(val) > 3 else ("•••••••" if val else "")
+
     template = _jinja_env.get_template("admin/index.html")
     html = template.render(
         tenants=tenants,
@@ -45,6 +56,7 @@ def _render_admin(tenants, doc_stats=None, message="", error="", new_api_key="",
         error=error,
         new_api_key=new_api_key,
         active_tab=active_tab,
+        current_settings=current_settings,
     )
     return HTMLResponse(content=html)
 
@@ -218,10 +230,10 @@ async def admin_update_tenant(
     raw_questions = (form.get("example_questions") or "").strip()
     example_questions = [q.strip() for q in raw_questions.splitlines() if q.strip()][:5] or None
 
-    # WhatsApp / multi-channel fields
+    # WhatsApp / multi-channel fields — only update when non-empty (password fields never pre-fill)
     wa_phone_number_id = (form.get("wa_phone_number_id") or "").strip() or None
-    wa_access_token = (form.get("wa_access_token") or "").strip() or None
-    wa_app_secret = (form.get("wa_app_secret") or "").strip() or None
+    wa_access_token = (form.get("wa_access_token") or "").strip()  # Keep empty string to detect "not submitted"
+    wa_app_secret = (form.get("wa_app_secret") or "").strip()  # Keep empty string to detect "not submitted"
     wa_verify_token = (form.get("wa_verify_token") or "").strip() or None
     wa_reengagement_template = (form.get("wa_reengagement_template") or "").strip() or None
 
@@ -242,16 +254,23 @@ async def admin_update_tenant(
     tenant.operator_chat_id = operator_chat_id
     tenant.example_questions = example_questions
     tenant.wa_phone_number_id = wa_phone_number_id
-    tenant.wa_access_token = wa_access_token
-    tenant.wa_app_secret = wa_app_secret
     tenant.wa_verify_token = wa_verify_token
     tenant.wa_reengagement_template = wa_reengagement_template
     tenant.web_search_enabled = web_search_enabled
 
-    # Enable WhatsApp channel if WA credentials are provided
-    if wa_phone_number_id and wa_access_token:
+    # Only overwrite WA secrets when the user explicitly entered new values
+    # (password fields submit empty when unchanged)
+    if wa_access_token:
+        tenant.wa_access_token = wa_access_token
+    if wa_app_secret:
+        tenant.wa_app_secret = wa_app_secret
+
+    # Enable WhatsApp channel if WA credentials are present (including existing ones)
+    has_wa_creds = bool(tenant.wa_phone_number_id and tenant.wa_access_token)
+    if has_wa_creds:
         tenant.channels = "telegram,whatsapp"
-    else:
+    elif tenant.channels and "whatsapp" in tenant.channels:
+        # Keep existing channel config; don't force-remove WA if other channels exist
         tenant.channels = "telegram"
     db.add(tenant)
     await db.commit()
@@ -312,12 +331,13 @@ async def admin_upload_document(
 
     try:
         fname_lower = file.filename.lower()
+        source_name = fname_lower  # Normalize source to lowercase to prevent duplicate chunks
         if any(fname_lower.endswith(ext) for ext in _IMAGE_EXTS):
             description = await describe_image_for_upload(content, fname_lower)
-            all_chunks = chunk_text(description, source=file.filename, page=1)
+            all_chunks = chunk_text(description, source=source_name, page=1)
             pages_processed = 1
         else:
-            all_chunks, pages_processed = process_uploaded_file(content, fname_lower, file.filename)
+            all_chunks, pages_processed = process_uploaded_file(content, fname_lower, source_name)
     except HTTPException as e:
         tenants, doc_stats = await _admin_context(db)
         return _render_admin(tenants, doc_stats=doc_stats, error=e.detail)
@@ -329,7 +349,7 @@ async def admin_upload_document(
     # Upsert: delete old chunks for this source, then insert new ones atomically
     await db.execute(
         text("DELETE FROM document_chunks WHERE namespace = :ns AND source = :src"),
-        {"ns": tenant.slug, "src": file.filename},
+        {"ns": tenant.slug, "src": source_name},
     )
     stored = await index_chunks(db, all_chunks, tenant.slug, auto_commit=False)
     await db.commit()
@@ -359,6 +379,8 @@ async def admin_delete_docs(
     await db.execute(text("DELETE FROM document_chunks WHERE namespace = :ns"), {"ns": ns})
     await db.execute(text("DELETE FROM conversations WHERE namespace = :ns"), {"ns": ns})
     await db.execute(text("DELETE FROM unanswered_queries WHERE namespace = :ns"), {"ns": ns})
+    await db.execute(text("DELETE FROM feedback WHERE namespace = :ns"), {"ns": ns})
+    await db.execute(text("DELETE FROM wa_service_windows WHERE tenant_id = :tid"), {"tid": tenant_id})
     await db.commit()
 
     logger.info("Admin deleted all docs for tenant %s", tenant.slug)
@@ -488,9 +510,13 @@ async def admin_toggle_active(
         raise HTTPException(404, "Tenant not found")
 
     if tenant.active:
-        # Deactivate: shutdown bot, remove from registry
+        # Deactivate: delete webhook, shutdown bot, remove from registry
         tg_app = get_app(tenant.bot_token)
         if tg_app is not None:
+            try:
+                await tg_app.bot.delete_webhook()
+            except Exception as e:
+                logger.warning("delete_webhook failed for tenant %s: %s", tenant.slug, e)
             try:
                 await tg_app.shutdown()
             except Exception as e:
@@ -504,9 +530,6 @@ async def admin_toggle_active(
         domain = await get_ngrok_domain(http_client, max_retries=1) or settings.app_domain
         ok = await init_tenant_bot(tenant, domain)
         if ok:
-            tg_app = get_app(tenant.bot_token)
-            if tg_app:
-                register_app(tenant.bot_token, tg_app)
             tenant.active = True
             logger.info("Admin activated tenant %s", tenant.slug)
         else:
@@ -535,7 +558,7 @@ async def admin_health_data(
     _: None = Depends(_require_admin),
 ):
     """Health check JSON — LLM, embedding, DB, tenant stats. Called via AJAX."""
-    from llm import test_connection
+    from llm import test_connection, validate_config
     from config_overlay import get_setting
 
     # LLM test
@@ -544,6 +567,17 @@ async def admin_health_data(
         get_setting("llm_api_key", settings.effective_llm_api_key),
         get_setting("llm_model", settings.llm_model),
     )
+
+    # Embedding test
+    try:
+        t0 = __import__("time").monotonic()
+        await validate_config()
+        elapsed_ms = (__import__("time").monotonic() - t0) * 1000
+        emb_base = get_setting("embedding_base_url", settings.embedding_base_url)
+        emb_model = get_setting("embedding_model", settings.embedding_model)
+        embedding_result = {"ok": True, "model": emb_model, "base_url": emb_base, "latency_ms": round(elapsed_ms), "error": None}
+    except Exception as e:
+        embedding_result = {"ok": False, "model": get_setting("embedding_model", settings.embedding_model), "base_url": get_setting("embedding_base_url", settings.embedding_base_url), "latency_ms": 0, "error": str(e)[:200]}
 
     # DB version
     try:
@@ -565,6 +599,7 @@ async def admin_health_data(
 
     return {
         "llm": llm_result,
+        "embedding": embedding_result,
         "db": {"ok": db_ok, "version": db_version},
         "tenants": {"active": active_count, "total": len(all_tenants)},
         "chunks": {"total": chunk_count},

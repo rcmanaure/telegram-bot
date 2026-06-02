@@ -397,6 +397,41 @@ class TestFormatText:
         assert "```python" not in result
         assert "```\n" in result
 
+    # ── Universal markdown normalization (I5) ──────────────────────────────
+
+    def test_telegram_converts_double_star_bold(self):
+        """LLMs often emit **bold** but Telegram needs *bold*."""
+        text = "El **Plan Pro** cuesta **$59** por mes"
+        result = format_text_for_channel(text, "telegram")
+        assert "**" not in result
+        assert "*Plan Pro*" in result
+        assert "*$59*" in result
+
+    def test_whatsapp_converts_double_star_bold(self):
+        text = "El **Plan Pro** cuesta **$59** por mes"
+        result = format_text_for_channel(text, "whatsapp")
+        assert "**" not in result
+        assert "*Plan Pro*" in result
+
+    def test_telegram_converts_double_underscore_italic(self):
+        text = "Esto es __importante__ para vos"
+        result = format_text_for_channel(text, "telegram")
+        assert "__" not in result
+        assert "_importante_" in result
+
+    def test_whatsapp_converts_double_underscore_italic(self):
+        text = "Esto es __importante__ para vos"
+        result = format_text_for_channel(text, "whatsapp")
+        assert "__" not in result
+        assert "_importante_" in result
+
+    def test_no_conversion_inside_urls(self):
+        """Don't convert __ inside URLs or snake_case identifiers."""
+        text = "Visitá https://example.com/path__with__underscores y my_var_name"
+        result = format_text_for_channel(text, "telegram")
+        assert "path__with__underscores" in result
+        assert "my_var_name" in result
+
 
 # ─── build_system_prompt channel param ────────────────────────────────────
 

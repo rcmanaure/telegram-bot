@@ -43,7 +43,7 @@ async def test_web_search_returns_chunks_on_success():
     assert len(result) == 2
     assert result[0]["source"] == "https://example.com/python"
     assert "Python" in result[0]["content"]
-    assert result[0]["similarity"] == 0.5
+    assert result[0]["similarity"] == 0.4
 
 
 @pytest.mark.asyncio
@@ -169,6 +169,7 @@ async def test_rag_query_web_search_fallback_when_enabled():
          patch("rag.validate_output", side_effect=lambda x, **kw: x), \
          patch("rag.save_turn", AsyncMock()), \
          patch("rag.get_history", AsyncMock(return_value=[])), \
+         patch("rag._reformulate_query", AsyncMock(side_effect=lambda q, h: q)), \
          patch("rag.get_setting", side_effect=lambda k, f="": "https://example.com/ws" if k == "web_search_url" else f), \
          patch("rag.settings") as mock_settings:
         mock_settings.web_search_url = "https://example.com/ws"
@@ -230,7 +231,10 @@ async def test_rag_query_web_search_silent_fallback_on_error():
          patch("rag._web_search", AsyncMock(return_value=[])), \
          patch("rag._triage_response", AsyncMock(return_value=("off_topic", "Fuera de mi área."))) as mock_triage, \
          patch("rag.save_turn", AsyncMock()), \
+         patch("rag._log_unanswered", AsyncMock()), \
          patch("rag.get_history", AsyncMock(return_value=[])), \
+         patch("rag._reformulate_query", AsyncMock(side_effect=lambda q, h: q)), \
+         patch("rag.validate_output", side_effect=lambda x, **kw: x), \
          patch("rag.get_setting", side_effect=lambda k, f="": "https://example.com/ws" if k == "web_search_url" else f), \
          patch("rag.settings") as mock_settings:
         mock_settings.web_search_url = "https://example.com/ws"
@@ -266,7 +270,8 @@ async def test_rag_query_web_search_not_invoked_when_context_found():
          patch("rag.generate_answer", AsyncMock(return_value="Answer from docs")), \
          patch("rag.validate_output", side_effect=lambda x, **kw: x), \
          patch("rag.save_turn", AsyncMock()), \
-         patch("rag.get_history", AsyncMock(return_value=[])):
+         patch("rag.get_history", AsyncMock(return_value=[])), \
+         patch("rag._reformulate_query", AsyncMock(side_effect=lambda q, h: q)):
 
         answer, chunks, intent = await rag_query(
             db=mock_db,

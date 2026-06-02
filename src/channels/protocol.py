@@ -175,16 +175,31 @@ class ChannelAdapter(Protocol):
 def format_text_for_channel(text: str, channel: str, max_length: int | None = None) -> str:
     """Apply channel-specific post-processing to LLM output.
 
-    For WhatsApp: strip markdown tables, convert markdown syntax to WA-native
-    syntax, strip unsupported formatting, truncate at 4096.
-    For Telegram: pass through (formatting is already correct from prompt).
+    Universal normalization (both channels):
+      - **bold** → *bold* (LLMs often emit standard markdown bold)
+      - __italic__ → _italic_ (standard markdown italic)
+    WhatsApp-specific:
+      - Strip markdown tables, headers, horizontal rules
+      - Convert ~~strikethrough~~ → ~strikethrough~
+      - Strip code block language hints and inline backticks
+      - Collapse multiple blank lines
+    Telegram:
+      - After universal normalization, formatting is already native (*bold*, _italic_)
     """
+    import re
     from channels.protocol import CHANNEL_FORMATTING
 
     fmt = CHANNEL_FORMATTING.get(channel, CHANNEL_FORMATTING["telegram"])
 
+    # ── Universal markdown normalization (both channels) ──────────────────
+    # Convert **bold** → *bold* (standard markdown → Telegram/WA native)
+    # Match **text** but not ***text*** (bold+italic combo — rare, strip both)
+    text = re.sub(r"\*\*(?!\*)(.+?)(?<!\*)\*\*", r"*\1*", text)
+    # Convert __italic__ → _italic_ (standard markdown)
+    # Avoid matching __ within URLs or snake_case identifiers
+    text = re.sub(r"(?<!\w)__(.+?)__(?!\w)", r"_\1_", text)
+
     if channel == "whatsapp":
-        import re
         # Strip markdown tables: | col | col | → remove entire line
         text = re.sub(r"^\|.*\|$", "", text, flags=re.MULTILINE)
         # Strip markdown headers: # Title → *Title*

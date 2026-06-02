@@ -39,8 +39,8 @@ async def telegram_webhook(
 
     tg_app = get_app(tenant.bot_token)
     if not tg_app:
-        logger.error("No Application for tenant %s — restart may be needed", tenant_slug)
-        return {"ok": True}
+        logger.error("No Application for tenant %s — returning 503 so Telegram retries", tenant_slug)
+        raise HTTPException(status_code=503, detail="Bot not initialized, retry later")
 
     data = await request.json()
     update = Update.de_json(data, tg_app.bot)
