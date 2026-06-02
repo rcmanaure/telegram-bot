@@ -1036,6 +1036,92 @@ async def test_rag_query_image_with_vision_model_proceeds():
     assert call_kwargs.kwargs.get("image_b64") == "dGVzdA==" or call_kwargs[1].get("image_b64") == "dGVzdA=="
 
 
+@pytest.mark.asyncio
+async def test_rag_query_image_no_text_context_goes_to_vision():
+    """When image_b64 is set but no text context found, rag_query sends the
+    image to the vision model instead of falling to triage."""
+    from rag import rag_query
+
+    mock_db = AsyncMock()
+    mock_db.add = MagicMock()
+    mock_db.commit = AsyncMock()
+
+    with patch("rag.retrieve_context", new=AsyncMock(return_value=[])), \
+         patch("rag.get_history", new=AsyncMock(return_value=[])), \
+         patch("rag._reformulate_query", new=AsyncMock(side_effect=lambda q, h: q)), \
+         patch("rag.generate_answer", new=AsyncMock(return_value="Es un resultado de laboratorio.")) as mock_generate, \
+         patch("rag.validate_output", side_effect=lambda x, **kw: x), \
+         patch("rag.save_turn", new=AsyncMock()), \
+         patch("rag._is_illegible_response", return_value=False), \
+         patch("rag.settings") as mock_settings, \
+         patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback):
+        mock_settings.llm_vision_model = "gemma4:31b"
+        answer, chunks, intent = await rag_query(
+            mock_db, "¿Qué significa este resultado?", "ns", "u1",
+            image_b64="dGVzdA==",
+        )
+
+    # generate_answer was called with empty context BUT with image_b64
+    mock_generate.assert_called_once()
+    call_kwargs = mock_generate.call_args
+    assert call_kwargs.kwargs.get("image_b64") == "dGVzdA==" or call_kwargs[1].get("image_b64") == "dGVzdA=="
+    # Triage should NOT have been called — no _log_unanswered
+    assert "resultado" in answer.lower()
+
+
+@pytest.mark.asyncio
+async def test_rag_query_illegible_image_returns_clear_message():
+    """When the vision model can't read the image, rag_query returns a
+    clear message about image quality."""
+    from rag import rag_query
+
+    mock_db = AsyncMock()
+    mock_db.add = MagicMock()
+    mock_db.commit = AsyncMock()
+
+    with patch("rag.retrieve_context", new=AsyncMock(return_value=[])), \
+         patch("rag.get_history", new=AsyncMock(return_value=[])), \
+         patch("rag._reformulate_query", new=AsyncMock(side_effect=lambda q, h: q)), \
+         patch("rag.generate_answer", new=AsyncMock(return_value="No puedo leer la imagen, está borrosa.")), \
+         patch("rag.validate_output", side_effect=lambda x, **kw: x), \
+         patch("rag.save_turn", new=AsyncMock()), \
+         patch("rag._is_illegible_response", return_value=True), \
+         patch("rag.settings") as mock_settings, \
+         patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback):
+        mock_settings.llm_vision_model = "gemma4:31b"
+        answer, chunks, intent = await rag_query(
+            mock_db, "¿Qué es esto?", "ns", "u1",
+            image_b64="dGVzdA==",
+        )
+
+    assert "No puedo leer la imagen" in answer
+    assert "iluminación" in answer or "enfoque" in answer or "resolución" in answer
+
+
+def test_is_illegible_response_detects_spanish():
+    """_is_illegible_response detects Spanish illegibility phrases."""
+    from rag import _is_illegible_response
+    assert _is_illegible_response("No puedo leer la imagen, está borrosa.")
+    assert _is_illegible_response("La imagen es ilegible")
+    assert _is_illegible_response("No puedo descifrar lo que dice la foto")
+
+
+def test_is_illegible_response_detects_english():
+    """_is_illegible_response detects English illegibility phrases."""
+    from rag import _is_illegible_response
+    assert _is_illegible_response("I cannot read the image")
+    assert _is_illegible_response("The image is blurry and unreadable")
+    assert _is_illegible_response("Unable to process the photo")
+
+
+def test_is_illegible_response_allows_normal_response():
+    """_is_illegible_response does not flag normal vision responses."""
+    from rag import _is_illegible_response
+    assert not _is_illegible_response("El resultado muestra un nivel de glucosa de 120 mg/dL.")
+    assert not _is_illegible_response("This is a biopsy report showing normal tissue.")
+    assert not _is_illegible_response("La factura indica un total de $80.00 USD.")
+
+
 # ─── I10: Conversation summarization ─────────────────────────────────────────
 
 @pytest.mark.asyncio
