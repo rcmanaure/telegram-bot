@@ -1303,6 +1303,7 @@ async def test_vision_augmented_retrieval_skipped_when_no_vision_model():
          patch("rag.get_history", new=AsyncMock(return_value=[])), \
          patch("rag._reformulate_query", new=AsyncMock(side_effect=lambda q, h: q)), \
          patch("rag._extract_search_terms_from_images", new=AsyncMock(return_value="")) as mock_extract, \
+         patch("rag.save_turn", new=AsyncMock()), \
          patch("rag.settings") as mock_settings, \
          patch("rag.get_setting", new=lambda k, fallback="": "" if k == "llm_vision_model" else fallback):
         mock_settings.llm_vision_model = ""
@@ -2315,3 +2316,181 @@ def test_normalize_passthrough_clean_names():
 def test_normalize_preserves_dots_in_name():
     """Dots within the filename (not the extension) are preserved."""
     assert normalize_source_name("v1.2.3(1).pdf") == "v1.2.3.pdf"
+
+
+# ─── Vision-augmented retrieval: uncovered branch tests ──────────────────────
+
+
+@pytest.mark.asyncio
+async def test_extract_search_terms_no_vision_model_returns_empty():
+    """_extract_search_terms_from_images returns "" when no vision model configured."""
+    from rag import _extract_search_terms_from_images
+
+    with patch("rag.get_setting", new=lambda k, fallback="": "" if k == "llm_vision_model" else fallback), \
+         patch("rag.settings") as mock_settings:
+        mock_settings.llm_vision_model = ""
+        result = await _extract_search_terms_from_images([{"b64": "dGVzdA==", "mime": "image/jpeg"}])
+
+    assert result == ""
+
+
+@pytest.mark.asyncio
+async def test_extract_search_terms_empty_string_result():
+    """_extract_search_terms_from_images returns "" when call_chat returns empty string."""
+    from rag import _extract_search_terms_from_images
+
+    with patch("rag.call_chat", new=AsyncMock(return_value="   ")), \
+         patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback), \
+         patch("rag.settings") as mock_settings:
+        mock_settings.llm_vision_model = "gemma4:31b"
+        result = await _extract_search_terms_from_images([{"b64": "dGVzdA==", "mime": "image/jpeg"}])
+
+    assert result == ""
+
+
+@pytest.mark.asyncio
+async def test_extract_search_terms_multiple_images():
+    """_extract_search_terms_from_images builds content with multiple image_url parts."""
+    from rag import _extract_search_terms_from_images
+
+    captured_messages = []
+
+    async def mock_call_chat(messages, **kwargs):
+        captured_messages.extend(messages)
+        return "Hemograma, Glucosa"
+
+    with patch("rag.call_chat", side_effect=mock_call_chat), \
+         patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback), \
+         patch("rag.settings") as mock_settings:
+        mock_settings.llm_vision_model = "gemma4:31b"
+        result = await _extract_search_terms_from_images([
+            {"b64": "img1b64", "mime": "image/jpeg"},
+            {"b64": "img2b64", "mime": "image/png"},
+        ])
+
+    user_msg = captured_messages[0]
+    content = user_msg["content"]
+    image_parts = [p for p in content if p["type"] == "image_url"]
+    assert len(image_parts) == 2
+    assert image_parts[0]["image_url"]["url"] == "data:image/jpeg;base64,img1b64"
+    assert image_parts[1]["image_url"]["url"] == "data:image/png;base64,img2b64"
+    assert "Hemograma" in result
+
+
+@pytest.mark.asyncio
+async def test_vision_augmented_empty_query_falls_through_to_image_only():
+    """When _extract_search_terms_from_images returns "", vision retrieval is
+    skipped and the image-only path runs instead."""
+    from rag import rag_query
+
+    mock_db = AsyncMock()
+    mock_db.add = MagicMock()
+    mock_db.commit = AsyncMock()
+
+    with patch("rag.retrieve_context", new=AsyncMock(return_value=[])), \
+         patch("rag.get_history", new=AsyncMock(return_value=[])), \
+         patch("rag._reformulate_query", new=AsyncMock(side_effect=lambda q, h: q)), \
+         patch("rag._extract_search_terms_from_images", new=AsyncMock(return_value="")), \
+         patch("rag.generate_answer", new=AsyncMock(return_value="Veo un documento médico.")) as mock_generate, \
+         patch("rag.validate_output", side_effect=lambda x, **kw: x), \
+         patch("rag.save_turn", new=AsyncMock()), \
+         patch("rag._is_illegible_response", return_value=False), \
+         patch("rag.settings") as mock_settings, \
+         patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback):
+        mock_settings.llm_vision_model = "gemma4:31b"
+        answer, chunks, intent = await rag_query(
+            mock_db, "¿Qué querés saber sobre esta imagen?", "ns", "u1",
+            images=[{"b64": "dGVzdA==", "mime": "image/jpeg"}],
+        )
+
+    # Should fall through to image-only path (generate_answer with empty context)
+    mock_generate.assert_called_once()
+    call_args = mock_generate.call_args
+    context_arg = call_args[0][0] if call_args[0] else call_args.kwargs.get("context_chunks")
+    assert len(context_arg) == 0
+
+
+@pytest.mark.asyncio
+async def test_vision_augmented_same_query_skips_retrieval():
+    """When vision-extracted terms match the original search query exactly,
+    the second retrieve_context call is skipped (no point re-searching)."""
+    from rag import rag_query
+
+    mock_db = AsyncMock()
+    mock_db.add = MagicMock()
+    mock_db.commit = AsyncMock()
+
+    retrieve_count = {"n": 0}
+
+    async def mock_retrieve(db, query, namespace):
+        retrieve_count["n"] += 1
+        return []
+
+    original_question = "Biopsia de apéndice cecal"
+
+    with patch("rag.retrieve_context", side_effect=mock_retrieve), \
+         patch("rag.get_history", new=AsyncMock(return_value=[])), \
+         patch("rag._reformulate_query", new=AsyncMock(side_effect=lambda q, h: q)), \
+         patch("rag._extract_search_terms_from_images", new=AsyncMock(return_value=original_question)), \
+         patch("rag.generate_answer", new=AsyncMock(return_value="Veo un documento.")) as mock_generate, \
+         patch("rag.validate_output", side_effect=lambda x, **kw: x), \
+         patch("rag.save_turn", new=AsyncMock()), \
+         patch("rag._is_illegible_response", return_value=False), \
+         patch("rag.settings") as mock_settings, \
+         patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback):
+        mock_settings.llm_vision_model = "gemma4:31b"
+        answer, chunks, intent = await rag_query(
+            mock_db, original_question, "ns", "u1",
+            images=[{"b64": "dGVzdA==", "mime": "image/jpeg"}],
+        )
+
+    # Only ONE retrieve_context call (original), not two (vision query was same)
+    assert retrieve_count["n"] == 1
+    # Falls through to image-only path
+    mock_generate.assert_called_once()
+    call_args = mock_generate.call_args
+    context_arg = call_args[0][0] if call_args[0] else call_args.kwargs.get("context_chunks")
+    assert len(context_arg) == 0
+
+
+@pytest.mark.asyncio
+async def test_vision_augmented_low_confidence_fallback():
+    """When vision-extracted terms find results below MIN_SIMILARITY but above
+    LOW_MIN_SIMILARITY, the low-confidence path is used with is_low_confidence=True."""
+    from rag import rag_query
+
+    mock_db = AsyncMock()
+    mock_db.add = MagicMock()
+    mock_db.commit = AsyncMock()
+
+    call_count = {"n": 0}
+
+    async def mock_retrieve(db, query, namespace):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return []  # generic question finds nothing
+        # Vision-extracted terms find low-similarity results
+        return [{"content": "Apéndice $90 (puede variar)", "source": "sp-diagnostico.md", "page": 1, "similarity": 0.15}]
+
+    with patch("rag.retrieve_context", side_effect=mock_retrieve), \
+         patch("rag.get_history", new=AsyncMock(return_value=[])), \
+         patch("rag._reformulate_query", new=AsyncMock(side_effect=lambda q, h: q)), \
+         patch("rag._extract_search_terms_from_images", new=AsyncMock(return_value="Biopsia de apéndice cecal")), \
+         patch("rag.generate_answer", new=AsyncMock(return_value="Puede ser el estudio de Apéndice — $90 (aprox).")) as mock_gen, \
+         patch("rag.validate_output", side_effect=lambda x, **kw: x), \
+         patch("rag.save_turn", new=AsyncMock()), \
+         patch("rag.settings") as mock_settings, \
+         patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback):
+        mock_settings.llm_vision_model = "gemma4:31b"
+        answer, chunks, intent = await rag_query(
+            mock_db, "¿Qué querés saber sobre esta imagen?", "ns", "u1",
+            images=[{"b64": "dGVzdA==", "mime": "image/jpeg"}],
+        )
+
+    # Two retrieve_context calls: original + vision-retry
+    assert call_count["n"] == 2
+    # generate_answer called with low_confidence=True
+    mock_gen.assert_called_once()
+    call_kwargs = mock_gen.call_args
+    low_conf = call_kwargs.kwargs.get("low_confidence") or call_kwargs[1].get("low_confidence")
+    assert low_conf is True

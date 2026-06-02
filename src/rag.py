@@ -267,6 +267,7 @@ async def retrieve_context(
 
 MIN_SIMILARITY = 0.20  # chunks below this threshold are considered off-topic
 LOW_MIN_SIMILARITY = 0.10  # second-pass threshold for approximate matches
+VISION_EXTRACT_MAX_TOKENS = 80  # short enough to avoid prose, enough for comma-separated search terms
 
 # ─── Illegible image detection ─────────────────────────────────────────────────
 
@@ -399,7 +400,7 @@ async def _extract_search_terms_from_images(images: list[dict]) -> str:
 
     messages = [{"role": "user", "content": content}]
     try:
-        result = await call_chat(messages, max_tokens=80, temperature=0.0, model=vision_model)
+        result = await call_chat(messages, max_tokens=VISION_EXTRACT_MAX_TOKENS, temperature=0.0, model=vision_model)
         result = result.strip()
         if result:
             logger.info("vision_extracted_terms terms=%r", result[:120])
@@ -922,7 +923,11 @@ async def rag_query(
         # study names in the image (e.g. "Biopsia de apéndice cecal") will.
         if images:
             vision_query = await _extract_search_terms_from_images(images)
-            if vision_query and vision_query != search_query:
+            if vision_query:
+                # Sanitize LLM-extracted query (same guard as user input) and limit length
+                vision_query = sanitize_user_input(vision_query)
+                vision_query = vision_query[:200]
+            if vision_query and vision_query.strip().lower() != search_query.strip().lower():
                 logger.info(
                     "vision_augmented_retrieval ns=%s user=%s original_q=%r vision_q=%r",
                     namespace, user_id, search_query[:60], vision_query[:60],
