@@ -12,12 +12,14 @@ http_client = httpx.AsyncClient(timeout=60)
 
 async def transcribe_voice(audio_bytes: bytes, filename: str = "voice.ogg") -> str:
     """Transcribe audio bytes using Groq Whisper. Raises RuntimeError on failure."""
-    if not settings.groq_api_key:
+    from config_overlay import get_setting
+    groq_key = get_setting("groq_api_key", settings.groq_api_key)
+    if not groq_key:
         raise RuntimeError("GROQ_API_KEY not configured.")
     try:
         response = await http_client.post(
             "https://api.groq.com/openai/v1/audio/transcriptions",
-            headers={"Authorization": f"Bearer {settings.groq_api_key}"},
+            headers={"Authorization": f"Bearer {groq_key}"},
             files={"file": (filename, audio_bytes, "audio/ogg")},
             data={"model": "whisper-large-v3-turbo", "response_format": "text"},
         )

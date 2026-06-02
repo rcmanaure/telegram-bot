@@ -12,8 +12,18 @@ async def init_tenant_bot(tenant, domain: str) -> bool:
     """Build telegram Application for a tenant and register its webhook.
 
     Returns True on success, False on failure (logs the exception).
+    If an Application for this bot_token already exists, shuts it down first.
     """
     from bot import register_handlers
+    from state import get_app
+
+    # Shut down existing Application if one exists for this bot_token
+    existing_app = get_app(tenant.bot_token)
+    if existing_app is not None:
+        try:
+            await existing_app.shutdown()
+        except Exception as e:
+            logger.warning("Failed to shut down existing app for tenant %s: %s", tenant.slug, e)
 
     try:
         tg_app = ApplicationBuilder().token(tenant.bot_token).build()

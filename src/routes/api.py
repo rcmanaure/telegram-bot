@@ -7,7 +7,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
-from db import get_db, DocumentChunk, Tenant
+from db import get_db, DocumentChunk, Feedback, Tenant
 from dependencies import require_tenant
 from limiter import limiter
 from rag import chunk_text, index_chunks
@@ -36,12 +36,13 @@ async def upload_document(
         raise HTTPException(413, "File too large. Maximum size is 10MB.")
 
     fname_lower = file.filename.lower()
+    source_name = fname_lower  # Normalize source to lowercase to prevent duplicate chunks on re-upload with different casing
     if any(fname_lower.endswith(ext) for ext in _IMAGE_EXTS):
         description = await describe_image_for_upload(content, fname_lower)
-        all_chunks = chunk_text(description, source=file.filename, page=1)
+        all_chunks = chunk_text(description, source=source_name, page=1)
         pages_processed = 1
     else:
-        all_chunks, pages_processed = process_uploaded_file(content, fname_lower, file.filename)
+        all_chunks, pages_processed = process_uploaded_file(content, fname_lower, source_name)
 
     if not all_chunks:
         raise HTTPException(400, "No extractable text in file")
@@ -49,7 +50,7 @@ async def upload_document(
     # Upsert: delete old chunks for this source, then insert new ones atomically
     await db.execute(
         text("DELETE FROM document_chunks WHERE namespace = :ns AND source = :src"),
-        {"ns": tenant.slug, "src": file.filename},
+        {"ns": tenant.slug, "src": source_name},
     )
     stored = await index_chunks(db, all_chunks, tenant.slug, auto_commit=False)
     await db.commit()
@@ -121,5 +122,37 @@ async def delete_namespace(
     await db.execute(text("DELETE FROM document_chunks WHERE namespace = :ns"), {"ns": ns})
     await db.execute(text("DELETE FROM conversations WHERE namespace = :ns"), {"ns": ns})
     await db.execute(text("DELETE FROM unanswered_queries WHERE namespace = :ns"), {"ns": ns})
+    await db.execute(text("DELETE FROM feedback WHERE namespace = :ns"), {"ns": ns})
     await db.commit()
     return {"status": "deleted", "namespace": ns}
+
+
+@router.get("/feedback")
+async def get_feedback(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    tenant: Tenant = Depends(require_tenant),
+    limit: int = 100,
+):
+    """Return recent feedback for the authenticated tenant's namespace."""
+    result = await db.execute(
+        select(Feedback)
+        .where(Feedback.namespace == tenant.slug)
+        .order_by(Feedback.created_at.desc())
+        .limit(min(limit, 500))
+    )
+    rows = result.scalars().all()
+    return {
+        "feedback": [
+            {
+                "id": r.id,
+                "user_id": r.user_id,
+                "message_id": r.message_id,
+                "rating": r.rating,
+                "comment": r.comment,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rows
+        ],
+        "total": len(rows),
+    }
