@@ -158,6 +158,62 @@ def test_chunk_text_section_header_stays_with_content():
     )
 
 
+def test_chunk_text_markdown_table_rows_become_separate_chunks():
+    """Markdown table rows should become individual chunks with section headers,
+    not character-sliced monoliths that dilute embedding signals."""
+    from rag import chunk_text
+    doc = (
+        "## SISTEMA DIGESTIVO\n\n"
+        "| Código | Descripción | Precio (USD) |\n"
+        "|--------|-------------|-------------:|\n"
+        "| SDG033 | Apéndice Cecal | $90.00 |\n"
+        "| SDG034 | Vesícula Biliar | $90.00 |\n"
+        "| SDG035 | Epiplón Mayor | $80.00 |\n"
+    )
+    chunks = chunk_text(doc, source="prices.md", page=1)
+    # "Apéndice Cecal" must appear in at least one chunk (not character-sliced away)
+    appendice_chunk = next(
+        (c for c in chunks if "Apéndice Cecal" in c["content"]),
+        None,
+    )
+    assert appendice_chunk is not None, (
+        "Table row 'Apéndice Cecal' must appear in at least one chunk"
+    )
+    # The section header should be prepended to the row for context
+    assert "SISTEMA DIGESTIVO" in appendice_chunk["content"], (
+        "Section header must be prepended to table row for context"
+    )
+
+
+def test_chunk_text_markdown_table_separator_rows_removed():
+    """Markdown table separator rows (|---|---|) should not appear in chunks."""
+    from rag import chunk_text
+    doc = (
+        "## Lista\n\n"
+        "| A | B |\n"
+        "|---|---|\n"
+        "| 1 | 2 |\n"
+    )
+    chunks = chunk_text(doc, source="test.md", page=1)
+    for c in chunks:
+        assert "---" not in c["content"] or "SISTEMA" in c["content"], (
+            "Separator rows should not appear in chunk content"
+        )
+
+
+def test_split_markdown_tables_prepends_header():
+    """_split_markdown_tables should prepend the section header to each table row."""
+    from rag import _split_markdown_tables
+    text = "## SISTEMA DIGESTIVO\n\n| SDG033 | Apéndice Cecal | $90.00 |"
+    result = _split_markdown_tables(text)
+    assert "SISTEMA DIGESTIVO" in result
+    assert "Apéndice Cecal" in result
+    # Each row should be its own paragraph (separated by blank lines)
+    paragraphs = [p for p in result.split('\n\n') if p.strip()]
+    # Should have header + at least one row
+    assert len(paragraphs) >= 2
+
+
 # ─── call_embeddings error handling ───────────────────────────────────────────────
 
 @pytest.mark.asyncio
