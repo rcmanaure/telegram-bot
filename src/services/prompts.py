@@ -18,7 +18,7 @@ def build_system_prompt(
     When example_questions is provided, includes them in the prompt for better triage responses.
     """
     area_clause = f" Mi área de expertise: {expertise_area}." if expertise_area else ""
-    off_topic_reply = f"Eso está fuera de mi área de expertise.{area_clause} Consultá directamente con nosotros."
+    off_topic_reply = f"No encontré información sobre eso en mis documentos.{area_clause} Probá reformulando tu consulta o contactá directamente con nosotros."
 
     fmt = CHANNEL_FORMATTING.get(channel, CHANNEL_FORMATTING["telegram"])
 
