@@ -20,7 +20,12 @@ _overlay: dict[str, str] = {}
 
 
 def get_setting(key: str, fallback: str = "") -> str:
-    """Return DB override if present, else fallback (.env value)."""
+    """Return DB override if present, else fallback (.env value).
+
+    Note: `or` semantics mean empty-string overrides fall through to fallback.
+    This is intentional — the admin UI skips empty form fields to preserve
+    existing values, and intentional "unset" requires deleting the DB row.
+    """
     return _overlay.get(key) or fallback
 
 

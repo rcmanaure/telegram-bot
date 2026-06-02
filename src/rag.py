@@ -10,15 +10,16 @@ import json
 import logging
 
 import httpx
-from services.prompts import build_system_prompt, ESCALATION_PATTERN
+from services.prompts import build_system_prompt, ESCALATION_PATTERN, _GREETING_PATTERN
 from services.stt import transcribe_voice
 from security import CANARY_TOKEN, scan_chunk_for_injection, sanitize_user_input, validate_output
 
 logger = logging.getLogger(__name__)
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
-from db import DocumentChunk, Conversation, UnansweredQuery
+from db import DocumentChunk, Conversation, UnansweredQuery, Tenant
 from config import settings
+from config_overlay import get_setting
 from llm import call_chat, call_embeddings, extract_json_from_llm_response
 
 http_client = httpx.AsyncClient(timeout=60)
@@ -84,14 +85,15 @@ async def sync_faq_chunks(
     tenant_slug: str,
     example_questions: list[str] | None,
 ) -> int:
-    """Delete old FAQ chunks and (re)index example_questions for a tenant."""
+    """Delete old FAQ chunks and (re)index example_questions for a tenant.
+    Atomic: DELETE + INSERT in a single transaction to avoid data loss on failure."""
     await db.execute(
         text("DELETE FROM document_chunks WHERE namespace = :ns AND source = :src"),
         {"ns": tenant_slug, "src": FAQ_SOURCE},
     )
-    await db.commit()
 
     if not example_questions:
+        await db.commit()
         return 0
 
     chunks = [
@@ -99,7 +101,9 @@ async def sync_faq_chunks(
         for q in example_questions
         if q and q.strip()
     ]
-    return await index_chunks(db, chunks, tenant_slug)
+    stored = await index_chunks(db, chunks, tenant_slug, auto_commit=False)
+    await db.commit()
+    return stored
 
 
 # ─── Indexing ────────────────────────────────────────────────────────────────
@@ -207,6 +211,61 @@ async def retrieve_context(
 MIN_SIMILARITY = 0.20  # chunks below this threshold are considered off-topic
 
 
+# ─── Query reformulation ──────────────────────────────────────────────────────
+
+async def _reformulate_query(question: str, history: list[dict]) -> str:
+    """Rewrite a follow-up question into a standalone query using conversation history.
+
+    Returns the original question if history is empty or reformulation fails.
+    Uses a fast, low-token LLM call to resolve pronouns and context-dependent
+    references (e.g., "¿cuánto cuesta?" → "¿cuánto cuesta el Plan Pro?").
+    """
+    if not history:
+        return question
+
+    # Build compact history summary (last 3 turns = 6 messages max)
+    recent = history[-6:]
+    history_lines = []
+    for msg in recent:
+        role = "User" if msg["role"] == "user" else "Bot"
+        content = msg["content"][:200]  # truncate long messages
+        history_lines.append(f"{role}: {content}")
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a query reformulation assistant. Given a follow-up question and the "
+                "conversation history, rewrite the question into a self-contained, standalone query "
+                "that preserves the original intent but can be understood without context.\n\n"
+                "Rules:\n"
+                "- Resolve pronouns and references (e.g., '¿cuánto cuesta?' → '¿cuánto cuesta el Plan Pro?')\n"
+                "- Keep the same language as the question\n"
+                "- If the question is already standalone, return it unchanged\n"
+                "- Output ONLY the reformulated question, nothing else\n"
+                "- Do not add information not implied by the conversation"
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"Conversation:\n{chr(10).join(history_lines)}\n\nFollow-up question: {question}",
+        },
+    ]
+
+    try:
+        reformulated = await call_chat(messages, max_tokens=100, temperature=0.0)
+        reformulated = reformulated.strip().strip('"').strip("'")
+        # Sanity check: if reformulation is wildly different length, keep original
+        if len(reformulated) < len(question) * 0.3 or len(reformulated) > len(question) * 5:
+            logger.warning("reformulate_query: result too different, keeping original. q=%r r=%r",
+                           question[:60], reformulated[:60])
+            return question
+        return reformulated
+    except Exception as e:
+        logger.warning("reformulate_query failed: %s — using original question", e)
+        return question
+
+
 # ─── LLM calls (delegated to llm.call_chat) ──────────────────────────────────
 
 
@@ -214,10 +273,16 @@ async def _triage_response(
     question: str,
     expertise_area: str,
     language_code: str | None = None,
+    example_questions: list[str] | None = None,
 ) -> tuple[str, str]:
     """Classify intent and generate fallback reply when no context found.
-    Returns (intent, reply_text). Intent: greeting | off_topic | needs_human | ambiguous."""
+    Returns (intent, reply_text). Intent: greeting | off_topic | needs_human | ambiguous.
+    When example_questions is provided, includes them so the LLM can suggest specific topics."""
     area = expertise_area or "los temas cubiertos en los documentos"
+    questions_hint = ""
+    if example_questions:
+        q_list = ", ".join(f'"{q}"' for q in example_questions[:5])
+        questions_hint = f"\n\nThe service can help with topics like: {q_list}. When intent is 'ambiguous', suggest these topics."
     messages = [
         {
             "role": "system",
@@ -246,6 +311,7 @@ async def _triage_response(
                 "'que puedes hacer?' → ambiguous (asking about capabilities)\n"
                 "'como se hace una pizza?' → off_topic\n"
                 "'quiero hablar con un humano' → needs_human"
+                f"{questions_hint}"
             ),
         },
         {"role": "user", "content": question},
@@ -268,15 +334,17 @@ async def generate_answer(
     channel: str = "telegram",
     image_b64: str | None = None,
     image_mime: str = "image/jpeg",
+    from_web: bool = False,
 ) -> str:
     """
     Generate an answer using retrieved context + conversation history.
     When image_b64 is set, sends the image alongside the question (vision models).
+    When from_web is True, adds web-source framing to the system prompt.
     """
     if not context_chunks:
         return "No encontré información relevante en los documentos para responder tu pregunta."
 
-    system_prompt = build_system_prompt(expertise_area, channel=channel)
+    system_prompt = build_system_prompt(expertise_area, channel=channel, from_web=from_web)
 
     context_text = "\n\n---\n\n".join([
         f"[Source: {c['source']}, Page {c['page']}]\n{c['content']}"
@@ -338,6 +406,9 @@ async def get_history(
                 content = sanitize_user_input(r.content)
             except ValueError:
                 content = "[message removed]"
+        elif r.role == "system":
+            # Conversation summaries — pass through as-is for LLM context
+            content = r.content
         elif r.role == "assistant" and CANARY_TOKEN in r.content:
             content = "[message redacted]"
         else:
@@ -347,6 +418,97 @@ async def get_history(
 
 
 HISTORY_ROW_CAP = 50  # max rows per user per namespace (~25 turns)
+SUMMARY_THRESHOLD = 30  # rows above which old history gets summarized (~15 turns)
+SUMMARY_KEEP = 10       # rows of recent history to keep intact after summarization
+
+
+async def _summarize_old_history(
+    db: AsyncSession,
+    user_id: str,
+    namespace: str,
+    tenant_id: int | None = None,
+) -> None:
+    """When conversation history exceeds SUMMARY_THRESHOLD rows, compact the
+    oldest turns into a single system summary row using an LLM call.
+
+    This keeps context within LLM token limits while preserving conversation
+    continuity. The most recent SUMMARY_KEEP rows are left intact.
+    Called from save_turn() after each turn is persisted.
+    """
+    from security import CANARY_TOKEN
+
+    # Check row count
+    count_result = await db.execute(
+        text("SELECT COUNT(*) FROM conversations WHERE user_id = :uid AND namespace = :ns"),
+        {"uid": user_id, "ns": namespace},
+    )
+    total = count_result.scalar_one()
+    if total <= SUMMARY_THRESHOLD:
+        return
+
+    # Fetch oldest rows (all except the most recent SUMMARY_KEEP)
+    old_rows_result = await db.execute(
+        select(Conversation)
+        .where(Conversation.user_id == user_id, Conversation.namespace == namespace)
+        .order_by(Conversation.created_at)
+        .limit(total - SUMMARY_KEEP)
+    )
+    old_rows = old_rows_result.scalars().all()
+    if not old_rows:
+        return
+
+    # Build conversation text for summarization
+    conv_lines = []
+    for r in old_rows:
+        role = "Usuario" if r.role == "user" else "Asistente"
+        content = r.content[:200]  # truncate long messages
+        conv_lines.append(f"{role}: {content}")
+
+    conv_text = "\n".join(conv_lines)
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Resumí la siguiente conversación en 2-3 oraciones en español, "
+                "manteniendo los temas clave discutidos, cualquier información "
+                "pendiente o pregunta sin responder, y datos importantes mencionados "
+                "(precios, horarios, nombres). No inventes información que no esté "
+                "en la conversación. Respondé SOLO con el resumen, sin prefijo."
+            ),
+        },
+        {"role": "user", "content": conv_text},
+    ]
+
+    try:
+        summary = await call_chat(messages, max_tokens=200, temperature=0.0)
+        summary = summary.strip()
+    except Exception as e:
+        logger.warning("_summarize_old_history: LLM call failed: %s — skipping", e)
+        return
+
+    # Redact canary token if present
+    if CANARY_TOKEN in summary:
+        summary = summary.replace(CANARY_TOKEN, "[REDACTED]")
+
+    # Delete the old rows and insert summary row
+    old_ids = [r.id for r in old_rows]
+    id_list = ",".join(str(i) for i in old_ids)
+    await db.execute(
+        text(f"DELETE FROM conversations WHERE id IN ({id_list})"),
+    )
+
+    db.add(Conversation(
+        user_id=user_id,
+        namespace=namespace,
+        role="system",
+        content=f"[Resumen de conversación previa]: {summary}",
+        channel="system",
+        tenant_id=tenant_id,
+    ))
+    await db.commit()
+    logger.info("_summarize_old_history: summarized %d old rows for user=%s ns=%s",
+                len(old_rows), user_id, namespace)
 
 
 async def save_turn(
@@ -392,8 +554,90 @@ async def save_turn(
     )
     await db.commit()
 
+    # Summarize old history when threshold is exceeded (best-effort)
+    try:
+        await _summarize_old_history(db, user_id, namespace, tenant_id)
+    except Exception as e:
+        logger.warning("save_turn: summarize failed for user=%s ns=%s: %s", user_id, namespace, e)
 
-# ─── Full RAG Query (entry point) ────────────────────────────────────────────
+
+# ─── Web Search ──────────────────────────────────────────────────────────────────
+
+# Ollama Cloud sends {"query": ..., "num_results": N} and returns
+# {"results": [{"title": ..., "body": ..., "url": ...}, ...]}.
+# Generic providers (Tavily, Brave) return different shapes — we normalize.
+_OLLAMA_SEARCH_BODY = lambda q: json.dumps({"query": q, "num_results": 5}).encode()
+_GENERIC_SEARCH_BODY = lambda q: json.dumps({"query": q}).encode()
+
+
+async def _web_search(question: str) -> list[dict]:
+    """
+    Call the configured web search endpoint and return context chunks.
+    Tries Ollama format first; if 404/405, retries with generic format.
+    Returns [] on any error (best-effort, never blocks reply).
+    Each chunk: {"content": str, "source": str, "page": 0, "similarity": 0.4}
+    """
+    web_search_url = get_setting("web_search_url", settings.web_search_url)
+    if not web_search_url:
+        return []
+
+    api_key = get_setting("llm_api_key", settings.effective_llm_api_key)
+    headers = {
+        "Content-Type": "application/json",
+    }
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    try:
+        # Try Ollama-style endpoint (with num_results param)
+        response = await http_client.post(
+            web_search_url,
+            content=_OLLAMA_SEARCH_BODY(question),
+            headers=headers,
+        )
+
+        # If endpoint rejects Ollama format (404/405), try generic format
+        if response.status_code in (404, 405):
+            logger.info("web_search_ollama_format_rejected url=%s status=%d, retrying generic",
+                        web_search_url, response.status_code)
+            response = await http_client.post(
+                web_search_url,
+                content=_GENERIC_SEARCH_BODY(question),
+                headers=headers,
+            )
+
+        response.raise_for_status()
+        data = response.json()
+
+        # Normalize: Ollama returns {"results": [...]} with "body" field
+        # Generic providers may return {"results": [...]} with "content"/"text"/"snippet"
+        raw_results = data.get("results", data if isinstance(data, list) else [])
+        chunks = []
+        for r in raw_results:
+            # Extract text content from various field names
+            content = (
+                r.get("body") or r.get("content") or r.get("text")
+                or r.get("snippet") or r.get("description") or ""
+            )
+            if not content or len(content.strip()) < 50:
+                continue
+            url = r.get("url") or r.get("link") or r.get("source") or ""
+            # Include URL in content for attribution
+            if url:
+                content = f"{content}\nFuente: {url}"
+            chunks.append({
+                "content": content.strip(),
+                "source": url or "web",
+                "page": 0,
+                "similarity": 0.4,  # lower than doc matches — web sources are less authoritative
+            })
+
+        return chunks
+
+    except Exception as e:
+        logger.warning("web_search_failed url=%s error=%s", web_search_url, e)
+        return []
+
 
 async def _log_unanswered(
     db: AsyncSession,
@@ -427,13 +671,22 @@ async def rag_query(
     channel: str = "telegram",
     image_b64: str | None = None,
     image_mime: str = "image/jpeg",
+    tenant: "Tenant | None" = None,
 ) -> tuple[str, list[dict], str | None]:
     """
     Full RAG pipeline: retrieve context → generate answer → save history.
     Returns (answer, retrieved_chunks, intent | None).
     intent is None when answered from docs; otherwise the triage classification.
     When image_b64 is set, the image is passed to generate_answer() for vision models.
+    When tenant is provided and web_search_enabled, falls back to web search
+    when no context is found in the knowledge base.
     """
+    # Pre-RAG: local greeting classifier — skip LLM for obvious greetings
+    if _GREETING_PATTERN.match(question.strip()):
+        answer = f"¡Hola! ¿En qué puedo ayudarte?{(' ' + expertise_area) if expertise_area else ''}"
+        await save_turn(db, user_id, namespace, question, answer, channel=channel, tenant_id=tenant_id)
+        return answer, [], "greeting"
+
     # Pre-RAG: explicit escalation shortcut — skip vector search
     if ESCALATION_PATTERN.search(question):
         area_clause = f" Mi área de expertise: {expertise_area}." if expertise_area else ""
@@ -442,21 +695,54 @@ async def rag_query(
         await _log_unanswered(db, namespace, question, user_id, "needs_human", tenant_id)
         return answer, [], "needs_human"
 
-    context = await retrieve_context(db, question, namespace)
+    # Query reformulation: resolve pronouns/references using conversation history
+    # Use reformulated query for vector search, original question for LLM answer generation
+    history = await get_history(db, user_id, namespace)
+    search_query = await _reformulate_query(question, history)
+    if search_query != question:
+        logger.info("reformulate ns=%s original=%r → reformulated=%r",
+                     namespace, question[:60], search_query[:60])
+
+    context = await retrieve_context(db, search_query, namespace)
     logger.info(
-        "retrieve ns=%s q=%r top_scores=%s",
+        "retrieve ns=%s q=%r search_q=%r top_scores=%s",
         namespace,
         question[:60],
+        search_query[:60] if search_query != question else "(same)",
         [(round(c["similarity"], 3), c["source"], c["content"][:40]) for c in context[:3]],
     )
     context = [c for c in context if c["similarity"] >= MIN_SIMILARITY]
-    history = await get_history(db, user_id, namespace)
 
     if not context:
-        intent, answer = await _triage_response(question, expertise_area, language_code)
+        # Web search fallback: if tenant has web search enabled and URL is configured,
+        # try web search before falling back to triage.
+        web_search_enabled = tenant.web_search_enabled if tenant else False
+        if web_search_enabled and get_setting("web_search_url", settings.web_search_url):
+            web_results = await _web_search(question)
+            if web_results:
+                answer = await generate_answer(
+                    web_results, question, history, expertise_area,
+                    channel=channel, image_b64=image_b64, image_mime=image_mime,
+                    from_web=True,
+                )
+                answer = validate_output(answer, user_id=user_id)
+                # Redact canary token at write time
+                if CANARY_TOKEN in answer:
+                    answer = answer.replace(CANARY_TOKEN, "[REDACTED]")
+                    logger.warning("canary_redacted user_id=%s web_search", user_id)
+                await save_turn(db, user_id, namespace, question, answer, channel=channel, tenant_id=tenant_id)
+                return answer, web_results, "web_search"
+
+        # No web search or no results — fall back to triage
+        example_questions = tenant.example_questions if tenant else None
+        intent, answer = await _triage_response(question, expertise_area, language_code, example_questions)
+        answer = validate_output(answer, user_id=user_id)
+        # Redact canary token at write time — prevents exfiltration via history
+        if CANARY_TOKEN in answer:
+            answer = answer.replace(CANARY_TOKEN, "[REDACTED]")
+            logger.warning("canary_redacted user_id=%s intent=%s", user_id, intent)
         await save_turn(db, user_id, namespace, question, answer, channel=channel)
-        if intent in {"off_topic", "needs_human"}:
-            await _log_unanswered(db, namespace, question, user_id, intent, tenant_id)
+        await _log_unanswered(db, namespace, question, user_id, intent, tenant_id)
         return answer, [], intent
 
     answer = await generate_answer(
@@ -464,5 +750,9 @@ async def rag_query(
         channel=channel, image_b64=image_b64, image_mime=image_mime,
     )
     answer = validate_output(answer, user_id=user_id)
+    # Redact canary token at write time — prevents exfiltration via history
+    if CANARY_TOKEN in answer:
+        answer = answer.replace(CANARY_TOKEN, "[REDACTED]")
+        logger.warning("canary_redacted user_id=%s context_answer", user_id)
     await save_turn(db, user_id, namespace, question, answer, channel=channel)
     return answer, context, None
