@@ -318,6 +318,27 @@ class TestLlmErrorMessage:
         msg = _error_message(err)
         assert "timed out" in msg.lower()
 
+    def test_404_vision_not_supported(self):
+        from llm import _error_message
+        resp = MagicMock()
+        resp.status_code = 404
+        resp.headers = {"content-type": "application/json"}
+        resp.json.return_value = {"error": {"message": "No endpoints found that support image input"}}
+        err = httpx.HTTPStatusError("404", request=MagicMock(), response=resp)
+        msg = _error_message(err)
+        assert "no soporta procesar imágenes" in msg.lower()
+        assert "LLM_VISION_MODEL" in msg
+
+    def test_404_non_vision_returns_generic(self):
+        from llm import _error_message
+        resp = MagicMock()
+        resp.status_code = 404
+        resp.headers = {"content-type": "application/json"}
+        resp.json.return_value = {"error": {"message": "Model not found"}}
+        err = httpx.HTTPStatusError("404", request=MagicMock(), response=resp)
+        msg = _error_message(err)
+        assert "LLM service error (404)" in msg
+
 
 # ─── state module ─────────────────────────────────────────────────────────────
 

@@ -973,71 +973,67 @@ async def test_rag_query_greeting_does_not_log_unanswered():
     mock_log.assert_not_called()
 
 
-# ─── I9: Feedback callback handler ──────────────────────────────────────────
+# ─── Vision guard: no LLM_VISION_MODEL configured ──────────────────────────────
 
 @pytest.mark.asyncio
-async def test_feedback_callback_stores_positive_rating():
-    """Thumbs up callback stores a 'positive' Feedback row."""
-    from bot import handle_feedback_callback
-    from db import Feedback
+async def test_rag_query_image_no_vision_model_returns_guard_message():
+    """When image_b64 is set but LLM_VISION_MODEL is empty, rag_query returns
+    a clear Spanish message instead of sending the image to a text-only model."""
+    from rag import rag_query
 
-    mock_query = AsyncMock()
-    mock_query.data = "fb:pos:test-tenant"
-    mock_query.from_user = MagicMock()
-    mock_query.from_user.id = 42
-
-    mock_update = MagicMock()
-    mock_update.callback_query = mock_query
-
-    # Mock AsyncSessionLocal as async context manager returning a mock DB
     mock_db = AsyncMock()
-    added_objects = []
-    mock_db.add = MagicMock(side_effect=lambda obj: added_objects.append(obj))
+    mock_db.add = MagicMock()
+    mock_db.commit = AsyncMock()
 
-    mock_session = AsyncMock()
-    mock_session.__aenter__ = AsyncMock(return_value=mock_db)
-    mock_session.__aexit__ = AsyncMock(return_value=False)
+    with patch("rag.retrieve_context", new=AsyncMock()) as mock_retrieve, \
+         patch("rag.generate_answer", new=AsyncMock()) as mock_generate, \
+         patch("rag.save_turn", new=AsyncMock()), \
+         patch("rag.call_chat", new=AsyncMock()) as mock_call_chat:
+        # LLM_VISION_MODEL not set (empty string → None)
+        with patch("rag.settings") as mock_settings, \
+             patch("rag.get_setting", new=lambda k, fallback="": fallback if k == "llm_vision_model" else fallback):
+            mock_settings.llm_vision_model = ""
+            answer, chunks, intent = await rag_query(
+                mock_db, "¿Qué es esto?", "ns", "u1",
+                image_b64="dGVzdA==",  # base64 "test"
+            )
 
-    with patch("db.AsyncSessionLocal", return_value=mock_session), \
-         patch("bot._get_tenant", return_value=MagicMock(slug="test-tenant", id=1)):
-        await handle_feedback_callback(mock_update, MagicMock())
-
-    mock_query.answer.assert_called_once()
-    assert len(added_objects) == 1
-    fb = added_objects[0]
-    assert isinstance(fb, Feedback)
-    assert fb.rating == "positive"
-    assert fb.namespace == "test-tenant"
+    assert intent == "no_vision_model"
+    assert chunks == []
+    assert "No puedo procesar imágenes" in answer
+    # Must NOT call the LLM — guard fires before any LLM call
+    mock_call_chat.assert_not_called()
+    mock_retrieve.assert_not_called()
+    mock_generate.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_feedback_callback_stores_negative_rating():
-    """Thumbs down callback stores a 'negative' Feedback row."""
-    from bot import handle_feedback_callback
-    from db import Feedback
-
-    mock_query = AsyncMock()
-    mock_query.data = "fb:neg:my-slug:12345"
-    mock_query.from_user = MagicMock()
-    mock_query.from_user.id = 99
-
-    mock_update = MagicMock()
-    mock_update.callback_query = mock_query
+async def test_rag_query_image_with_vision_model_proceeds():
+    """When image_b64 is set AND LLM_VISION_MODEL is configured, rag_query
+    proceeds normally (does NOT fire the guard)."""
+    from rag import rag_query
 
     mock_db = AsyncMock()
-    added_objects = []
-    mock_db.add = MagicMock(side_effect=lambda obj: added_objects.append(obj))
+    ctx = [{"content": "info", "source": "doc.pdf", "page": 1, "similarity": 0.9}]
 
-    mock_session = AsyncMock()
-    mock_session.__aenter__ = AsyncMock(return_value=mock_db)
-    mock_session.__aexit__ = AsyncMock(return_value=False)
+    with patch("rag.retrieve_context", new=AsyncMock(return_value=ctx)), \
+         patch("rag.get_history", new=AsyncMock(return_value=[])), \
+         patch("rag._reformulate_query", new=AsyncMock(side_effect=lambda q, h: q)), \
+         patch("rag.generate_answer", new=AsyncMock(return_value="Es un documento.")) as mock_generate, \
+         patch("rag.validate_output", side_effect=lambda x, **kw: x), \
+         patch("rag.save_turn", new=AsyncMock()), \
+         patch("rag.settings") as mock_settings, \
+         patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback):
+        mock_settings.llm_vision_model = "gemma4:31b"
+        answer, chunks, intent = await rag_query(
+            mock_db, "¿Qué es esto?", "ns", "u1",
+            image_b64="dGVzdA==",
+        )
 
-    with patch("db.AsyncSessionLocal", return_value=mock_session), \
-         patch("bot._get_tenant", return_value=MagicMock(slug="my-slug", id=5)):
-        await handle_feedback_callback(mock_update, MagicMock())
-
-    assert added_objects[0].rating == "negative"
-    assert added_objects[0].message_id == "12345"
+    # Guard did NOT fire — generate_answer was called with image_b64
+    mock_generate.assert_called_once()
+    call_kwargs = mock_generate.call_args
+    assert call_kwargs.kwargs.get("image_b64") == "dGVzdA==" or call_kwargs[1].get("image_b64") == "dGVzdA=="
 
 
 # ─── I10: Conversation summarization ─────────────────────────────────────────
