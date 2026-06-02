@@ -1107,6 +1107,32 @@ async def test_rag_query_image_with_vision_model_proceeds():
 
 
 @pytest.mark.asyncio
+async def test_generate_answer_image_includes_do_not_ask_for_image_instruction():
+    """When image_b64 is set, generate_answer must include an instruction
+    telling the LLM NOT to ask the user to send an image (they already did)."""
+    from rag import generate_answer
+
+    chunks = [{"content": "Cotizaciones: envíe la orden médica o una imagen", "source": "policy.md", "page": 1}]
+    with patch("rag.call_chat", new=AsyncMock(return_value="🔬 Apéndice Cecal — $90.00 USD")) as mock_chat, \
+         patch("rag.build_system_prompt", return_value="system prompt"), \
+         patch("rag.settings") as mock_settings:
+        mock_settings.llm_vision_model = "gemma4:31b"
+        await generate_answer(
+            chunks, "¿cuánto cuesta la biopsia de apéndice cecal?", [],
+            image_b64="dGVzdA==",
+        )
+
+    # Verify the LLM call included the anti-prompting instruction
+    call_args = mock_chat.call_args
+    messages = call_args[0][0]
+    user_msg = messages[-1]
+    # The content is a list with text + image_url parts
+    content_parts = user_msg["content"]
+    text_part = next(p for p in content_parts if p["type"] == "text")
+    assert "YA la envió" in text_part["text"] or "NUNCA le digas" in text_part["text"]
+
+
+@pytest.mark.asyncio
 async def test_rag_query_image_no_text_context_goes_to_vision():
     """When image_b64 is set but no text context found, rag_query sends the
     image to the vision model instead of falling to triage."""
