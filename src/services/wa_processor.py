@@ -13,6 +13,41 @@ from security import sanitize_user_input
 logger = logging.getLogger(__name__)
 
 
+async def _send_wa_reply(
+    adapter: WhatsAppAdapter,
+    user_id: str,
+    answer: str,
+    chunks: list[dict] | None = None,
+    intent: str | None = None,
+    tenant: Tenant | None = None,
+) -> None:
+    """Send a WhatsApp reply with sources footer and escalation button.
+
+    Shared by _wa_process_flushed and handle_wa_message to avoid
+    divergent reply formatting.
+    """
+    source_footer = ""
+    if chunks:
+        sources = set(c["source"] for c in chunks if c.get("source"))
+        if sources:
+            source_footer = "\n\n📎 Fuentes: " + ", ".join(sources)
+
+    # Escalation: add "Contactar" button for off-topic or needs-human intents
+    buttons = None
+    if intent in {"off_topic", "needs_human"} and tenant and tenant.contact_url:
+        buttons = [ChannelButton(label="Contactar", url=tenant.contact_url)]
+
+    try:
+        await adapter.send_reply(user_id, answer + source_footer, buttons=buttons)
+    except ChannelSendError as e:
+        logger.warning("wa_send_failed user=%s: %s — retrying once", user_id, e)
+        await asyncio.sleep(2)
+        try:
+            await adapter.send_reply(user_id, answer + source_footer)
+        except ChannelSendError:
+            logger.error("wa_send_failed_retry user=%s — giving up", user_id)
+
+
 def create_wa_adapter(tenant: Tenant) -> WhatsAppAdapter | None:
     """Create a WhatsApp adapter for the tenant, or None if WA not configured."""
     if not tenant.wa_phone_number_id or not tenant.wa_access_token:
@@ -73,27 +108,7 @@ async def _wa_process_flushed(
                     pass
                 return
 
-        # Send reply with sources footer + feedback buttons
-        source_footer = ""
-        if chunks:
-            sources = set(c["source"] for c in chunks if c.get("source"))
-            if sources:
-                source_footer = "\n\n📎 Fuentes: " + ", ".join(sources)
-
-        # Escalation: add "Contactar" button for off-topic or needs-human intents
-        buttons = None
-        if intent in {"off_topic", "needs_human"} and tenant.contact_url:
-            buttons = [ChannelButton(label="Contactar", url=tenant.contact_url)]
-
-        try:
-            await adapter.send_reply(user_id, answer + source_footer, buttons=buttons)
-        except ChannelSendError as e:
-            logger.warning("wa_send_failed user=%s: %s — retrying once", user_id, e)
-            await asyncio.sleep(2)
-            try:
-                await adapter.send_reply(user_id, answer + source_footer)
-            except ChannelSendError:
-                logger.error("wa_send_failed_retry user=%s — giving up", user_id)
+        await _send_wa_reply(adapter, user_id, answer, chunks=chunks, intent=intent, tenant=tenant)
 
 
 async def handle_wa_message(
@@ -253,24 +268,4 @@ async def handle_wa_message(
                     pass
                 return
 
-        # Send reply with sources footer + feedback buttons
-        source_footer = ""
-        if chunks:
-            sources = set(c["source"] for c in chunks if c.get("source"))
-            if sources:
-                source_footer = "\n\n📎 Fuentes: " + ", ".join(sources)
-
-        # Escalation: add "Contactar" button for off-topic or needs-human intents
-        buttons = None
-        if intent in {"off_topic", "needs_human"} and tenant.contact_url:
-            buttons = [ChannelButton(label="Contactar", url=tenant.contact_url)]
-
-        try:
-            await adapter.send_reply(user_id, answer + source_footer, buttons=buttons)
-        except ChannelSendError as e:
-            logger.warning("wa_send_failed user=%s: %s — retrying once", user_id, e)
-            await asyncio.sleep(2)
-            try:
-                await adapter.send_reply(user_id, answer + source_footer)
-            except ChannelSendError:
-                logger.error("wa_send_failed_retry user=%s — giving up", user_id)
+        await _send_wa_reply(adapter, user_id, answer, chunks=chunks, intent=intent, tenant=tenant)
