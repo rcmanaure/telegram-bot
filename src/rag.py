@@ -279,13 +279,33 @@ _ILLEGIBLE_PATTERNS = [
     re.compile(r"unable\s+to\s+(read|see|interpret|view|process)\s+(the\s+)?(image|photo|picture)", re.IGNORECASE),
 ]
 
+# Patterns that indicate PARTIAL legibility — the model could read some text
+# but not all. These should NOT trigger the full-illegible fallback; instead
+# the LLM is already instructed (via image instruction) to extract what it can.
+_PARTIALLY_LEGIBLE_PATTERNS = [
+    re.compile(r"(parcialmente|parte|algunas?\s+(partes?|secciones?|palabras?|líneas?|campos?)).*(ilegible|borros[oa]|no\s+puedo|indecifr|dif[ií]cil|indistinguible)", re.IGNORECASE),
+    re.compile(r"(ilegible|borros[oa]|indecifrable|no\s+se\s+(lee|ve|puede)).*(parcial|algunas?\s+|parte)", re.IGNORECASE),
+    re.compile(r"(puedo\s+)?(leer|ver|distinguir|identificar).*(pero|aunque|sin embargo|no\s+puedo).*(otra|el\s+resto|lo\s+demás|algunas?\s+partes?)", re.IGNORECASE),
+    re.compile(r"(some|parts?|sections?).*(illegible|blurry|unreadable|unclear|cannot\s+read)", re.IGNORECASE),
+    re.compile(r"(can\s+read|can\s+see|able\s+to\s+read).*(but|however|although).*(some|other|rest|remaining).*(cannot|unreadable|illegible|blurry|unclear)", re.IGNORECASE),
+    re.compile(r"(no\s+puedo\s+(leer|descifrar|distinguir)).*(algunas?\s+|ciertos?\s+|parte).*(partes?|secciones?|palabras?|nombres?|montos?)", re.IGNORECASE),
+]
+
 
 def _is_illegible_response(answer: str) -> bool:
     """Check if the vision model's response indicates it couldn't read the image.
-    Matches common phrases in both Spanish and English."""
+    Matches common phrases in both Spanish and English.
+
+    Returns True for fully illegible, False for normal or partially legible.
+    Partially legible responses are NOT caught here — the LLM handles them via
+    the image instruction (extract what it can, note what's illegible).
+    """
     if not answer or len(answer.strip()) < 15:
         return True
+    # If partially legible, do NOT treat as fully illegible
     answer_lower = answer.lower()
+    if any(p.search(answer_lower) for p in _PARTIALLY_LEGIBLE_PATTERNS):
+        return False
     return any(p.search(answer_lower) for p in _ILLEGIBLE_PATTERNS)
 
 
@@ -457,7 +477,12 @@ async def generate_answer(
             "NUNCA le digas al usuario que envíe una imagen o que contacte por WhatsApp "
             "para enviar una imagen — YA la envió. Si la imagen contiene una orden "
             "médica o documento, extraé la información y respondé con los precios "
-            "que encontrés en el contexto.]"
+            "que encontrés en el contexto. "
+            "Si la imagen está PARCIALMENTE legible (podés leer algunas partes pero no todas): "
+            "1) Proporcioná la información que SÍ podés leer. "
+            "2) Aclará explícitamente qué partes no se pudieron leer (ej: 'No se pudo leer el monto de X'). "
+            "3) Sugerí enviar una imagen más clara solo para las partes que no se pudieron leer. "
+            "NUNCA descartes toda la imagen si podés leer algo — siempre extraé lo que puedas.]"
         )
         text_content += image_instruction
 
