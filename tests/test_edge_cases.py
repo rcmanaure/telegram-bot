@@ -2130,3 +2130,54 @@ def test_admin_delete_docs_requires_auth(api_client):
 def test_admin_template_download_requires_auth(api_client):
     r = api_client.get("/admin/template")
     assert r.status_code == 401
+
+
+# ─── Source name normalization ────────────────────────────────────────────────
+
+from services.upload import normalize_source_name
+
+
+def test_normalize_strips_browser_dupe_parentheses():
+    """Browser suffix (1) is stripped from filename."""
+    assert normalize_source_name("sp-diagnostico-histologico(1).md") == "sp-diagnostico-histologico.md"
+
+
+def test_normalize_strips_browser_dupe_parentheses_higher():
+    """Browser suffix (2), (3) etc. are stripped."""
+    assert normalize_source_name("report(2).pdf") == "report.pdf"
+    assert normalize_source_name("report(10).pdf") == "report.pdf"
+
+
+def test_normalize_strips_copy_suffix():
+    """_copy and _copy2 suffixes are stripped."""
+    assert normalize_source_name("document_copy.md") == "document.md"
+    assert normalize_source_name("document_copy2.pdf") == "document.pdf"
+
+
+def test_normalize_strips_numeric_suffix():
+    """_2, _3 etc. before extension are stripped (Chrome download pattern)."""
+    assert normalize_source_name("file_2.pdf") == "file.pdf"
+    assert normalize_source_name("file_3.md") == "file.md"
+    # 4-digit numbers (years, versions) are NOT stripped
+    assert normalize_source_name("report_2024.pdf") == "report_2024.pdf"
+
+
+def test_normalize_lowercases():
+    """Filenames are lowercased regardless of original casing."""
+    assert normalize_source_name("Report.PDF") == "report.pdf"
+
+
+def test_normalize_no_extension():
+    """Files without extension still get normalized."""
+    assert normalize_source_name("readme(1)") == "readme"
+
+
+def test_normalize_passthrough_clean_names():
+    """Clean filenames pass through unchanged (lowercased)."""
+    assert normalize_source_name("sp-diagnostico-histologico.md") == "sp-diagnostico-histologico.md"
+    assert normalize_source_name("Annual_Report_2024.pdf") == "annual_report_2024.pdf"
+
+
+def test_normalize_preserves_dots_in_name():
+    """Dots within the filename (not the extension) are preserved."""
+    assert normalize_source_name("v1.2.3(1).pdf") == "v1.2.3.pdf"

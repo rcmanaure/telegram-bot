@@ -1,6 +1,7 @@
 """File upload and vision processing — shared by API and admin routes."""
 import io
 import logging
+import re
 
 from fastapi import HTTPException
 from pypdf import PdfReader
@@ -13,6 +14,28 @@ logger = logging.getLogger(__name__)
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
 
 _IMAGE_EXTS = (".jpg", ".jpeg", ".png")
+
+# Patterns browsers add to duplicate downloads: (1), (2), _copy, _2, etc.
+_BROWSER_DUPE_PARENS_RE = re.compile(r"\s*\(\d+\)\s*$")        # " (1)" at end
+_BROWSER_DUPE_COPY_RE = re.compile(r"_copy\d*$", re.IGNORECASE)  # "_copy" or "_copy2"
+_BROWSER_DUPE_NUM_RE = re.compile(r"_(\d{1,2})$")            # "_2" at end (Chrome), limit to 2 digits to avoid stripping years
+
+
+def normalize_source_name(filename: str) -> str:
+    """Normalize a filename for use as source in the chunks table.
+
+    Strips browser-added duplicate suffixes like (1), (2), _copy, _2
+    that appear when downloading a file that already exists locally.
+    Also lowercases to prevent casing-based duplicates.
+    """
+    name = filename.lower()
+    # Strip browser duplicate suffixes before the extension
+    base, dot_ext = name.rsplit(".", 1) if "." in name else (name, "")
+    cleaned = _BROWSER_DUPE_PARENS_RE.sub("", base)
+    cleaned = _BROWSER_DUPE_COPY_RE.sub("", cleaned)
+    cleaned = _BROWSER_DUPE_NUM_RE.sub("", cleaned)
+    cleaned = cleaned.strip()
+    return f"{cleaned}.{dot_ext}" if dot_ext else cleaned
 
 _VISION_DESCRIBE_PROMPT = (
     "Describe this image in complete detail including all visible text, numbers, labels, "

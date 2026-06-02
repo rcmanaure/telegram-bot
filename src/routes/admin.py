@@ -17,7 +17,7 @@ from limiter import limiter
 from rag import chunk_text, index_chunks, sync_faq_chunks
 from services.ngrok import get_ngrok_domain
 from services.tenant_bot import init_tenant_bot
-from services.upload import MAX_UPLOAD_BYTES, _IMAGE_EXTS, describe_image_for_upload, process_uploaded_file
+from services.upload import MAX_UPLOAD_BYTES, _IMAGE_EXTS, describe_image_for_upload, normalize_source_name, process_uploaded_file
 from state import get_app
 
 logger = logging.getLogger(__name__)
@@ -330,8 +330,8 @@ async def admin_upload_document(
         return _render_admin(tenants, doc_stats=doc_stats, error="Archivo demasiado grande. Máximo 10MB.")
 
     try:
+        source_name = normalize_source_name(file.filename)
         fname_lower = file.filename.lower()
-        source_name = fname_lower  # Normalize source to lowercase to prevent duplicate chunks
         if any(fname_lower.endswith(ext) for ext in _IMAGE_EXTS):
             description = await describe_image_for_upload(content, fname_lower)
             all_chunks = chunk_text(description, source=source_name, page=1)

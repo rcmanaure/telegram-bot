@@ -11,7 +11,7 @@ from db import get_db, DocumentChunk, Feedback, Tenant
 from dependencies import require_tenant
 from limiter import limiter
 from rag import chunk_text, index_chunks
-from services.upload import MAX_UPLOAD_BYTES, _IMAGE_EXTS, describe_image_for_upload, process_uploaded_file
+from services.upload import MAX_UPLOAD_BYTES, _IMAGE_EXTS, describe_image_for_upload, normalize_source_name, process_uploaded_file
 from state import get_app
 
 logger = logging.getLogger(__name__)
@@ -35,8 +35,8 @@ async def upload_document(
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(413, "File too large. Maximum size is 10MB.")
 
+    source_name = normalize_source_name(file.filename)
     fname_lower = file.filename.lower()
-    source_name = fname_lower  # Normalize source to lowercase to prevent duplicate chunks on re-upload with different casing
     if any(fname_lower.endswith(ext) for ext in _IMAGE_EXTS):
         description = await describe_image_for_upload(content, fname_lower)
         all_chunks = chunk_text(description, source=source_name, page=1)
