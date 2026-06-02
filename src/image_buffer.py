@@ -112,7 +112,13 @@ class ImageBuffer:
         entry = self._entries.pop(key, None)
         if entry is None:
             return
-        if entry.flush_task and not entry.flush_task.done():
+        # Cancel the debounce timer — but NOT if we're already running inside it.
+        # When _flush_after calls _flush, entry.flush_task IS the current task;
+        # cancelling it would raise CancelledError at the next await (on_flush),
+        # silently killing the callback. Only cancel when called from a
+        # different context (e.g. flush_by_prefix from a text/voice handler).
+        current_task = asyncio.current_task()
+        if entry.flush_task and entry.flush_task is not current_task and not entry.flush_task.done():
             entry.flush_task.cancel()
 
         images_dicts = [{"b64": img.b64, "mime": img.mime} for img in entry.images]
