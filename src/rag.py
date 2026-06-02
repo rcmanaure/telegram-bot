@@ -8,6 +8,7 @@ This is the core of the demo. Shows clients:
 """
 import json
 import logging
+import re
 
 import httpx
 from services.prompts import build_system_prompt, ESCALATION_PATTERN, _GREETING_PATTERN
@@ -210,6 +211,26 @@ async def retrieve_context(
 
 MIN_SIMILARITY = 0.20  # chunks below this threshold are considered off-topic
 
+# ─── Illegible image detection ─────────────────────────────────────────────────
+
+_ILLEGIBLE_PATTERNS = [
+    re.compile(r"no\s+puedo\s+(leer|ver|descifrar|descifr|interpretar|distinguir)", re.IGNORECASE),
+    re.compile(r"(imagen|foto|imagen)\s+(no\s+)?(ilegible|no\s+es\s+legible|borrosa|oscura|incomprensible)", re.IGNORECASE),
+    re.compile(r"(ilegible|incomprensible|indistinguible|indecifrable)", re.IGNORECASE),
+    re.compile(r"cannot\s+(read|see|interpret|decipher|make\s+out|determine)", re.IGNORECASE),
+    re.compile(r"(image|photo|picture)\s+is\s+(unclear|blurry|dark|illegible|unreadable)", re.IGNORECASE),
+    re.compile(r"unable\s+to\s+(read|see|interpret|view|process)\s+(the\s+)?(image|photo|picture)", re.IGNORECASE),
+]
+
+
+def _is_illegible_response(answer: str) -> bool:
+    """Check if the vision model's response indicates it couldn't read the image.
+    Matches common phrases in both Spanish and English."""
+    if not answer or len(answer.strip()) < 15:
+        return True
+    answer_lower = answer.lower()
+    return any(p.search(answer_lower) for p in _ILLEGIBLE_PATTERNS)
+
 
 # ─── Query reformulation ──────────────────────────────────────────────────────
 
@@ -348,20 +369,23 @@ async def generate_answer(
     When image_b64 is set, sends the image alongside the question (vision models).
     When from_web is True, adds web-source framing to the system prompt.
     """
-    if not context_chunks:
+    if not context_chunks and not image_b64:
         return "No encontré información relevante en los documentos para responder tu pregunta."
 
     system_prompt = build_system_prompt(expertise_area, channel=channel, from_web=from_web)
 
-    context_text = "\n\n---\n\n".join([
-        f"[Source: {c['source']}, Page {c['page']}]\n{c['content']}"
-        for c in context_chunks
-    ])
-
-    text_content = (
-        f"<document_context>\n{context_text}\n</document_context>\n\n"
-        f"<user_question>\n{question}\n</user_question>"
-    )
+    if context_chunks:
+        context_text = "\n\n---\n\n".join([
+            f"[Source: {c['source']}, Page {c['page']}]\n{c['content']}"
+            for c in context_chunks
+        ])
+        text_content = (
+            f"<document_context>\n{context_text}\n</document_context>\n\n"
+            f"<user_question>\n{question}\n</user_question>"
+        )
+    else:
+        # Image-only: no text context, but image is present
+        text_content = f"<user_question>\n{question}\n</user_question>"
 
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(conversation_history[-6:])
@@ -730,6 +754,25 @@ async def rag_query(
     context = [c for c in context if c["similarity"] >= MIN_SIMILARITY]
 
     if not context:
+        # Image-only path: when user sent an image but no text context was found,
+        # still process the image through the vision model instead of falling to triage.
+        if image_b64:
+            answer = await generate_answer(
+                [], question, history, expertise_area,
+                channel=channel, image_b64=image_b64, image_mime=image_mime,
+            )
+            answer = validate_output(answer, user_id=user_id)
+            if CANARY_TOKEN in answer:
+                answer = answer.replace(CANARY_TOKEN, "[REDACTED]")
+                logger.warning("canary_redacted user_id=%s image_only", user_id)
+            # Check if vision model couldn't read the image
+            if _is_illegible_response(answer):
+                answer = "No puedo leer la imagen. La calidad o resolución puede ser insuficiente. " \
+                         "Intentá enviarla con mejor iluminación o enfoque, o describí tu consulta por texto."
+                logger.info("vision_illegible ns=%s user=%s", namespace, user_id)
+            await save_turn(db, user_id, namespace, question or "📷 [imagen]", answer, channel=channel, tenant_id=tenant_id)
+            return answer, [], None
+
         # Web search fallback: if tenant has web search enabled and URL is configured,
         # try web search before falling back to triage.
         web_search_enabled = tenant.web_search_enabled if tenant else False
@@ -770,5 +813,10 @@ async def rag_query(
     if CANARY_TOKEN in answer:
         answer = answer.replace(CANARY_TOKEN, "[REDACTED]")
         logger.warning("canary_redacted user_id=%s context_answer", user_id)
+    # Check if vision model couldn't read the image (applies when image was sent alongside text context)
+    if image_b64 and _is_illegible_response(answer):
+        answer = "No puedo leer la imagen. La calidad o resolución puede ser insuficiente. " \
+                 "Intentá enviarla con mejor iluminación o enfoque, o describí tu consulta por texto."
+        logger.info("vision_illegible ns=%s user=%s", namespace, user_id)
     await save_turn(db, user_id, namespace, question, answer, channel=channel)
     return answer, context, None
