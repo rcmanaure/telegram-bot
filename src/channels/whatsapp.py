@@ -130,12 +130,25 @@ class WhatsAppAdapter:
                         raw=msg,
                     ))
 
-                elif msg_type in ("image", "document", "video", "sticker"):
-                    # Media we can't process — reply with help text
+                elif msg_type == "image":
+                    # Image message — extract media ID and caption
+                    media_id = msg.get("image", {}).get("id", "")
+                    caption = msg.get("image", {}).get("caption", "")
+                    messages.append(ChannelMessage(
+                        user_id=from_number,
+                        text=caption or None,  # caption as question text
+                        media_url=media_id,    # WA media ID for download
+                        media_type="image",
+                        channel="whatsapp",
+                        raw=msg,
+                    ))
+
+                elif msg_type in ("document", "video", "sticker"):
+                    # Unsupported media — will be handled with help text
                     messages.append(ChannelMessage(
                         user_id=from_number,
                         text=None,
-                        media_type="image",  # Generic "unsupported media"
+                        media_type="document",  # distinct from "image"
                         channel="whatsapp",
                         raw=msg,
                     ))

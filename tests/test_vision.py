@@ -97,11 +97,11 @@ async def test_call_chat_no_override_tries_fallback():
     assert call_count == 2
 
 
-# ─── rag.py: generate_answer with image ──────────────────────────────────────
+# ─── rag.py: generate_answer with image(s) ────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_generate_answer_with_image_builds_content_array():
-    """When image_b64 is set, last message content is a list with text + image_url."""
+    """When images is set, last message content is a list with text + image_url."""
     chunks = [{"content": "gym has a pool", "source": "docs.pdf", "page": 1}]
     captured_messages = []
 
@@ -117,8 +117,7 @@ async def test_generate_answer_with_image_builds_content_array():
                 chunks,
                 "¿Tienen pileta?",
                 [],
-                image_b64="abc123",
-                image_mime="image/jpeg",
+                images=[{"b64": "abc123", "mime": "image/jpeg"}],
             )
 
     user_msg = captured_messages[-1]
@@ -126,6 +125,38 @@ async def test_generate_answer_with_image_builds_content_array():
     types = [part["type"] for part in user_msg["content"]]
     assert "text" in types
     assert "image_url" in types
+
+
+@pytest.mark.asyncio
+async def test_generate_answer_with_multiple_images_builds_content_array():
+    """Multiple images produce multiple image_url parts in content array."""
+    chunks = [{"content": "info", "source": "doc.pdf", "page": 1}]
+    captured = []
+
+    async def mock_call_chat(messages, **kwargs):
+        captured.extend(messages)
+        return "answer"
+
+    with patch("rag.call_chat", side_effect=mock_call_chat):
+        with patch("rag.settings") as mock_settings:
+            mock_settings.llm_vision_model = "llava"
+            from rag import generate_answer
+            await generate_answer(
+                chunks,
+                "¿Qué dicen estas imágenes?",
+                [],
+                images=[
+                    {"b64": "img1", "mime": "image/jpeg"},
+                    {"b64": "img2", "mime": "image/png"},
+                ],
+            )
+
+    user_msg = captured[-1]
+    assert isinstance(user_msg["content"], list)
+    img_parts = [p for p in user_msg["content"] if p["type"] == "image_url"]
+    assert len(img_parts) == 2
+    assert img_parts[0]["image_url"]["url"] == "data:image/jpeg;base64,img1"
+    assert img_parts[1]["image_url"]["url"] == "data:image/png;base64,img2"
 
 
 @pytest.mark.asyncio
@@ -142,7 +173,7 @@ async def test_generate_answer_image_url_format():
         with patch("rag.settings") as mock_settings:
             mock_settings.llm_vision_model = ""
             from rag import generate_answer
-            await generate_answer(chunks, "q", [], image_b64="AAAA", image_mime="image/png")
+            await generate_answer(chunks, "q", [], images=[{"b64": "AAAA", "mime": "image/png"}])
 
     user_msg = captured[-1]
     img_part = next(p for p in user_msg["content"] if p["type"] == "image_url")
@@ -169,9 +200,9 @@ async def test_generate_answer_without_image_content_is_string():
     assert isinstance(user_msg["content"], str)
 
 
-# ─── bot.py: handle_photo ────────────────────────────────────────────────────
+# ─── bot.py: handle_photo (with image buffer) ────────────────────────────────
 
-def _make_photo_update(user_id=123, caption=None, file_size=100_000):
+def _make_photo_update(user_id=123, caption=None, file_size=100_000, media_group_id=None):
     from telegram import Update
     update = MagicMock(spec=Update)
     update.effective_user = MagicMock()
@@ -181,6 +212,7 @@ def _make_photo_update(user_id=123, caption=None, file_size=100_000):
     update.effective_chat.id = 999
     update.message = MagicMock()
     update.message.caption = caption
+    update.message.media_group_id = media_group_id
     update.message.reply_text = AsyncMock()
 
     photo = MagicMock()
@@ -207,37 +239,8 @@ def _make_photo_ctx(slug="test-tenant", expertise_area="fitness"):
 
 
 @pytest.mark.asyncio
-async def test_handle_photo_no_caption_uses_default_question():
-    """Photo with no caption uses the default question constant."""
-    update = _make_photo_update(caption=None)
-    ctx = _make_photo_ctx()
-
-    fake_file = MagicMock()
-    fake_file.download_as_bytearray = AsyncMock(return_value=bytearray(b"fake_image_bytes"))
-    ctx.bot.get_file = AsyncMock(return_value=fake_file)
-
-    rag_result = ("answer", [], None)
-
-    with patch("bot.AsyncSessionLocal") as mock_session_cls, \
-         patch("bot.rag_query", AsyncMock(return_value=rag_result)) as mock_rag, \
-         patch("bot.sanitize_user_input", side_effect=lambda x: x):
-
-        mock_db = AsyncMock()
-        mock_session_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
-        mock_session_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
-        from bot import handle_photo, _PHOTO_DEFAULT_QUESTION
-        await handle_photo(update, ctx)
-
-    mock_rag.assert_called_once()
-    call_kwargs = mock_rag.call_args[1]
-    assert call_kwargs["question"] == _PHOTO_DEFAULT_QUESTION
-    assert call_kwargs["image_b64"] is not None
-
-
-@pytest.mark.asyncio
-async def test_handle_photo_with_caption_uses_caption():
-    """Photo with caption uses the caption as the question."""
+async def test_handle_photo_adds_to_buffer():
+    """Photo handler adds image to buffer instead of calling _process_question directly."""
     update = _make_photo_update(caption="¿cuánto cuesta?")
     ctx = _make_photo_ctx()
 
@@ -245,20 +248,58 @@ async def test_handle_photo_with_caption_uses_caption():
     fake_file.download_as_bytearray = AsyncMock(return_value=bytearray(b"fake"))
     ctx.bot.get_file = AsyncMock(return_value=fake_file)
 
-    rag_result = ("answer", [], None)
-    with patch("bot.AsyncSessionLocal") as mock_session_cls, \
-         patch("bot.rag_query", AsyncMock(return_value=rag_result)), \
+    with patch("bot.image_buffer") as mock_buffer, \
          patch("bot.sanitize_user_input", side_effect=lambda x: x):
-
-        mock_db = AsyncMock()
-        mock_session_cls.return_value.__aenter__ = AsyncMock(return_value=mock_db)
-        mock_session_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-
+        mock_buffer.add_image = MagicMock(return_value=None)  # synchronous mock
         from bot import handle_photo
         await handle_photo(update, ctx)
 
-    # caption used as question — verified implicitly via rag_query being called
-    update.message.reply_text.assert_called()
+    # Buffer was called with the image
+    mock_buffer.add_image.assert_called_once()
+    call_kwargs = mock_buffer.add_image.call_args[1]
+    assert call_kwargs["b64"] is not None  # base64 of image
+    assert call_kwargs["mime"] is not None
+    assert call_kwargs["question"] == "¿cuánto cuesta?"
+
+
+@pytest.mark.asyncio
+async def test_handle_photo_album_uses_media_group_id():
+    """Photos with media_group_id use album-specific buffer key."""
+    update = _make_photo_update(caption=None, media_group_id="album_123")
+    ctx = _make_photo_ctx()
+
+    fake_file = MagicMock()
+    fake_file.download_as_bytearray = AsyncMock(return_value=bytearray(b"fake"))
+    ctx.bot.get_file = AsyncMock(return_value=fake_file)
+
+    with patch("bot.image_buffer") as mock_buffer, \
+         patch("bot.sanitize_user_input", side_effect=lambda x: x):
+        mock_buffer.add_image = MagicMock(return_value=None)
+        from bot import handle_photo
+        await handle_photo(update, ctx)
+
+    call_kwargs = mock_buffer.add_image.call_args[1]
+    assert "album_123" in call_kwargs["key"]
+
+
+@pytest.mark.asyncio
+async def test_handle_photo_single_uses_pending_key():
+    """Photo without media_group_id uses _pending_ buffer key."""
+    update = _make_photo_update(caption=None, media_group_id=None)
+    ctx = _make_photo_ctx()
+
+    fake_file = MagicMock()
+    fake_file.download_as_bytearray = AsyncMock(return_value=bytearray(b"fake"))
+    ctx.bot.get_file = AsyncMock(return_value=fake_file)
+
+    with patch("bot.image_buffer") as mock_buffer, \
+         patch("bot.sanitize_user_input", side_effect=lambda x: x):
+        mock_buffer.add_image = MagicMock(return_value=None)
+        from bot import handle_photo
+        await handle_photo(update, ctx)
+
+    call_kwargs = mock_buffer.add_image.call_args[1]
+    assert "_pending_" in call_kwargs["key"]
 
 
 @pytest.mark.asyncio
