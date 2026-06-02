@@ -1136,6 +1136,97 @@ def test_is_illegible_response_allows_normal_response():
     assert not _is_illegible_response("La factura indica un total de $80.00 USD.")
 
 
+@pytest.mark.asyncio
+async def test_rag_query_low_confidence_fallback():
+    """When normal MIN_SIMILARITY filters everything but raw results exist above
+    LOW_MIN_SIMILARITY, rag_query uses approximate matches instead of triage."""
+    from rag import rag_query
+
+    # Simulate chunks that are below 0.20 but above 0.10
+    low_sim_chunks = [
+        {"content": "Biopsia de Apéndice — $80.00 USD", "source": "prices.pdf", "page": 1, "similarity": 0.15},
+    ]
+
+    mock_db = AsyncMock()
+    mock_db.add = MagicMock()
+    mock_db.commit = AsyncMock()
+
+    with patch("rag.retrieve_context", new=AsyncMock(return_value=low_sim_chunks)), \
+         patch("rag.get_history", new=AsyncMock(return_value=[])), \
+         patch("rag._reformulate_query", new=AsyncMock(side_effect=lambda q, h: q)), \
+         patch("rag.generate_answer", new=AsyncMock(return_value="🔬 Biopsia de Apéndice — $80.00 USD. Puede ser el mismo estudio que mencionás.")) as mock_gen, \
+         patch("rag.validate_output", side_effect=lambda x, **kw: x), \
+         patch("rag.save_turn", new=AsyncMock()), \
+         patch("rag.settings") as mock_settings, \
+         patch("rag.get_setting", new=lambda k, fallback="": fallback):
+        mock_settings.llm_vision_model = ""
+        answer, chunks, intent = await rag_query(
+            mock_db, "¿cuánto cuesta la biopsia de apéndice cecal?", "ns", "u1",
+        )
+
+    # generate_answer was called (not triage), meaning low-confidence fallback kicked in
+    mock_gen.assert_called_once()
+    call_kwargs = mock_gen.call_args
+    # low_confidence flag should be True
+    assert call_kwargs.kwargs.get("low_confidence") is True or call_kwargs[1].get("low_confidence") is True
+    # Answer includes the biopsy price
+    assert "Biopsia" in answer or "biopsia" in answer.lower()
+
+
+@pytest.mark.asyncio
+async def test_rag_query_no_low_confidence_when_normal_threshold_met():
+    """When chunks meet the normal MIN_SIMILARITY, low_confidence is False."""
+    from rag import rag_query
+
+    high_sim_chunks = [
+        {"content": "Biopsia de Apéndice — $80.00 USD", "source": "prices.pdf", "page": 1, "similarity": 0.85},
+    ]
+
+    mock_db = AsyncMock()
+    mock_db.add = MagicMock()
+    mock_db.commit = AsyncMock()
+
+    with patch("rag.retrieve_context", new=AsyncMock(return_value=high_sim_chunks)), \
+         patch("rag.get_history", new=AsyncMock(return_value=[])), \
+         patch("rag._reformulate_query", new=AsyncMock(side_effect=lambda q, h: q)), \
+         patch("rag.generate_answer", new=AsyncMock(return_value="🔬 Biopsia de Apéndice — $80.00 USD")) as mock_gen, \
+         patch("rag.validate_output", side_effect=lambda x, **kw: x), \
+         patch("rag.save_turn", new=AsyncMock()), \
+         patch("rag.settings") as mock_settings, \
+         patch("rag.get_setting", new=lambda k, fallback="": fallback):
+        mock_settings.llm_vision_model = ""
+        answer, chunks, intent = await rag_query(
+            mock_db, "¿cuánto cuesta la biopsia de apéndice?", "ns", "u1",
+        )
+
+    mock_gen.assert_called_once()
+    call_kwargs = mock_gen.call_args
+    # low_confidence flag should be False (normal threshold met)
+    assert call_kwargs.kwargs.get("low_confidence") is False or call_kwargs[1].get("low_confidence") is False
+
+
+@pytest.mark.asyncio
+async def test_generate_answer_low_confidence_adds_note():
+    """When low_confidence=True, generate_answer includes an approximate-match note
+    in the context sent to the LLM."""
+    from rag import generate_answer
+
+    chunks = [{"content": "Biopsia de Apéndice — $80.00 USD", "source": "prices.pdf", "page": 1}]
+    with patch("rag.call_chat", new=AsyncMock(return_value="🔬 Biopsia de Apéndice — $80.00 USD. Puede ser el mismo estudio.")) as mock_chat, \
+         patch("rag.build_system_prompt", return_value="system prompt"), \
+         patch("rag.settings") as mock_settings:
+        mock_settings.llm_vision_model = ""
+        await generate_answer(chunks, "¿cuánto cuesta la biopsia de apéndice cecal?", [],
+                              low_confidence=True)
+
+    # Verify the LLM call included the approximate-match note
+    call_args = mock_chat.call_args
+    messages = call_args[0][0]  # first positional arg is messages list
+    user_msg = messages[-1]  # last message is the user query with context
+    content = user_msg["content"] if isinstance(user_msg["content"], str) else user_msg["content"]
+    assert "coincidencias aproximadas" in content or "aproximadas" in content
+
+
 # ─── I10: Conversation summarization ─────────────────────────────────────────
 
 @pytest.mark.asyncio
