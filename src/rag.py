@@ -28,13 +28,69 @@ http_client = httpx.AsyncClient(timeout=60)
 
 # ─── Chunking ────────────────────────────────────────────────────────────────
 
+def _split_markdown_tables(text: str) -> str:
+    """Pre-process markdown tables: separate each row into its own paragraph
+    so chunk_text treats them as individual units instead of one monolithic block.
+
+    Markdown tables use | as column separators and rows are separated by \\n (not \\n\\n).
+    Without this preprocessing, an entire table becomes one paragraph that gets
+    character-sliced, diluting the embedding signal for any single row.
+
+    Each data row gets the section header prepended for context:
+      "## SISTEMA DIGESTIVO\\n| SDG033 | Apéndice Cecal | $90.00 |"
+    """
+    lines = text.split('\n')
+    result_lines: list[str] = []
+    current_header = ""
+
+    in_table = False
+    for line in lines:
+        stripped = line.strip()
+        # Detect markdown table rows (start and end with |)
+        is_table_row = stripped.startswith('|') and stripped.endswith('|')
+        is_separator = is_table_row and set(stripped.replace('|', '').replace('-', '').replace(':', '')) <= {' '}
+
+        if stripped.startswith('#'):
+            current_header = stripped
+            in_table = False
+
+        if is_table_row and not is_separator:
+            if not in_table:
+                # Start of a table — insert blank line before for paragraph break
+                if result_lines and result_lines[-1].strip():
+                    result_lines.append('')
+                in_table = True
+            # Prepend section header to each row for context
+            if current_header:
+                result_lines.append(f"{current_header}\n{line}")
+            else:
+                result_lines.append(line)
+            # Blank line after each row → each row is its own paragraph
+            result_lines.append('')
+        elif is_separator:
+            # Skip separator rows (|---|---|...)
+            continue
+        elif not is_table_row:
+            in_table = False
+            result_lines.append(line)
+
+    return '\n'.join(result_lines)
+
+
 def chunk_text(text_content: str, source: str, page: int = 0) -> list[dict]:
     """
     Split text into semantically coherent chunks by splitting on paragraph
     boundaries first, then merging adjacent paragraphs up to chunk_size.
     Falls back to character-based splitting only for oversized paragraphs.
     This keeps section headers with their content so retrieval works correctly.
+
+    Markdown tables are pre-processed so each row becomes its own paragraph
+    with the section header prepended — this prevents table rows from being
+    character-sliced and ensures each procedure/item gets a distinct embedding.
     """
+    # Pre-process markdown tables into row-level paragraphs
+    text_content = _split_markdown_tables(text_content)
+
     size = settings.chunk_size
     overlap = settings.chunk_overlap
 
