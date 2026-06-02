@@ -448,6 +448,19 @@ async def generate_answer(
         # Image-only: no text context, but image is present
         text_content = f"<user_question>\n{question}\n</user_question>"
 
+    # When user sent an image, add explicit instruction so the LLM processes
+    # the image instead of quoting policies like "envíe la imagen por WhatsApp"
+    if image_b64:
+        image_instruction = (
+            "\n\n[INSTRUCCIÓN IMPORTANTE: El usuario ya envió una imagen. "
+            "Analizá la imagen que recibiste y respondé basándote en lo que ves. "
+            "NUNCA le digas al usuario que envíe una imagen o que contacte por WhatsApp "
+            "para enviar una imagen — YA la envió. Si la imagen contiene una orden "
+            "médica o documento, extraé la información y respondé con los precios "
+            "que encontrés en el contexto.]"
+        )
+        text_content += image_instruction
+
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(conversation_history[-6:])
 
