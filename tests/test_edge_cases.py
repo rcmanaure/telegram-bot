@@ -292,6 +292,9 @@ def test_build_system_prompt_includes_partial_match_guidance():
     assert "similar o equivalente" in prompt
     # Must instruct to offer what's found and note the difference
     assert "proporcioná" in prompt or "proporcioná la información" in prompt
+    # Partial-match rules must have priority — off_topic only when NO relation at all
+    assert "PRIORIDAD ALTA" in prompt or "prevalecen" in prompt
+    assert "NO HAY NINGUNA relación" in prompt
 
 
 # ─── get_history ──────────────────────────────────────────────────────────────
