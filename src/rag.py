@@ -210,6 +210,7 @@ async def retrieve_context(
 # ─── Generation ──────────────────────────────────────────────────────────────
 
 MIN_SIMILARITY = 0.20  # chunks below this threshold are considered off-topic
+LOW_MIN_SIMILARITY = 0.10  # second-pass threshold for approximate matches
 
 # ─── Illegible image detection ─────────────────────────────────────────────────
 
@@ -363,11 +364,14 @@ async def generate_answer(
     image_b64: str | None = None,
     image_mime: str = "image/jpeg",
     from_web: bool = False,
+    low_confidence: bool = False,
 ) -> str:
     """
     Generate an answer using retrieved context + conversation history.
     When image_b64 is set, sends the image alongside the question (vision models).
     When from_web is True, adds web-source framing to the system prompt.
+    When low_confidence is True, context came from a second-pass retrieval with
+    lower similarity threshold — the LLM should note the approximate match.
     """
     if not context_chunks and not image_b64:
         return "No encontré información relevante en los documentos para responder tu pregunta."
@@ -379,8 +383,9 @@ async def generate_answer(
             f"[Source: {c['source']}, Page {c['page']}]\n{c['content']}"
             for c in context_chunks
         ])
+        confidence_note = "\n\nNOTA: Los siguientes documentos son coincidencias aproximadas (no exactas). Proporcioná la información que encontrés y aclará que puede ser similar pero no idéntico a lo que pregunta el usuario.\n" if low_confidence else ""
         text_content = (
-            f"<document_context>\n{context_text}\n</document_context>\n\n"
+            f"<document_context>\n{context_text}\n</document_context>{confidence_note}\n\n"
             f"<user_question>\n{question}\n</user_question>"
         )
     else:
@@ -751,7 +756,23 @@ async def rag_query(
         search_query[:60] if search_query != question else "(same)",
         [(round(c["similarity"], 3), c["source"], c["content"][:40]) for c in context[:3]],
     )
+    raw_results = context  # keep unfiltered for low-confidence fallback
     context = [c for c in context if c["similarity"] >= MIN_SIMILARITY]
+    is_low_confidence = False
+
+    # Low-confidence fallback: when normal threshold filters everything out but
+    # raw results exist above LOW_MIN_SIMILARITY, use them as approximate matches.
+    # The COINCIDENCIAS PARCIALES prompt section guides the LLM to handle these
+    # with appropriate uncertainty ("puede ser el mismo estudio", "contactanos para confirmar").
+    if not context:
+        low_context = [c for c in raw_results if c["similarity"] >= LOW_MIN_SIMILARITY]
+        if low_context:
+            logger.info(
+                "low_confidence_fallback ns=%s q=%r top_sim=%.3f — using approximate matches",
+                namespace, question[:60], low_context[0]["similarity"],
+            )
+            context = low_context
+            is_low_confidence = True
 
     if not context:
         # Image-only path: when user sent an image but no text context was found,
@@ -807,6 +828,7 @@ async def rag_query(
     answer = await generate_answer(
         context, question, history, expertise_area,
         channel=channel, image_b64=image_b64, image_mime=image_mime,
+        low_confidence=is_low_confidence,
     )
     answer = validate_output(answer, user_id=user_id)
     # Redact canary token at write time — prevents exfiltration via history
