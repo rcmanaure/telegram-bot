@@ -155,6 +155,7 @@ async def _process_question(
                 tenant_id=tenant.id,
                 image_b64=image_b64,
                 image_mime=image_mime,
+                tenant=tenant,
             )
 
         if chunks and chunks[0]["similarity"] > 0.75:

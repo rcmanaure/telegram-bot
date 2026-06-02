@@ -149,6 +149,7 @@ async def handle_wa_message(
                     channel="whatsapp",
                     image_b64=image_b64,
                     image_mime=image_mime,
+                    tenant=tenant,
                 )
             except Exception as e:
                 logger.error("wa_rag_error user=%s: %s", user_id, e)

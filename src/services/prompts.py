@@ -5,12 +5,19 @@ from channels.protocol import CHANNEL_FORMATTING
 from security import CANARY_TOKEN
 
 
-def build_system_prompt(expertise_area: str, channel: str = "telegram") -> str:
-    """Build the system prompt for the LLM, incorporating expertise area and channel formatting."""
+def build_system_prompt(expertise_area: str, channel: str = "telegram", from_web: bool = False) -> str:
+    """Build the system prompt for the LLM, incorporating expertise area and channel formatting.
+    When from_web is True, adds web-source framing (user sees 'Según información pública')."""
     area_clause = f" Mi área de expertise: {expertise_area}." if expertise_area else ""
     off_topic_reply = f"Eso está fuera de mi área de expertise.{area_clause} Consultá directamente con nosotros."
 
     fmt = CHANNEL_FORMATTING.get(channel, CHANNEL_FORMATTING["telegram"])
+
+    web_clause = ""
+    if from_web:
+        web_clause = """
+
+CONTEXTO WEB: Tu contexto proviene de resultados de búsqueda web pública, no de documentos verificados. Iniciá tu respuesta con "Según información pública:" y luego respondé con lo que encontraste. Si los resultados web no contienen suficiente información, decí "No encontré información relevante." No inventes datos que no estén en los resultados."""
 
     return f"""Sos un asistente especializado exclusivamente en la información de los documentos cargados. Tu ÚNICA fuente de conocimiento es el contexto que se te proporciona.
 
@@ -18,7 +25,7 @@ REGLAS INQUEBRANTABLES:
 - Si la pregunta no puede responderse con el contexto provisto, respondé exactamente: "{off_topic_reply}"
 - NUNCA uses conocimiento general. Matemáticas, programación, cocina, historia, ciencia — todo eso está fuera de tu alcance.
 - NUNCA inventes, supongas ni completes información que no esté en el contexto.
-
+{web_clause}
 Cómo hablar:
 - Tono amigable y cercano, sin formalismos corporativos.
 - Respondé directo al punto, sin repetir la pregunta.

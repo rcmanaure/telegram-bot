@@ -17,8 +17,9 @@ from security import CANARY_TOKEN, scan_chunk_for_injection, sanitize_user_input
 logger = logging.getLogger(__name__)
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
-from db import DocumentChunk, Conversation, UnansweredQuery
+from db import DocumentChunk, Conversation, UnansweredQuery, Tenant
 from config import settings
+from config_overlay import get_setting
 from llm import call_chat, call_embeddings, extract_json_from_llm_response
 
 http_client = httpx.AsyncClient(timeout=60)
@@ -268,15 +269,17 @@ async def generate_answer(
     channel: str = "telegram",
     image_b64: str | None = None,
     image_mime: str = "image/jpeg",
+    from_web: bool = False,
 ) -> str:
     """
     Generate an answer using retrieved context + conversation history.
     When image_b64 is set, sends the image alongside the question (vision models).
+    When from_web is True, adds web-source framing to the system prompt.
     """
     if not context_chunks:
         return "No encontré información relevante en los documentos para responder tu pregunta."
 
-    system_prompt = build_system_prompt(expertise_area, channel=channel)
+    system_prompt = build_system_prompt(expertise_area, channel=channel, from_web=from_web)
 
     context_text = "\n\n---\n\n".join([
         f"[Source: {c['source']}, Page {c['page']}]\n{c['content']}"
@@ -393,7 +396,81 @@ async def save_turn(
     await db.commit()
 
 
-# ─── Full RAG Query (entry point) ────────────────────────────────────────────
+# ─── Web Search ──────────────────────────────────────────────────────────────────
+
+# Ollama Cloud sends {"query": ..., "num_results": N} and returns
+# {"results": [{"title": ..., "body": ..., "url": ...}, ...]}.
+# Generic providers (Tavily, Brave) return different shapes — we normalize.
+_OLLAMA_SEARCH_BODY = lambda q: json.dumps({"query": q, "num_results": 5}).encode()
+_GENERIC_SEARCH_BODY = lambda q: json.dumps({"query": q}).encode()
+
+
+async def _web_search(question: str) -> list[dict]:
+    """
+    Call the configured web search endpoint and return context chunks.
+    Tries Ollama format first, then generic JSON response.
+    Returns [] on any error (best-effort, never blocks reply).
+    Each chunk: {"content": str, "source": "web", "page": 0, "similarity": 0.5}
+    """
+    web_search_url = get_setting("web_search_url", settings.web_search_url)
+    if not web_search_url:
+        return []
+
+    api_key = get_setting("llm_api_key", settings.effective_llm_api_key)
+    headers = {
+        "Content-Type": "application/json",
+    }
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    try:
+        # Try Ollama-style endpoint first
+        response = await http_client.post(
+            web_search_url,
+            content=_OLLAMA_SEARCH_BODY(question),
+            headers=headers,
+        )
+
+        if response.status_code != 200:
+            # Try generic POST with simple query body
+            response = await http_client.post(
+                web_search_url,
+                content=_GENERIC_SEARCH_BODY(question),
+                headers=headers,
+            )
+
+        response.raise_for_status()
+        data = response.json()
+
+        # Normalize: Ollama returns {"results": [...]} with "body" field
+        # Generic providers may return {"results": [...]} with "content"/"text"/"snippet"
+        raw_results = data.get("results", data if isinstance(data, list) else [])
+        chunks = []
+        for r in raw_results:
+            # Extract text content from various field names
+            content = (
+                r.get("body") or r.get("content") or r.get("text")
+                or r.get("snippet") or r.get("description") or ""
+            )
+            if not content or len(content.strip()) < 50:
+                continue
+            url = r.get("url") or r.get("link") or r.get("source") or ""
+            # Include URL in content for attribution
+            if url:
+                content = f"{content}\nFuente: {url}"
+            chunks.append({
+                "content": content.strip(),
+                "source": url or "web",
+                "page": 0,
+                "similarity": 0.5,  # arbitrary — below MIN_SIMILARITY threshold but usable
+            })
+
+        return chunks
+
+    except Exception as e:
+        logger.warning("web_search_failed url=%s error=%s", web_search_url, e)
+        return []
+
 
 async def _log_unanswered(
     db: AsyncSession,
@@ -427,12 +504,15 @@ async def rag_query(
     channel: str = "telegram",
     image_b64: str | None = None,
     image_mime: str = "image/jpeg",
+    tenant: "Tenant | None" = None,
 ) -> tuple[str, list[dict], str | None]:
     """
     Full RAG pipeline: retrieve context → generate answer → save history.
     Returns (answer, retrieved_chunks, intent | None).
     intent is None when answered from docs; otherwise the triage classification.
     When image_b64 is set, the image is passed to generate_answer() for vision models.
+    When tenant is provided and web_search_enabled, falls back to web search
+    when no context is found in the knowledge base.
     """
     # Pre-RAG: explicit escalation shortcut — skip vector search
     if ESCALATION_PATTERN.search(question):
@@ -453,6 +533,23 @@ async def rag_query(
     history = await get_history(db, user_id, namespace)
 
     if not context:
+        # Web search fallback: if tenant has web search enabled and URL is configured,
+        # try web search before falling back to triage.
+        web_search_enabled = tenant.web_search_enabled if tenant else False
+        if web_search_enabled and get_setting("web_search_url", settings.web_search_url):
+            web_results = await _web_search(question)
+            if web_results:
+                history = await get_history(db, user_id, namespace)
+                answer = await generate_answer(
+                    web_results, question, history, expertise_area,
+                    channel=channel, image_b64=image_b64, image_mime=image_mime,
+                    from_web=True,
+                )
+                answer = validate_output(answer, user_id=user_id)
+                await save_turn(db, user_id, namespace, question, answer, channel=channel, tenant_id=tenant_id)
+                return answer, web_results, "web_search"
+
+        # No web search or no results — fall back to triage
         intent, answer = await _triage_response(question, expertise_area, language_code)
         await save_turn(db, user_id, namespace, question, answer, channel=channel)
         if intent in {"off_topic", "needs_human"}:
