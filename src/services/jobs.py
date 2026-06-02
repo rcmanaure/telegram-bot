@@ -6,6 +6,7 @@ from sqlalchemy import select, func, text
 
 from config import settings
 from db import AsyncSessionLocal, Tenant, UnansweredQuery
+from image_buffer import image_buffer
 from limiter import tg_rate_limiter, wa_rate_limiter
 from state import telegram_apps
 
@@ -66,4 +67,5 @@ async def cleanup_job():
 
     tg_removed = tg_rate_limiter.sweep()
     wa_removed = wa_rate_limiter.sweep()
-    logger.info("cleanup_job: rate_limit_sweep removed=%d TG, %d WA stale entries", tg_removed, wa_removed)
+    buf_removed = image_buffer.sweep()
+    logger.info("cleanup_job: rate_limit_sweep removed=%d TG, %d WA; image_buffer_sweep removed=%d stale entries", tg_removed, wa_removed, buf_removed)

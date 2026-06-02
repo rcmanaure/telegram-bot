@@ -4,7 +4,8 @@ import logging
 
 from db import AsyncSessionLocal, Tenant
 from channels.whatsapp import WhatsAppAdapter, check_wa_service_window, update_wa_service_window, send_wa_template
-from channels.protocol import ChannelSendError
+from channels.protocol import ChannelButton, ChannelSendError
+from image_buffer import image_buffer
 from limiter import wa_rate_limiter
 from rag import rag_query, _log_unanswered
 from security import sanitize_user_input
@@ -27,6 +28,74 @@ def create_wa_adapter(tenant: Tenant) -> WhatsAppAdapter | None:
     )
 
 
+async def _wa_process_flushed(
+    tenant: Tenant,
+    user_id: str,
+    namespace: str,
+    images: list[dict],
+    question: str,
+) -> None:
+    """Process flushed images from the image buffer (WA channel).
+
+    Creates its own adapter and DB session since this runs after
+    the original handle_wa_message context has exited.
+    """
+    adapter = create_wa_adapter(tenant)
+    if not adapter:
+        logger.warning("wa_flush_no_adapter tenant=%s", tenant.slug)
+        return
+
+    async with adapter:
+        # Send typing indicator before RAG query
+        try:
+            await adapter.send_chat_action(user_id)
+        except Exception:
+            pass
+
+        async with AsyncSessionLocal() as db:
+            try:
+                answer, chunks, intent = await rag_query(
+                    db=db,
+                    question=question,
+                    namespace=namespace,
+                    user_id=user_id,
+                    expertise_area=tenant.expertise_area or "",
+                    tenant_id=tenant.id,
+                    channel="whatsapp",
+                    images=images,
+                    tenant=tenant,
+                )
+            except Exception as e:
+                logger.error("wa_rag_error user=%s: %s", user_id, e)
+                try:
+                    await adapter.send_reply(user_id, "Lo siento, hubo un error. Intentá de nuevo en un momento.")
+                except ChannelSendError:
+                    pass
+                return
+
+        # Send reply with sources footer + feedback buttons
+        source_footer = ""
+        if chunks:
+            sources = set(c["source"] for c in chunks if c.get("source"))
+            if sources:
+                source_footer = "\n\n📎 Fuentes: " + ", ".join(sources)
+
+        # Escalation: add "Contactar" button for off-topic or needs-human intents
+        buttons = None
+        if intent in {"off_topic", "needs_human"} and tenant.contact_url:
+            buttons = [ChannelButton(label="Contactar", url=tenant.contact_url)]
+
+        try:
+            await adapter.send_reply(user_id, answer + source_footer, buttons=buttons)
+        except ChannelSendError as e:
+            logger.warning("wa_send_failed user=%s: %s — retrying once", user_id, e)
+            await asyncio.sleep(2)
+            try:
+                await adapter.send_reply(user_id, answer + source_footer)
+            except ChannelSendError:
+                logger.error("wa_send_failed_retry user=%s — giving up", user_id)
+
+
 async def handle_wa_message(
     tenant: Tenant,
     wa_msg: "ChannelMessage",
@@ -44,9 +113,6 @@ async def handle_wa_message(
     if not adapter:
         logger.warning("wa_no_adapter tenant=%s", tenant.slug)
         return
-
-    image_b64: str | None = None
-    image_mime: str = "image/jpeg"
 
     async with adapter:
         # Unsupported media (video, sticker, document) — not image or voice
@@ -73,6 +139,8 @@ async def handle_wa_message(
             return
 
         # Image message — download and base64-encode for vision model
+        image_b64: str | None = None
+        image_mime: str = "image/jpeg"
         if wa_msg.media_type == "image" and wa_msg.media_url:
             try:
                 import base64 as _b64
@@ -105,23 +173,22 @@ async def handle_wa_message(
             logger.warning("wa_rate_limit key=%s", rate_key)
             return
 
-        # Text or image-with-caption message — process through RAG
-        text = wa_msg.text or ("¿Qué querés saber sobre esta imagen?" if image_b64 else "")
-        if not text.strip():
+        # Text handling: caption or user text
+        text = wa_msg.text or ""
+        if not image_b64 and not text.strip():
             return
-
-        try:
-            text = sanitize_user_input(text)
-        except ValueError:
+        if text.strip():
             try:
-                await adapter.send_reply(user_id, "Tu mensaje contiene contenido no permitido.")
-            except ChannelSendError:
-                pass
-            return
+                text = sanitize_user_input(text)
+            except ValueError:
+                try:
+                    await adapter.send_reply(user_id, "Tu mensaje contiene contenido no permitido.")
+                except ChannelSendError:
+                    pass
+                return
 
-        # DB operations — fresh session for background task
+        # Service window check (before buffering)
         async with AsyncSessionLocal() as db:
-            # 24h service window check
             within_window = await check_wa_service_window(db, tenant.id, user_id)
             if not within_window:
                 if tenant.wa_reengagement_template:
@@ -133,11 +200,40 @@ async def handle_wa_message(
                     logger.warning("wa_outside_window_no_template user=%s — logging unanswered", user_id)
                     await _log_unanswered(db, namespace, text, user_id, "needs_human", tenant.id)
                 return
-
-            # Update service window timestamp
             await update_wa_service_window(db, tenant.id, user_id)
 
-            # RAG query
+        # Image: add to buffer with flush callback
+        # The flush callback creates its own adapter since this one closes on exit
+        if image_b64:
+            buf_key = f"wa:{namespace}:{user_id}"
+
+            async def on_flush(images_dicts: list[dict], combined_question: str) -> None:
+                await _wa_process_flushed(tenant, user_id, namespace, images_dicts, combined_question)
+
+            question = text or ""
+            error = image_buffer.add_image(
+                key=buf_key,
+                b64=image_b64,
+                mime=image_mime,
+                question=question,
+                on_flush=on_flush,
+            )
+            if error:
+                try:
+                    await adapter.send_reply(user_id, error)
+                except ChannelSendError:
+                    pass
+            return
+
+        # Text-only (no image): check if images are pending in buffer first
+        buf_key_prefix = f"wa:{namespace}:{user_id}"
+        flushed = await image_buffer.flush_by_prefix(buf_key_prefix, override_question=text)
+        if flushed:
+            # Images will be processed with this text as the question via on_flush
+            return
+
+        # No pending images — process text immediately
+        async with AsyncSessionLocal() as db:
             try:
                 answer, chunks, intent = await rag_query(
                     db=db,
@@ -147,8 +243,6 @@ async def handle_wa_message(
                     expertise_area=tenant.expertise_area or "",
                     tenant_id=tenant.id,
                     channel="whatsapp",
-                    image_b64=image_b64,
-                    image_mime=image_mime,
                     tenant=tenant,
                 )
             except Exception as e:
@@ -159,25 +253,24 @@ async def handle_wa_message(
                     pass
                 return
 
-            # Send reply with sources footer + feedback buttons
-            source_footer = ""
-            if chunks:
-                sources = set(c["source"] for c in chunks if c.get("source"))
-                if sources:
-                    source_footer = "\n\n📎 Fuentes: " + ", ".join(sources)
+        # Send reply with sources footer + feedback buttons
+        source_footer = ""
+        if chunks:
+            sources = set(c["source"] for c in chunks if c.get("source"))
+            if sources:
+                source_footer = "\n\n📎 Fuentes: " + ", ".join(sources)
 
-            # Add thumbs up/down feedback buttons (WhatsApp allows max 3)
-            # Escalation: add "Contactar" button for off-topic or needs-human intents
-            buttons = None
-            if intent in {"off_topic", "needs_human"} and tenant.contact_url:
-                buttons = [ChannelButton(label="Contactar", url=tenant.contact_url)]
+        # Escalation: add "Contactar" button for off-topic or needs-human intents
+        buttons = None
+        if intent in {"off_topic", "needs_human"} and tenant.contact_url:
+            buttons = [ChannelButton(label="Contactar", url=tenant.contact_url)]
 
+        try:
+            await adapter.send_reply(user_id, answer + source_footer, buttons=buttons)
+        except ChannelSendError as e:
+            logger.warning("wa_send_failed user=%s: %s — retrying once", user_id, e)
+            await asyncio.sleep(2)
             try:
-                await adapter.send_reply(user_id, answer + source_footer, buttons=buttons)
-            except ChannelSendError as e:
-                logger.warning("wa_send_failed user=%s: %s — retrying once", user_id, e)
-                await asyncio.sleep(2)
-                try:
-                    await adapter.send_reply(user_id, answer + source_footer)
-                except ChannelSendError:
-                    logger.error("wa_send_failed_retry user=%s — giving up", user_id)
+                await adapter.send_reply(user_id, answer + source_footer)
+            except ChannelSendError:
+                logger.error("wa_send_failed_retry user=%s — giving up", user_id)

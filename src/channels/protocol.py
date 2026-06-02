@@ -40,6 +40,7 @@ class ChannelMessage:
     media_url: str | None = None  # Download URL for voice/image/document
     media_type: str | None = None  # "voice" | "image" | "document" | None
     channel: str = "telegram"  # "telegram" | "whatsapp"
+    media_group_id: str | None = None  # Telegram album grouping ID
     reply_to: str | None = None  # Message ID being replied to (for button callbacks)
     raw: dict = field(default_factory=dict)  # Original webhook payload
 
