@@ -22,6 +22,59 @@ from security import sanitize_user_input
 
 logger = logging.getLogger(__name__)
 
+_TG_MAX_LEN = 4096
+
+
+async def _send_reply(
+    update,
+    text: str,
+    parse_mode: str = "Markdown",
+    reply_markup=None,
+) -> None:
+    """Send reply_text, splitting into multiple messages when text > 4096 chars.
+
+    Splits on newline boundaries so formatting blocks stay intact.
+    The reply_markup (inline keyboard) is only attached to the last message.
+    """
+    if len(text) <= _TG_MAX_LEN:
+        try:
+            await update.message.reply_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
+        except BadRequest as e:
+            if "can't parse entities" in str(e).lower() or "can't find end" in str(e).lower():
+                logger.warning("markdown_parse_error — retrying as plain text: %s", e)
+                await update.message.reply_text(text, reply_markup=reply_markup)
+            else:
+                raise
+        return
+
+    # Split on newline boundaries into ≤ _TG_MAX_LEN chunks
+    parts: list[str] = []
+    current_lines: list[str] = []
+    current_len = 0
+    for line in text.split("\n"):
+        line_len = len(line) + 1  # +1 for the newline
+        if current_len + line_len > _TG_MAX_LEN and current_lines:
+            parts.append("\n".join(current_lines))
+            current_lines = [line]
+            current_len = line_len
+        else:
+            current_lines.append(line)
+            current_len += line_len
+    if current_lines:
+        parts.append("\n".join(current_lines))
+
+    for i, part in enumerate(parts):
+        markup = reply_markup if i == len(parts) - 1 else None
+        try:
+            await update.message.reply_text(part, parse_mode=parse_mode, reply_markup=markup)
+        except BadRequest as e:
+            if "can't parse entities" in str(e).lower() or "can't find end" in str(e).lower():
+                logger.warning("markdown_parse_error part=%d — retrying as plain text: %s", i, e)
+                await update.message.reply_text(part, reply_markup=markup)
+            else:
+                raise
+
+
 def _get_tenant(ctx: ContextTypes.DEFAULT_TYPE) -> Tenant:
     return ctx.bot_data["tenant"]
 
@@ -188,16 +241,7 @@ async def _process_question(
                 InlineKeyboardButton("Contactar", url=tenant.contact_url)
             ]])
 
-        try:
-            await update.message.reply_text(
-                full_reply, parse_mode="Markdown", reply_markup=reply_markup
-            )
-        except BadRequest as e:
-            if "can't parse entities" in str(e).lower() or "can't find end" in str(e).lower():
-                logger.warning("markdown_parse_error uid=%s — retrying as plain text: %s", uid, e)
-                await update.message.reply_text(full_reply, reply_markup=reply_markup)
-            else:
-                raise
+        await _send_reply(update, full_reply, reply_markup=reply_markup)
 
     except RuntimeError as e:
         await update.message.reply_text(str(e))
