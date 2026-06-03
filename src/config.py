@@ -13,6 +13,13 @@ class Settings(BaseSettings):
     llm_model: str = "openrouter/free"
     llm_fallback_model: str = "openrouter/owl-alpha"  # empty string = disabled
 
+    # ─── Fallback LLM Provider (optional, separate from primary) ────────────────
+    # When set, the fallback model is called against this URL / key instead of
+    # the primary provider. Useful when primary=Ollama and fallback=OpenRouter.
+    # If left empty, the fallback uses LLM_BASE_URL / LLM_API_KEY (same provider).
+    llm_fallback_base_url: str = ""
+    llm_fallback_api_key: str = ""
+
     # ─── Embedding Provider ──────────────────────────────────────────────────────
     # Separate config because Ollama Cloud doesn't offer embeddings.
     # Must point to an OpenAI-compatible embeddings endpoint.
@@ -79,6 +86,19 @@ class Settings(BaseSettings):
     def effective_llm_api_key(self) -> str:
         """LLM_API_KEY takes precedence over openrouter_api_key."""
         return self.llm_api_key or self.openrouter_api_key
+
+    @property
+    def effective_llm_fallback_api_key(self) -> str:
+        """Fallback API key resolution:
+        1. LLM_FALLBACK_API_KEY if explicitly set
+        2. OPENROUTER_API_KEY when fallback URL points to OpenRouter (common cross-provider setup)
+        3. Primary LLM_API_KEY (same-provider fallback)
+        """
+        if self.llm_fallback_api_key:
+            return self.llm_fallback_api_key
+        if self.llm_fallback_base_url and "openrouter.ai" in self.llm_fallback_base_url:
+            return self.openrouter_api_key or self.llm_api_key
+        return self.effective_llm_api_key
 
     @property
     def effective_embedding_api_key(self) -> str:

@@ -115,34 +115,43 @@ async def call_chat(
     When model= is set (e.g. for vision), only that model is tried — no fallback.
     Text-only fallback models must not receive image payloads.
     """
+    primary_url = get_setting("llm_base_url", settings.llm_base_url)
+    primary_key = get_setting("llm_api_key", settings.effective_llm_api_key)
+    primary_model = get_setting("llm_model", settings.llm_model)
+
     if model:
-        models = [model]
+        # Explicit model (e.g. vision) — single attempt, no fallback
+        model_configs: list[tuple[str, str, str]] = [(model, primary_url, primary_key)]
     else:
-        models = [get_setting("llm_model", settings.llm_model)]
+        model_configs = [(primary_model, primary_url, primary_key)]
         fallback = get_setting("llm_fallback_model", settings.llm_fallback_model)
         if fallback:
-            models.append(fallback)
-
-    # Conditional HTTP-Referer header: only sent when using OpenRouter
-    # (E2: other providers may reject or ignore it)
-    base_url = get_setting("llm_base_url", settings.llm_base_url)
-    api_key = get_setting("llm_api_key", settings.effective_llm_api_key)
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    if "openrouter.ai" in base_url:
-        headers["HTTP-Referer"] = "https://github.com/ruben-portfolio"
+            fb_url = (
+                get_setting("llm_fallback_base_url", settings.llm_fallback_base_url)
+                or primary_url
+            )
+            fb_key = (
+                get_setting("llm_fallback_api_key", settings.effective_llm_fallback_api_key)
+                or primary_key
+            )
+            model_configs.append((fallback, fb_url, fb_key))
 
     last_error: Exception | None = None
-    for model in models:
+    for m, base_url, api_key in model_configs:
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        if "openrouter.ai" in base_url:
+            headers["HTTP-Referer"] = "https://github.com/ruben-portfolio"
+
         t0 = time.monotonic()
         try:
             response = await _chat_client.post(
                 f"{base_url}/chat/completions",
                 headers=headers,
                 json={
-                    "model": model,
+                    "model": m,
                     "messages": messages,
                     "max_tokens": max_tokens,
                     "temperature": temperature,
@@ -153,28 +162,28 @@ async def call_chat(
             elapsed_ms = (time.monotonic() - t0) * 1000
             logger.info(
                 "llm_call provider=%s model=%s latency_ms=%.0f ok=true",
-                base_url, model, elapsed_ms,
+                base_url, m, elapsed_ms,
             )
-            primary_model = get_setting("llm_model", settings.llm_model)
-            if model != primary_model:
+            if m != primary_model:
                 logger.warning(
-                    "llm_failover primary=%s fallback=%s error_type=%s latency_ms=%.0f",
-                    primary_model, model, type(last_error).__name__ if last_error else "unknown", elapsed_ms,
+                    "llm_failover primary=%s fallback=%s fallback_provider=%s error_type=%s latency_ms=%.0f",
+                    primary_model, m, base_url,
+                    type(last_error).__name__ if last_error else "unknown", elapsed_ms,
                 )
             return content
         except (httpx.HTTPError, KeyError, IndexError, json.JSONDecodeError) as e:
             elapsed_ms = (time.monotonic() - t0) * 1000
             logger.warning(
                 "llm_call_failed provider=%s model=%s error=%s latency_ms=%.0f",
-                settings.llm_base_url, model, type(e).__name__, elapsed_ms,
+                base_url, m, type(e).__name__, elapsed_ms,
             )
             last_error = e
             continue
 
     # All models failed
     logger.error(
-        "llm_all_failed provider=%s models=%s",
-        base_url, models,
+        "llm_all_failed models=%s",
+        [(m, url) for m, url, _ in model_configs],
     )
     raise RuntimeError(_error_message(last_error))
 
@@ -394,9 +403,11 @@ async def validate_config() -> None:
     emb_m = get_setting("embedding_model", settings.embedding_model)
     emb_dim = get_setting_int("embedding_dim", settings.embedding_dim)
 
+    llm_fb_url = get_setting("llm_fallback_base_url", settings.llm_fallback_base_url)
     logger.info(
-        "LLM config: provider=%s model=%s fallback=%s",
+        "LLM config: provider=%s model=%s fallback=%s fallback_provider=%s",
         llm_url, llm_m, llm_fb or "(disabled)",
+        llm_fb_url or "(same as primary)",
     )
     logger.info(
         "Embedding config: provider=%s model=%s dim=%d",
