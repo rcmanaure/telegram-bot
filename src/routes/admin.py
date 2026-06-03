@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import settings
 from db import get_db, AsyncSessionLocal, DocumentChunk, Tenant, UnansweredQuery, SystemConfig
 from limiter import limiter
-from rag import chunk_text, index_chunks, sync_faq_chunks
+from rag import chunk_text, flush_tool_cache, index_chunks, sync_faq_chunks
 from services.ngrok import get_ngrok_domain
 from services.tenant_bot import init_tenant_bot
 from services.upload import MAX_UPLOAD_BYTES, _IMAGE_EXTS, describe_image_for_upload, normalize_source_name, process_uploaded_file
@@ -354,6 +354,7 @@ async def admin_upload_document(
     )
     stored = await index_chunks(db, all_chunks, tenant.slug, auto_commit=False, full_doc_text=full_doc_text)
     await db.commit()
+    flush_tool_cache(tenant.slug)
     logger.info("Admin uploaded %s for tenant %s (%d chunks)", file.filename, tenant.slug, stored)
 
     tenants, doc_stats = await _admin_context(db)

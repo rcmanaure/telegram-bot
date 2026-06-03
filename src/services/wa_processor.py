@@ -2,11 +2,13 @@
 import asyncio
 import logging
 
+from config_overlay import get_setting
 from db import AsyncSessionLocal, Tenant
 from channels.whatsapp import WhatsAppAdapter, check_wa_service_window, update_wa_service_window, send_wa_template
 from channels.protocol import ChannelButton, ChannelSendError
 from image_buffer import image_buffer
 from limiter import wa_rate_limiter
+from llm import is_tool_use_available
 from rag import rag_query, _log_unanswered
 from security import sanitize_user_input
 
@@ -248,6 +250,18 @@ async def handle_wa_message(
             return
 
         # No pending images — process text immediately
+
+        # UX pre-message: signal multi-source search (only when tool path will activate)
+        if (
+            tenant.web_search_enabled
+            and get_setting("web_search_url", "") != ""
+            and is_tool_use_available()
+        ):
+            try:
+                await adapter.send_reply(user_id, "Procesando tu consulta...")
+            except Exception:
+                pass  # best-effort
+
         async with AsyncSessionLocal() as db:
             try:
                 answer, chunks, intent = await rag_query(
