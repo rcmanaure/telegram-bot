@@ -475,15 +475,18 @@ async def _hyde_query(question: str, expertise_area: str) -> str:
         {
             "role": "user",
             "content": (
-                f"Generá una respuesta hipotética breve (1-2 oraciones) a la siguiente pregunta, "
-                f"como si fuera un fragmento de un catálogo o documento sobre {expertise_area}. "
-                f"Respondé SOLO con la respuesta hipotética, sin explicar qué estás haciendo. "
-                f"Pregunta: {question}"
+                f"Sos un especialista en {expertise_area}. Dado el siguiente texto de un cliente, "
+                f"escribí el nombre técnico/formal del procedimiento o servicio como aparecería "
+                f"en una lista de precios o catálogo de {expertise_area}. "
+                f"Usá nomenclatura técnica formal — NO el lenguaje coloquial del cliente. "
+                f"NO inventes precios. NO expliques. Respondé SOLO con el nombre técnico "
+                f"del procedimiento (1-2 líneas máximo).\n\n"
+                f"Texto del cliente: {question}"
             ),
         }
     ]
     try:
-        result = await call_chat(messages, max_tokens=100, temperature=0.1)
+        result = await call_chat(messages, max_tokens=60, temperature=0.0)
         result = result.strip()
         if not result or len(result) < 3 or len(result) > 500:
             return ""
@@ -568,8 +571,9 @@ async def _triage_response(
                 "- Do NOT ask 'How can I help you?' or similar open-ended questions.\n"
                 "- Answer directly and concisely.\n"
                 "- Respond in the same language the user wrote in.\n"
-                "- NEVER say the question is off-topic when it relates to the expertise area. "
-                "Questions about the expertise area without document support = 'ambiguous'.\n\n"
+                "CRITICAL RULE: If the question mentions ANY procedure, study, price, or service "
+                "that could plausibly be offered by the expertise area — classify as 'ambiguous', NEVER 'off_topic'. "
+                "off_topic is ONLY for questions with zero possible connection (cooking recipes, sports scores, software bugs).\n\n"
                 "IMPORTANT: Respond with ONLY a JSON object, no markdown, no preamble:\n"
                 '{"intent": "<greeting|off_topic|needs_human|ambiguous>", "reply": "<reply text>"}\n\n'
                 "Intent definitions:\n"
@@ -587,8 +591,11 @@ async def _triage_response(
                 "'hi' → greeting\n"
                 "'que planes tienes?' → ambiguous (could be about service plans)\n"
                 "'que puedes hacer?' → ambiguous (asking about capabilities)\n"
-                "'cuánto cuesta una biopsia?' → ambiguous (relates to expertise area even if no doc found)\n"
+                "'cuánto cuesta una biopsia?' → ambiguous (price question about service area)\n"
+                "'precio de biopsia de apendice' → ambiguous (specific procedure price — always ambiguous, never off_topic)\n"
+                "'cuánto cuesta el estudio X?' → ambiguous (any study/procedure price = ambiguous)\n"
                 "'como se hace una pizza?' → off_topic\n"
+                "'dime el resultado del partido de fútbol' → off_topic\n"
                 "'quiero hablar con un humano' → needs_human"
                 f"{questions_hint}"
             ),
@@ -601,8 +608,8 @@ async def _triage_response(
         return parsed["intent"], parsed["reply"]
     except Exception as e:
         logger.warning("_triage_response failed: %s", e)
-        area_clause = f" Nos especializamos en {expertise_area}." if expertise_area else ""
-        return "ambiguous", f"Ese tipo de consulta no está dentro de los servicios que ofrecemos.{area_clause} Si necesitás algo relacionado con nuestra área, con gusto te ayudamos."
+        area_clause = f" en {expertise_area}" if expertise_area else ""
+        return "ambiguous", f"No encontré información específica sobre eso{area_clause}. Para más detalles, contactanos directamente."
 
 
 async def generate_answer(
