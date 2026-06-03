@@ -362,6 +362,45 @@ async def retrieve_context(
     ]
 
 
+async def retrieve_catalog_overview(
+    db: AsyncSession,
+    namespace: str,
+) -> list[dict]:
+    """Return one representative chunk per catalog section for broad overview queries.
+
+    Similarity search can't handle "what categories do you have" queries — it always
+    concentrates top-k results in the sections that happen to match query terms best,
+    starving all other sections. This function uses DISTINCT ON section header to
+    guarantee exactly one representative chunk per section regardless of similarity.
+
+    Only returns chunks whose content starts with a markdown section header (## ...),
+    which is the format _split_markdown_tables produces for table-row chunks.
+    Falls back gracefully to [] if the namespace has no such structured chunks.
+    """
+    result = await db.execute(
+        text("""
+            SELECT DISTINCT ON (substring(content FROM '^## ([^\n]+)'))
+                   content, source, page
+            FROM document_chunks
+            WHERE namespace = :namespace
+              AND content ~ '^## '
+              AND embedding IS NOT NULL
+            ORDER BY substring(content FROM '^## ([^\n]+)'), id
+        """),
+        {"namespace": namespace},
+    )
+    rows = result.fetchall()
+    return [
+        {
+            "content": row.content,
+            "source": row.source,
+            "page": row.page,
+            "similarity": 0.5,
+        }
+        for row in rows
+    ]
+
+
 # ─── Generation ──────────────────────────────────────────────────────────────
 
 MIN_SIMILARITY = 0.20  # chunks below this threshold are considered off-topic
@@ -479,13 +518,28 @@ async def _reformulate_query(question: str, history: list[dict]) -> str:
 
 # ─── HyDE (Hypothetical Document Embeddings) ──────────────────────────────────
 
+_LISTING_QUERY_RE = re.compile(
+    r'\b(qu[eé]\s+tipo[s]?|qu[eé]\s+(tienen|tienes)|qu[eé]\s+(estudios|ex[aá]menes|servicios|procedimientos|biopsias|citolog[ií]as|an[aá]lisis)|'
+    r'todos\s+los|lista\s+(de|completa)|tienen\s+disponible|qu[eé]\s+ofrecen|cu[aá]les\s+son|'
+    r'qu[eé]\s+tipos?\s+de|muestren?\s+(todos|todas)|todo[s]?\s+los\s+(estudios|servicios|ex[aá]menes))\b',
+    re.IGNORECASE,
+)
+
+
 async def _hyde_query(question: str, expertise_area: str) -> str:
     """Generate a hypothetical catalog/document answer and return it as the search key.
 
     Bridges patient-language vs catalog-language vocabulary gap by embedding
     what the answer would look like, not the question itself.
-    Returns "" on failure — caller falls back to original question.
+    Returns "" on failure or for broad listing queries — caller falls back to original question.
+
+    Listing queries (e.g. "qué tipos de biopsias tienen") must NOT use HyDE: the prompt
+    generates a single procedure name which biases the embedding toward one catalog section,
+    suppressing all other categories from the top-k results.
     """
+    if _LISTING_QUERY_RE.search(question):
+        return ""
+
     messages = [
         {
             "role": "user",
@@ -1266,6 +1320,33 @@ async def rag_query(
         except Exception as e:
             logger.warning("tool_path_error ns=%s error=%s — falling back to sequential", namespace, e)
     # ── END TOOL PATH ─────────────────────────────────────────────────────────
+
+    # ── CATALOG OVERVIEW PATH ─────────────────────────────────────────────────
+    # Listing/overview queries ("qué tipos tienen", "qué estudios ofrecen") need
+    # all catalog sections represented, not just the semantically closest ones.
+    # Similarity search fills every top-k slot with the 1-2 sections whose names
+    # match the query terms — other sections never appear at any reasonable k.
+    # Solution: bypass similarity entirely and fetch 1 chunk per section via DISTINCT ON.
+    if _LISTING_QUERY_RE.search(question):
+        overview_context = await retrieve_catalog_overview(db, namespace)
+        if overview_context:
+            logger.info(
+                "catalog_overview ns=%s q=%r sections=%d",
+                namespace, question[:60], len(overview_context),
+            )
+            answer = await generate_answer(
+                overview_context, question, history, expertise_area,
+                channel=channel, images=images,
+            )
+            answer = validate_output(answer, user_id=user_id)
+            if CANARY_TOKEN in answer:
+                answer = answer.replace(CANARY_TOKEN, "[REDACTED]")
+                logger.warning("canary_redacted user_id=%s catalog_overview", user_id)
+            await save_turn(db, user_id, namespace, question, answer, channel=channel, tenant_id=tenant_id)
+            return answer, overview_context, None
+        # No section chunks found (unstructured namespace) — fall through to normal path
+        logger.info("catalog_overview ns=%s — no section chunks, falling through to similarity", namespace)
+    # ── END CATALOG OVERVIEW PATH ─────────────────────────────────────────────
 
     # HyDE: embed a hypothetical answer instead of the question to bridge vocabulary gap
     if get_setting("hyde_enabled", "on") == "on":
