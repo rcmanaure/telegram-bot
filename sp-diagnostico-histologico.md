@@ -318,7 +318,7 @@ Descripción de los servicios ofrecidos.
 
 1. **Muestras en formol:** Todas las muestras deben venir fijadas en formol, EXCEPTO los cortes congelados (biopsia per-operatoria) que NO deben estar en ningún líquido fijador (formol, alcohol, etc.). La empresa no se hace responsable por muestras que no vengan fijadas en formol cuando corresponde.
 
-2. **Pago obligatorio:** La muestra debe ser pagada en su totalidad para ser procesada y estudiada. En el caso de la biopsia per-operatoria (corte congelado), el estudio debe ser pagado previo a la intervención quirúrgica.
+2. **Pago obligatorio:** La muestra debe ser cancelada en su totalidad antes de ser procesada. No se realizan excepciones por este canal. En el caso de la biopsia per-operatoria (corte congelado), el estudio debe ser pagado previo a la intervención quirúrgica.
 
 3. **Comunicación por WhatsApp:** No respondemos llamadas de WhatsApp ni mensajes de voz, solo mensajería texto WhatsApp. Si necesita comunicarse vía llamada, llame al 04148050764.
 
@@ -342,7 +342,7 @@ Los resultados se entregan en **3 a 5 días hábiles**.
 
 ### ¿Debe ser pagada en su totalidad o puedo abonar la mitad y luego al retirar el resultado pagar el resto?
 
-La muestra **debe ser pagada en su totalidad** para poder ser procesada y estudiada.
+La muestra **debe ser cancelada en su totalidad** antes de ser procesada. No se realizan excepciones por este canal.
 
 ### ¿Cómo se cuentan las muestras si el envase tiene varios fragmentos?
 
@@ -360,7 +360,7 @@ Los resultados se entregan en **3 a 5 días hábiles** dependiendo del tamaño d
 
 ### ¿Puedo pagar una parte ahora y el resto al retirar el resultado?
 
-Como norma general, la muestra **debe ser cancelada en su totalidad** antes de ser procesada. Sin embargo, en casos excepcionales (por ejemplo, cirugías urgentes o situaciones especiales), puede comunicarse directamente con nosotros al **04148050764** para que un representante evalúe su situación. Cualquier excepción debe ser aprobada por el equipo.
+No. La muestra **debe ser cancelada en su totalidad** antes de ser procesada. Si tiene una situación especial, puede solicitar hablar con un representante de nuestro equipo.
 
 ---
 
