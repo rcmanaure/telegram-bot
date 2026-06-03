@@ -7,7 +7,7 @@ import logging
 
 from sqlalchemy import select, func, text
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.error import TelegramError
+from telegram.error import BadRequest, TelegramError
 from telegram.ext import ContextTypes
 
 from config import settings
@@ -171,9 +171,16 @@ async def _process_question(
                 InlineKeyboardButton("Contactar", url=tenant.contact_url)
             ]])
 
-        await update.message.reply_text(
-            full_reply, parse_mode="Markdown", reply_markup=reply_markup
-        )
+        try:
+            await update.message.reply_text(
+                full_reply, parse_mode="Markdown", reply_markup=reply_markup
+            )
+        except BadRequest as e:
+            if "can't parse entities" in str(e).lower() or "can't find end" in str(e).lower():
+                logger.warning("markdown_parse_error uid=%s — retrying as plain text: %s", uid, e)
+                await update.message.reply_text(full_reply, reply_markup=reply_markup)
+            else:
+                raise
 
     except RuntimeError as e:
         await update.message.reply_text(str(e))
