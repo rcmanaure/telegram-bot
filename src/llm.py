@@ -179,6 +179,7 @@ async def call_embeddings(texts: list[str]) -> list[list[float]]:
             response = await _get_embedding_client().embeddings.create(
                 model=get_setting("embedding_model", settings.embedding_model),
                 input=batch,
+                dimensions=get_setting_int("embedding_dim", settings.embedding_dim),
             )
             all_embeddings.extend([item.embedding for item in response.data])
         except RateLimitError:

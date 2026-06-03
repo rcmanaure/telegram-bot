@@ -19,10 +19,11 @@ import httpx
 
 def test_chunk_text_basic():
     from rag import chunk_text
+    from config import settings
     text = "A" * 600
     chunks = chunk_text(text, source="test.txt", page=1)
     assert len(chunks) >= 1
-    assert all(len(c["content"]) <= 500 for c in chunks)
+    assert all(len(c["content"]) <= settings.chunk_size for c in chunks)
     assert all(c["source"] == "test.txt" for c in chunks)
 
 
@@ -412,3 +413,28 @@ async def test_call_chat_malformed_response_fallback():
         mock_client.post = AsyncMock(side_effect=[bad_resp, ok_resp])
         result = await call_chat([{"role": "user", "content": "hi"}])
     assert result == "recovered"
+
+
+# ─── Unit: call_embeddings passes dimensions to API (T9-pre) ─────────────────
+
+@pytest.mark.asyncio
+async def test_call_embeddings_passes_dimensions_to_api():
+    """call_embeddings must always pass dimensions= so MRL truncation and
+    validate_config() dimension checks are consistent with EMBEDDING_DIM."""
+    from llm import call_embeddings
+    mock_response = MagicMock()
+    mock_response.data = [MagicMock(embedding=[0.1] * 1536)]
+
+    mock_client = AsyncMock()
+    mock_client.embeddings.create = AsyncMock(return_value=mock_response)
+
+    with patch("llm._get_embedding_client", return_value=mock_client), \
+         patch("llm.settings") as mock_settings, \
+         patch("llm.get_setting_int", return_value=1536):
+        mock_settings.embedding_model = "test-model"
+        mock_settings.embedding_dim = 1536
+        await call_embeddings(["hello"])
+
+    call_kwargs = mock_client.embeddings.create.call_args
+    assert "dimensions" in call_kwargs.kwargs, "dimensions kwarg must be passed to embeddings API"
+    assert call_kwargs.kwargs["dimensions"] == 1536

@@ -111,11 +111,13 @@ def test_chunk_text_unicode_emojis_stay_valid_utf8():
         c["content"].encode("utf-8")  # must not raise
 
 
-def test_chunk_text_600_chars_produces_two_overlapping_chunks():
+def test_chunk_text_large_text_produces_multiple_chunks():
     from rag import chunk_text
-    # size=500, overlap=50: chunk1=[0:500], chunk2=[450:600] (150 chars, > 50)
-    chunks = chunk_text("A" * 600, source="f.txt", page=1)
-    assert len(chunks) == 2
+    from config import settings
+    # Use text larger than chunk_size to guarantee a split
+    text = "A" * (settings.chunk_size * 2)
+    chunks = chunk_text(text, source="f.txt", page=1)
+    assert len(chunks) >= 2
 
 
 def test_chunk_text_source_and_page_preserved_on_all_chunks():
