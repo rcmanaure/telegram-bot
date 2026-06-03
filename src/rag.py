@@ -434,6 +434,75 @@ async def retrieve_full_catalog(
     ]
 
 
+_CATALOG_SECTION_EMOJI: dict[str, str] = {
+    "GINECOLÓGICO": "🌸",
+    "GLÁNDULA MAMARIA": "🎀",
+    "SISTEMA UROLÓGICO Y GENITAL MASCULINO": "🔵",
+    "SISTEMA RESPIRATORIO": "🫁",
+    "SISTEMA DIGESTIVO": "🍽️",
+    "SISTEMA ENDOCRINO": "🦋",
+    "SISTEMA CARDIO-CIRCULATORIO": "❤️",
+    "SISTEMA OSTEO-MUSCULAR Y PARTES BLANDAS": "🦴",
+    "SISTEMA NERVIOSO CENTRAL Y PERIFÉRICO": "🧠",
+    "SISTEMA OCULAR": "👁️",
+    "SISTEMA HEMATOPOYÉTICO Y GANGLIONAR LINFÁTICO": "🩸",
+    "PIEL Y ANEXOS CUTÁNEOS": "🧴",
+    "ESTUDIOS CITOLÓGICOS ESPECÍFICOS": "🔬",
+    "ESTUDIOS ESPECIALES": "❄️",
+}
+
+_CATALOG_ROW_RE = re.compile(
+    r'^\s*\|\s*[A-Z]{2,4}\d+\s*\|\s*(.+?)\s*\|\s*(\$[\d,.]+)\s*\|'
+)
+_CATALOG_HEADER_RE = re.compile(r'^## (.+)')
+
+
+def _format_catalog_as_text(chunks: list[dict]) -> str:
+    """Format a complete price list from catalog chunks — no LLM required.
+
+    Parses each chunk's "## SECTION\n| CODE | Description | $PRICE |" structure
+    and emits a grouped, Telegram-formatted price list.
+
+    Bypasses the LLM entirely: avoids context-window limits, hallucination, and
+    the false "data not loaded" response the LLM produces when given only 1
+    item per section.
+    """
+    section_items: dict[str, list[tuple[str, str]]] = {}
+    section_order: list[str] = []
+
+    for chunk in chunks:
+        content = chunk["content"]
+        header_m = _CATALOG_HEADER_RE.match(content)
+        if not header_m:
+            continue
+        section = header_m.group(1).strip()
+        if section not in section_items:
+            section_items[section] = []
+            section_order.append(section)
+        for line in content.split("\n"):
+            m = _CATALOG_ROW_RE.match(line)
+            if m:
+                section_items[section].append((m.group(1).strip(), m.group(2).strip()))
+
+    # Drop sections with no priced procedures (e.g. schedule tables)
+    section_order = [s for s in section_order if section_items.get(s)]
+    if not section_order:
+        return "No encontré información de precios en los documentos."
+
+    lines = [
+        "*Lista de Precios — SP Unidad de Diagnóstico Histológico*",
+        "_Moneda: USD · Vigente Junio 2026_\n",
+    ]
+    for section in section_order:
+        emoji = _CATALOG_SECTION_EMOJI.get(section.upper(), "🔬")
+        lines.append(f"*{section}*")
+        for desc, price in section_items[section]:
+            lines.append(f"{emoji} {desc} — `{price}`")
+        lines.append("")
+
+    return "\n".join(lines).rstrip()
+
+
 # ─── Generation ──────────────────────────────────────────────────────────────
 
 MIN_SIMILARITY = 0.20  # chunks below this threshold are considered off-topic
@@ -559,12 +628,11 @@ _LISTING_QUERY_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Detects EXPLICIT price-dump intent within a listing query — triggers full catalog
-# retrieval (all procedures) instead of section-overview (1 per section).
-# A bare "precios" in a listing query is NOT enough — user wants overview with prices.
-# Requires explicit "all/each/complete" framing to justify sending 165 chunks to the LLM.
+# Detects price intent within a listing query — triggers code-generated full catalog
+# (bypasses LLM entirely; always complete, no hallucination, no context limits).
+# Bare "precio[s]?" is enough: if user asks for types AND mentions prices, they want prices.
 _PRICE_INTENT_RE = re.compile(
-    r'\b(de\s+cada\s+uno|de\s+todos(\s+los)?|todos\s+los\s+precios?|'
+    r'\b(precio[s]?|de\s+cada\s+uno|de\s+todos(\s+los)?|todos\s+los\s+precios?|'
     r'lista\s+(completa\s+)?de\s+precios?|precio[s]?\s+de\s+(cada|todos)|'
     r'cu[aá]nto\s+cuesta\s+cada|dame\s+(todos?|todos?\s+los)\s+precios?)\b',
     re.IGNORECASE,
@@ -1375,42 +1443,51 @@ async def rag_query(
     # Listing/overview queries need all catalog sections, not just the ones that
     # happen to be most similar to the query terms. Two modes:
     #
-    #   • Overview  ("qué tipos tienen")  → 1 chunk per section (category names)
-    #   • Full list ("precios de cada uno") → all chunks (every procedure + price)
+    #   • Overview  ("qué tipos tienen")     → LLM + 1 chunk/section (category names)
+    #   • Price list ("tipos y precios", "y los precios de cada uno?")
+    #       → code-generated from all chunks, no LLM
+    #         Bypasses context limits AND the LLM's false "data not loaded" response
+    #         that occurs when it receives only 1 item per section.
     #
-    # Check both the original question AND the reformulated search_query because
-    # follow-up questions (e.g. "y los precios?") only match after reformulation.
+    # Check both original question AND reformulated search_query because
+    # follow-up questions only match after reformulation.
     _is_listing = _LISTING_QUERY_RE.search(question) or _LISTING_QUERY_RE.search(search_query)
     if _is_listing:
         _is_price = _PRICE_INTENT_RE.search(question) or _PRICE_INTENT_RE.search(search_query)
-        # Full price list only makes sense for channels that support long messages.
-        # WhatsApp (≤500 chars) always gets the overview; Telegram can handle the full list.
-        _full_list = _is_price and channel == "telegram"
-        if _full_list:
-            catalog_context = await retrieve_full_catalog(db, namespace)
-            _cat_max_tokens = 3000
+        _use_codegen = _is_price and channel == "telegram"
+
+        if _use_codegen:
+            # Code-generated path: fetch all procedures, format in Python, skip LLM.
+            full_chunks = await retrieve_full_catalog(db, namespace)
+            if full_chunks:
+                logger.info(
+                    "catalog_codegen ns=%s q=%r items=%d",
+                    namespace, question[:60], len(full_chunks),
+                )
+                answer = _format_catalog_as_text(full_chunks)
+                await save_turn(db, user_id, namespace, question, answer,
+                                channel=channel, tenant_id=tenant_id)
+                return answer, full_chunks, None
         else:
-            catalog_context = await retrieve_catalog_overview(db, namespace)
-            _cat_max_tokens = 800
-        if catalog_context:
-            logger.info(
-                "catalog_%s ns=%s q=%r items=%d",
-                "full" if _full_list else "overview",
-                namespace, question[:60], len(catalog_context),
-            )
-            answer = await generate_answer(
-                catalog_context, question, history, expertise_area,
-                channel=channel, images=images,
-                max_tokens=_cat_max_tokens,
-                no_length_limit=_full_list,
-            )
-            answer = validate_output(answer, user_id=user_id)
-            if CANARY_TOKEN in answer:
-                answer = answer.replace(CANARY_TOKEN, "[REDACTED]")
-                logger.warning("canary_redacted user_id=%s catalog_%s",
-                               user_id, "full" if _full_list else "overview")
-            await save_turn(db, user_id, namespace, question, answer, channel=channel, tenant_id=tenant_id)
-            return answer, catalog_context, None
+            # LLM overview path: 1 chunk per section → category names (no price intent).
+            overview_chunks = await retrieve_catalog_overview(db, namespace)
+            if overview_chunks:
+                logger.info(
+                    "catalog_overview ns=%s q=%r sections=%d",
+                    namespace, question[:60], len(overview_chunks),
+                )
+                answer = await generate_answer(
+                    overview_chunks, question, history, expertise_area,
+                    channel=channel, images=images,
+                )
+                answer = validate_output(answer, user_id=user_id)
+                if CANARY_TOKEN in answer:
+                    answer = answer.replace(CANARY_TOKEN, "[REDACTED]")
+                    logger.warning("canary_redacted user_id=%s catalog_overview", user_id)
+                await save_turn(db, user_id, namespace, question, answer,
+                                channel=channel, tenant_id=tenant_id)
+                return answer, overview_chunks, None
+
         # No section chunks found (unstructured namespace) — fall through to normal path
         logger.info("catalog ns=%s — no section chunks, falling through to similarity", namespace)
     # ── END CATALOG PATH ──────────────────────────────────────────────────────
