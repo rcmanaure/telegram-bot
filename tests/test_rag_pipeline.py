@@ -438,3 +438,102 @@ async def test_call_embeddings_passes_dimensions_to_api():
     call_kwargs = mock_client.embeddings.create.call_args
     assert "dimensions" in call_kwargs.kwargs, "dimensions kwarg must be passed to embeddings API"
     assert call_kwargs.kwargs["dimensions"] == 1536
+
+
+# ─── Unit: _hyde_query (T9) ───────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_hyde_query_happy_path():
+    from rag import _hyde_query
+    with patch("rag.call_chat", new_callable=AsyncMock, return_value="Biopsia de apéndice cecal $90.00"):
+        result = await _hyde_query("¿cuánto cuesta una biopsia?", "estudios médicos")
+    assert result == "Biopsia de apéndice cecal $90.00"
+
+
+@pytest.mark.asyncio
+async def test_hyde_query_llm_failure_returns_empty():
+    from rag import _hyde_query
+    with patch("rag.call_chat", new_callable=AsyncMock, side_effect=RuntimeError("timeout")):
+        result = await _hyde_query("¿precio de biopsia?", "estudios médicos")
+    assert result == ""
+
+
+@pytest.mark.asyncio
+async def test_hyde_query_empty_response_returns_empty():
+    from rag import _hyde_query
+    with patch("rag.call_chat", new_callable=AsyncMock, return_value="   "):
+        result = await _hyde_query("¿precio?", "médico")
+    assert result == ""
+
+
+@pytest.mark.asyncio
+async def test_hyde_query_over_500_chars_returns_empty():
+    from rag import _hyde_query
+    long_text = "A" * 501
+    with patch("rag.call_chat", new_callable=AsyncMock, return_value=long_text):
+        result = await _hyde_query("pregunta", "médico")
+    assert result == ""
+
+
+@pytest.mark.asyncio
+async def test_hyde_query_8_chars_accepted():
+    """Short but valid hypotheticals like 'Biopsia.' (8 chars) must be accepted."""
+    from rag import _hyde_query
+    with patch("rag.call_chat", new_callable=AsyncMock, return_value="Biopsia."):
+        result = await _hyde_query("¿qué es una biopsia?", "médico")
+    assert result == "Biopsia."
+
+
+@pytest.mark.asyncio
+async def test_hyde_query_2_chars_rejected():
+    """Responses shorter than 3 chars are noise — reject them."""
+    from rag import _hyde_query
+    with patch("rag.call_chat", new_callable=AsyncMock, return_value="Sí"):
+        result = await _hyde_query("¿hay biopsias?", "médico")
+    assert result == ""
+
+
+@pytest.mark.asyncio
+async def test_hyde_disabled_skips_hyde():
+    """hyde_enabled=off must prevent _hyde_query from being called."""
+    from rag import rag_query
+    mock_tenant = MagicMock()
+    mock_tenant.web_search_enabled = False
+    mock_tenant.language_code = None
+
+    with patch("rag.get_history", new_callable=AsyncMock, return_value=[]), \
+         patch("rag._reformulate_query", new_callable=AsyncMock, return_value="pregunta"), \
+         patch("rag._hyde_query", new_callable=AsyncMock, return_value="hipotética") as mock_hyde, \
+         patch("rag.retrieve_context", new_callable=AsyncMock, return_value=[]), \
+         patch("rag._triage_response", new_callable=AsyncMock, return_value=("off_topic", "lo siento")), \
+         patch("rag.save_turn", new_callable=AsyncMock), \
+         patch("rag.get_setting", return_value="off"):  # hyde_enabled=off
+        await rag_query(MagicMock(), "pregunta", "ns", "user1", expertise_area="médico", tenant=mock_tenant)
+
+    mock_hyde.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_hyde_enabled_uses_hypothetical_for_search():
+    """When HyDE returns a result, retrieve_context must receive the hypothetical, not original."""
+    from rag import rag_query
+    mock_tenant = MagicMock()
+    mock_tenant.web_search_enabled = False
+    mock_tenant.language_code = None
+
+    captured_query = {}
+
+    async def mock_retrieve(db, query, namespace):
+        captured_query["q"] = query
+        return []
+
+    with patch("rag.get_history", new_callable=AsyncMock, return_value=[]), \
+         patch("rag._reformulate_query", new_callable=AsyncMock, return_value="pregunta original"), \
+         patch("rag._hyde_query", new_callable=AsyncMock, return_value="respuesta hipotética"), \
+         patch("rag.retrieve_context", side_effect=mock_retrieve), \
+         patch("rag._triage_response", new_callable=AsyncMock, return_value=("off_topic", "lo siento")), \
+         patch("rag.save_turn", new_callable=AsyncMock), \
+         patch("rag.get_setting", return_value="on"):
+        await rag_query(MagicMock(), "pregunta original", "ns", "user1", expertise_area="médico", tenant=mock_tenant)
+
+    assert captured_query["q"] == "respuesta hipotética"

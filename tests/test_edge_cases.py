@@ -2439,7 +2439,7 @@ async def test_vision_augmented_same_query_skips_retrieval():
          patch("rag.save_turn", new=AsyncMock()), \
          patch("rag._is_illegible_response", return_value=False), \
          patch("rag.settings") as mock_settings, \
-         patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback):
+         patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else ("off" if k == "hyde_enabled" else fallback)):
         mock_settings.llm_vision_model = "gemma4:31b"
         answer, chunks, intent = await rag_query(
             mock_db, original_question, "ns", "u1",
