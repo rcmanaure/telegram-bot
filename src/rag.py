@@ -692,13 +692,28 @@ async def _hyde_query(question: str, expertise_area: str) -> str:
         return ""
 
 
-_SIBLING_STOPWORDS = {
-    "cuanto", "cuesta", "cuestan", "tiene", "tienen", "cual", "cuales", "como",
-    "para", "esta", "este", "ese", "esos", "esas", "que", "del", "los", "las",
-    "una", "unos", "unas", "con", "por", "pero", "mas", "hay", "cada", "examen",
-    "examenes", "estudio", "estudios", "precio", "precios", "informacion", "sobre",
-    "cual", "quiero", "saber", "dame", "dime", "puedes", "decir", "tienes", "tienen",
-}
+def _chunk_base_term(chunk_content: str) -> str:
+    """Extract the base/category term from a table-row chunk's item name.
+
+    Chunk format: "## SECTION\n| CODE | Item Name – Variant | Price |"
+
+    For "Tráquea – Endoscópica" → returns "Tráquea"  (term before " – ")
+    For "Apéndice Cecal"        → returns "Apéndice Cecal"  (no separator)
+
+    Using the chunk's own correctly-accented text avoids accent-mismatch
+    when the user types "traquea" but the catalog stores "Tráquea".
+    """
+    lines = chunk_content.split('\n')
+    if len(lines) < 2:
+        return ""
+    cells = [c.strip() for c in lines[1].split('|') if c.strip()]
+    if len(cells) < 2:
+        return ""
+    item_name = cells[1]  # e.g. "Tráquea – Endoscópica"
+    for sep in (' – ', ' - ', ' / '):
+        if sep in item_name:
+            return item_name.split(sep)[0].strip()
+    return item_name.strip()
 
 
 async def _fetch_section_siblings(
@@ -711,13 +726,13 @@ async def _fetch_section_siblings(
 
     HyDE generates a single specific procedure name (e.g. "Tráquea – Endoscópica"),
     biasing retrieval toward one catalog row and potentially missing siblings
-    (e.g. "Tráquea – Resección") that share the same anatomy/concept.
+    (e.g. "Tráquea – Resección") that share the same base term.
 
-    For each table-row chunk in context, this queries for other rows in the same
-    section whose content matches keywords from the original question, then appends
-    any missing siblings so the LLM sees all price variants.
+    Search term comes from the RETRIEVED CHUNK's own item name (correctly accented),
+    not from the user's question — avoids PostgreSQL ILIKE accent-mismatch where
+    "traquea" (user input) does not match "Tráquea" (stored content, á ≠ a).
 
-    Generic: works for any tenant type — medical procedures, menu items, gym plans, etc.
+    Generic: works for any tenant — medical variants, menu sizes, gym plans, etc.
     """
     table_row_chunks = [
         c for c in context_chunks
@@ -728,44 +743,40 @@ async def _fetch_section_siblings(
     if not table_row_chunks:
         return []
 
-    section_headers = list({c["content"].split('\n')[0] for c in table_row_chunks})
-
-    import re as _re
-    words = _re.sub(r'[¿?.,!¡\'"()]', '', question.lower()).split()
-    keywords = [w for w in words if len(w) > 3 and w not in _SIBLING_STOPWORDS]
-    if not keywords:
-        return []
-
     existing = {c["content"] for c in context_chunks}
     siblings: list[dict] = []
 
-    for section_header in section_headers:
-        for keyword in keywords[:4]:
-            result = await db.execute(
-                text("""
-                    SELECT content, source, page
-                    FROM document_chunks
-                    WHERE namespace = :namespace
-                      AND embedding IS NOT NULL
-                      AND content LIKE :section_prefix
-                      AND content ILIKE :kw_pattern
-                    LIMIT 20
-                """),
-                {
-                    "namespace": namespace,
-                    "section_prefix": section_header + "\n%",
-                    "kw_pattern": f"%{keyword}%",
-                },
-            )
-            for row in result.fetchall():
-                if row.content not in existing:
-                    siblings.append({
-                        "content": row.content,
-                        "source": row.source,
-                        "page": row.page,
-                        "similarity": MIN_SIMILARITY,
-                    })
-                    existing.add(row.content)
+    for chunk in table_row_chunks:
+        section_header = chunk["content"].split('\n')[0]
+        base_term = _chunk_base_term(chunk["content"])
+        if not base_term or len(base_term) < 3:
+            continue
+
+        result = await db.execute(
+            text("""
+                SELECT content, source, page
+                FROM document_chunks
+                WHERE namespace = :namespace
+                  AND embedding IS NOT NULL
+                  AND content LIKE :section_prefix
+                  AND content ILIKE :kw_pattern
+                LIMIT 20
+            """),
+            {
+                "namespace": namespace,
+                "section_prefix": section_header + "\n%",
+                "kw_pattern": f"%{base_term}%",
+            },
+        )
+        for row in result.fetchall():
+            if row.content not in existing:
+                siblings.append({
+                    "content": row.content,
+                    "source": row.source,
+                    "page": row.page,
+                    "similarity": MIN_SIMILARITY,
+                })
+                existing.add(row.content)
 
     return siblings
 
