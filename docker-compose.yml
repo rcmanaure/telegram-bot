@@ -41,6 +41,7 @@ services:
       - traefik.http.routers.ragbot.entrypoints=websecure
       - traefik.http.routers.ragbot.tls=true
       - traefik.http.routers.ragbot.tls.certresolver=letsencrypt
+      - traefik.http.routers.ragbot.service=ragbot
       - traefik.http.services.ragbot.loadbalancer.server.port=8000
       - traefik.http.services.ragbot.loadbalancer.server.scheme=http
       # Separate upload router with longer response timeout (contextual retrieval: 60+s)
