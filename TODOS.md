@@ -1,5 +1,15 @@
 # TODOS
 
+## Tool Use Agent — Feature Backlog (post-v1)
+
+- [ ] **TOOL-E1 (P2, source citations)** — After tool dispatch, extract chunk sources (`source` field) and web URLs from tool results; include in answer or append as footnotes. Trigger: first client asks "where did you get this?" or feedback shows distrust. Effort: CC ~30min / human ~2h. Context: tool results already carry chunk dicts — parsing is 10 lines. See CEO plan `~/.gstack/projects/rcmanaure-telegram-bot/ceo-plans/2026-06-03-tool-use-agent.md`.
+
+- [ ] **TOOL-E3 (P3, admin tool telemetry)** — Log which tools were called per conversation turn (new column or JSON field on `Conversation`). Admin `/admin?tab=tools` showing search_docs vs search_web call counts, hit rate, top queries triggering each. Trigger: after 4+ weeks of prod data. Effort: CC ~1h / human ~1 day. Context: build from real data to know what metrics matter.
+
+- [ ] **TOOL-E5 (P2, tenant tool registry)** — Add `tool_config JSONB` column to `Tenant` table. Keys: `search_docs_enabled` (bool), `search_web_enabled` (bool), future custom tools. Admin UI toggles per tool per tenant. Alembic migration. Trigger: first client requests a custom integration (inventory API, price lookup). Effort: CC ~2h / human ~3 days. Context: current `web_search_enabled` boolean migrates to `tool_config.search_web_enabled`.
+
+- [ ] **TOOL-UX1 (P3, pre-message deletion on tool_use degradation)** — Store Telegram message_id of "Procesando..." pre-message. If `is_tool_use_available()` returns False after the pre-message fires (TOCTOU race window during backoff transitions), delete the status message before sending the actual answer. WhatsApp has no edit/delete API so WA side is accept-as-is. Trigger: first user complaint about misleading status message. Effort: CC ~30min / human ~1h. Context: cosmetic edge case affecting <1% of requests during backoff transitions; pre-message condition already guards the main window with `is_tool_use_available()` check.
+
 ## Multi-tenant SaaS — Semana 1-2
 
 ### Fundaciones (orden CRÍTICO — seguir en este orden)

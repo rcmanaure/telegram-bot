@@ -57,6 +57,26 @@ def reset_embedding_client() -> None:
     _embedding_client = None
 
 
+# ─── Tool use support ────────────────────────────────────────────────────────
+
+class ToolUseNotSupportedError(RuntimeError):
+    """Raised when the provider returns a tool-specific 400, triggering backoff."""
+
+_tool_use_last_failure: float = 0.0
+TOOL_USE_BACKOFF: float = 300.0
+
+
+def is_tool_use_available() -> bool:
+    if _tool_use_last_failure == 0.0:
+        return True
+    return (time.monotonic() - _tool_use_last_failure) > TOOL_USE_BACKOFF
+
+
+def _mark_tool_use_failed() -> None:
+    global _tool_use_last_failure
+    _tool_use_last_failure = time.monotonic()
+
+
 # ─── Error messages ──────────────────────────────────────────────────────────
 
 def _error_message(exc: Exception) -> str:
@@ -157,6 +177,89 @@ async def call_chat(
         base_url, models,
     )
     raise RuntimeError(_error_message(last_error))
+
+
+# ─── Chat with tools ─────────────────────────────────────────────────────────
+
+async def call_chat_with_tools(
+    messages: list[dict],
+    tools: list[dict],
+    tool_choice: str = "auto",
+    max_tokens: int = 1024,
+    system: str | None = None,
+) -> tuple[str | None, list[dict]]:
+    """
+    Call chat/completions with tool_use support (OpenAI-compatible format).
+
+    If system is provided, prepends it as {role:system} before the messages.
+
+    Returns: (content_str_or_None, list_of_tool_call_objects)
+    - Text response (no tools called): (text, [])
+    - Tool calls: (None, [{id, type, function:{name, arguments}}])
+      NOTE: arguments is a JSON STRING — caller must json.loads()
+
+    Raises ToolUseNotSupportedError on tool-specific 400 (triggers 300s backoff).
+    Raises RuntimeError on other failures (no backoff).
+    """
+    full_messages: list[dict] = []
+    if system:
+        full_messages.append({"role": "system", "content": system})
+    full_messages.extend(messages)
+
+    base_url = get_setting("llm_base_url", settings.llm_base_url)
+    api_key = get_setting("llm_api_key", settings.effective_llm_api_key)
+    model = get_setting("llm_model", settings.llm_model)
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    if "openrouter.ai" in base_url:
+        headers["HTTP-Referer"] = "https://github.com/ruben-portfolio"
+
+    t0 = time.monotonic()
+    try:
+        response = await _chat_client.post(
+            f"{base_url}/chat/completions",
+            headers=headers,
+            json={
+                "model": model,
+                "messages": full_messages,
+                "tools": tools,
+                "tool_choice": tool_choice,
+                "max_tokens": max_tokens,
+            },
+        )
+        response.raise_for_status()
+        message = response.json()["choices"][0]["message"]
+        tool_calls = message.get("tool_calls") or []
+        content = message.get("content")
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        logger.info(
+            "tool_call provider=%s model=%s latency_ms=%.0f tool_calls=%d",
+            base_url, model, elapsed_ms, len(tool_calls),
+        )
+        return content, tool_calls
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 400:
+            try:
+                body = e.response.json()
+                error_msg = str(body.get("error", {}).get("message", "")).lower()
+            except Exception:
+                error_msg = e.response.text[:200].lower()
+            _TOOL_KEYWORDS = ("tool", "function_call", "tool_choice", "not supported", "unsupported")
+            if any(kw in error_msg for kw in _TOOL_KEYWORDS):
+                _mark_tool_use_failed()
+                logger.warning(
+                    "tool_use_not_supported provider=%s error=%r — backoff %.0fs",
+                    base_url, error_msg[:120], TOOL_USE_BACKOFF,
+                )
+                raise ToolUseNotSupportedError(
+                    f"Provider does not support tool_use: {error_msg[:120]}"
+                ) from e
+            raise RuntimeError(f"LLM service error (400): {error_msg[:120]}") from e
+        raise RuntimeError(_error_message(e)) from e
+    except (KeyError, IndexError, json.JSONDecodeError) as e:
+        raise RuntimeError(f"Unexpected tool response format: {e}") from e
 
 
 # ─── Embeddings ───────────────────────────────────────────────────────────────

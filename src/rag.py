@@ -7,9 +7,12 @@ This is the core of the demo. Shows clients:
 3. How the LLM answers ONLY from retrieved context (no hallucination)
 """
 import asyncio
+import hashlib
 import json
 import logging
 import re
+import time
+from collections import OrderedDict
 
 import httpx
 from services.prompts import build_system_prompt, ESCALATION_PATTERN, _GREETING_PATTERN
@@ -19,10 +22,17 @@ from security import CANARY_TOKEN, scan_chunk_for_injection, sanitize_user_input
 logger = logging.getLogger(__name__)
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
-from db import DocumentChunk, Conversation, UnansweredQuery, Tenant
+from db import AsyncSessionLocal, DocumentChunk, Conversation, UnansweredQuery, Tenant
 from config import settings
 from config_overlay import get_setting, get_setting_int
-from llm import call_chat, call_embeddings, extract_json_from_llm_response
+from llm import (
+    call_chat,
+    call_chat_with_tools,
+    call_embeddings,
+    extract_json_from_llm_response,
+    is_tool_use_available,
+    ToolUseNotSupportedError,
+)
 
 http_client = httpx.AsyncClient(timeout=60)
 
@@ -933,6 +943,149 @@ async def _web_search(question: str) -> list[dict]:
         return []
 
 
+# ─── Tool use definitions ─────────────────────────────────────────────────────
+
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_documents",
+            "description": (
+                "Search the company's indexed documents (catalogs, manuals, policies, FAQs) "
+                "for information about the company's own products, services, prices, rules, or procedures."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Standalone search query."}
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_web",
+            "description": (
+                "Search the web for current information not in the company documents: "
+                "external facts, regulations, competitor info, recent events."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Web search query."}
+                },
+                "required": ["query"],
+            },
+        },
+    },
+]
+
+# ─── Tool result cache ────────────────────────────────────────────────────────
+# Keyed by "namespace:tool_name:sha256(query)[:16]". Value: (result_str, chunks, monotonic_ts).
+# LRU cap: 1000 entries (FIFO eviction on overflow). TTL: 300s (lazy eviction on read).
+# Flushed on document upsert via flush_tool_cache(namespace).
+
+_tool_cache: OrderedDict[str, tuple[str, list[dict], float]] = OrderedDict()
+_TOOL_CACHE_MAX = 1000
+
+
+def _cache_key(namespace: str, tool_name: str, query: str) -> str:
+    h = hashlib.sha256(query.encode()).hexdigest()[:16]
+    return f"{namespace}:{tool_name}:{h}"
+
+
+def _get_cached(namespace: str, tool_name: str, query: str) -> tuple[str, list[dict]] | None:
+    key = _cache_key(namespace, tool_name, query)
+    if key in _tool_cache:
+        result, chunks, ts = _tool_cache[key]
+        if time.monotonic() - ts < 300:
+            return result, chunks
+        del _tool_cache[key]
+    return None
+
+
+def _set_cached(namespace: str, tool_name: str, query: str, result: str, chunks: list[dict]) -> None:
+    key = _cache_key(namespace, tool_name, query)
+    if len(_tool_cache) >= _TOOL_CACHE_MAX:
+        _tool_cache.popitem(last=False)  # evict oldest entry (FIFO-LRU)
+    _tool_cache[key] = (result, chunks, time.monotonic())
+
+
+def flush_tool_cache(namespace: str) -> None:
+    """Remove all cached tool results for a namespace. Call after document upsert."""
+    prefix = f"{namespace}:"
+    to_del = [k for k in _tool_cache if k.startswith(prefix)]
+    for k in to_del:
+        del _tool_cache[k]
+    if to_del:
+        logger.debug("tool_cache flushed: %s (%d entries)", namespace, len(to_del))
+
+
+# ─── Tool dispatch helpers ────────────────────────────────────────────────────
+
+async def _tool_search_documents(
+    query: str, namespace: str, expertise_area: str
+) -> tuple[str, list[dict]]:
+    """Search indexed documents for a tool dispatch call.
+
+    Uses a fresh DB session (never reentrant with outer rag_query session).
+    HyDE runs inside the fresh session; cache is keyed on reformulated query (pre-HyDE).
+    Returns (formatted_string, chunk_list). Empty string + [] when no matches found.
+    """
+    cached = _get_cached(namespace, "search_documents", query)
+    if cached is not None:
+        logger.debug("tool_cache hit: %s:search_documents", namespace)
+        return cached
+
+    async with AsyncSessionLocal() as db:
+        hyde_q = await _hyde_query(query, expertise_area)
+        search_q = hyde_q if hyde_q else query
+        chunks = await retrieve_context(db, search_q, namespace)
+
+    if not chunks:
+        _set_cached(namespace, "search_documents", query, "", [])
+        return "", []
+
+    formatted = "\n\n".join(f"[Doc {i + 1}]: {c['content']}" for i, c in enumerate(chunks))
+    _set_cached(namespace, "search_documents", query, formatted, chunks)
+    logger.debug("tool_call: search_documents → %d chars, %d chunks", len(formatted), len(chunks))
+    return formatted, chunks
+
+
+async def _tool_search_web(query: str, tenant: "Tenant") -> str:
+    """Search the web for a tool dispatch call. Returns formatted string or ''."""
+    if not get_setting("web_search_url", settings.web_search_url):
+        return ""
+
+    namespace = tenant.slug
+    cached = _get_cached(namespace, "search_web", query)
+    if cached is not None:
+        logger.debug("tool_cache hit: %s:search_web", namespace)
+        result, _ = cached
+        return result
+
+    web_chunks = await _web_search(query)
+    result = "\n\n".join(f"[Web]: {c['content']}" for c in web_chunks) if web_chunks else ""
+    _set_cached(namespace, "search_web", query, result, [])
+    logger.debug("tool_call: search_web → %d chars", len(result))
+    return result
+
+
+async def _dispatch_tool(tool_call: dict, namespace: str, tenant: "Tenant") -> str:
+    """Execute a single tool call and return its string result."""
+    name = tool_call["function"]["name"]
+    inp = json.loads(tool_call["function"]["arguments"])
+    if name == "search_documents":
+        result, _ = await _tool_search_documents(inp["query"], namespace, tenant.expertise_area or "")
+        return result or "No relevant documents found."
+    if name == "search_web":
+        return await _tool_search_web(inp["query"], tenant) or "No web results found."
+    logger.warning("_dispatch_tool: unknown tool=%s", name)
+    return "Unknown tool."
+
+
 async def _log_unanswered(
     db: AsyncSession,
     namespace: str,
@@ -1005,6 +1158,92 @@ async def rag_query(
     if search_query != question:
         logger.info("reformulate ns=%s original=%r → reformulated=%r",
                      namespace, question[:60], search_query[:60])
+
+    # ── TOOL PATH ────────────────────────────────────────────────────────────────
+    # When 2+ tools are available and the LLM provider supports tool_use, let the
+    # LLM choose which tools to call (Round 1), dispatch them in parallel, then
+    # synthesize from all results (Round 2). Falls through to sequential pipeline
+    # on failure, provider incompatibility, or all-empty tool results.
+    _web_available = (
+        (tenant.web_search_enabled if tenant else False)
+        and bool(get_setting("web_search_url", settings.web_search_url))
+    )
+    _available_tools = TOOLS if _web_available else [TOOLS[0]]
+
+    if is_tool_use_available() and not images and len(_available_tools) >= 2:
+        try:
+            _system_prompt = build_system_prompt(expertise_area, channel=channel)
+            r1_content, tool_calls = await call_chat_with_tools(
+                messages=[*history[-6:], {"role": "user", "content": question}],
+                tools=_available_tools,
+                system=_system_prompt,
+                tool_choice="auto",
+            )
+
+            if r1_content:
+                # LLM answered directly without tools (greeting, off-topic etc.)
+                r1_content = validate_output(r1_content, user_id=user_id)
+                if CANARY_TOKEN in r1_content:
+                    r1_content = r1_content.replace(CANARY_TOKEN, "[REDACTED]")
+                    logger.warning("canary_redacted user_id=%s tool_direct", user_id)
+                await save_turn(db, user_id, namespace, question, r1_content, channel=channel, tenant_id=tenant_id)
+                return r1_content, [], "direct"
+
+            if tool_calls:
+                # Parallel dispatch — partial failure handled via return_exceptions
+                raw_results = await asyncio.gather(*[
+                    _dispatch_tool(tc, namespace, tenant) for tc in tool_calls
+                ], return_exceptions=True)
+
+                tool_results: list[str] = []
+                for tc, r in zip(tool_calls, raw_results):
+                    if isinstance(r, Exception):
+                        logger.warning(
+                            "tool_dispatch_failed tool=%s error=%s",
+                            tc["function"]["name"], r,
+                        )
+                        tool_results.append("")
+                    else:
+                        tool_results.append(r)
+
+                if not all(r == "" for r in tool_results):
+                    # Collect doc_chunks for source attribution (cache hit — no extra DB call)
+                    _doc_chunks: list[dict] = []
+                    for tc in tool_calls:
+                        if tc["function"]["name"] == "search_documents":
+                            q = json.loads(tc["function"]["arguments"])["query"]
+                            _, _doc_chunks = await _tool_search_documents(q, namespace, expertise_area or "")
+                            break
+
+                    synthesis_messages = [
+                        {"role": "system", "content": _system_prompt},
+                        *history[-6:],
+                        {"role": "user", "content": question},
+                        {"role": "assistant", "tool_calls": tool_calls},
+                        *[
+                            {"role": "tool", "tool_call_id": tc["id"], "content": result}
+                            for tc, result in zip(tool_calls, tool_results)
+                        ],
+                    ]
+                    answer = await call_chat(messages=synthesis_messages, max_tokens=800, channel=channel)
+                    answer = validate_output(answer, user_id=user_id)
+                    if CANARY_TOKEN in answer:
+                        answer = answer.replace(CANARY_TOKEN, "[REDACTED]")
+                        logger.warning("canary_redacted user_id=%s tool_path", user_id)
+                    await save_turn(db, user_id, namespace, question, answer, channel=channel, tenant_id=tenant_id)
+                    return answer, _doc_chunks, "tool_use"
+
+                # All tool results empty — fall through to sequential pipeline
+                logger.warning(
+                    "tool_path_all_empty ns=%s q=%r — falling back to sequential",
+                    namespace, question[:60],
+                )
+
+        except ToolUseNotSupportedError:
+            logger.warning("tool_use_not_supported ns=%s — falling back to sequential", namespace)
+        except Exception as e:
+            logger.warning("tool_path_error ns=%s error=%s — falling back to sequential", namespace, e)
+    # ── END TOOL PATH ─────────────────────────────────────────────────────────
 
     # HyDE: embed a hypothetical answer instead of the question to bridge vocabulary gap
     if get_setting("hyde_enabled", "on") == "on":
