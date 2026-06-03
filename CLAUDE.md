@@ -58,10 +58,12 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 **RAG pipeline** (`src/rag.py`):
 1. `rag_query()` is the entry point, called by both Telegram and WhatsApp handlers
 2. Escalation regex (from `services/prompts.py`) short-circuits before vector search for human-handoff phrases
-3. `retrieve_context()` embeds the query → cosine search via pgvector `<=>` operator, filtered to `namespace = tenant.slug`
-4. Chunks below `MIN_SIMILARITY = 0.20` are dropped; if nothing remains, `_triage_response()` classifies the message as `greeting | off_topic | needs_human | ambiguous` via LLM
-5. `generate_answer()` calls the LLM with `system → last-6-history → (context + question)`
-6. `validate_output()` logs a warning if the canary token leaks; then `save_turn()` persists the exchange
+3. `_reformulate_query()` rewrites follow-up questions into standalone queries (resolves pronouns from last 3 turns) before vector search; original question used for answer generation
+4. `retrieve_context()` embeds the query → sets `hnsw.ef_search` + `hnsw.iterative_scan` via `SET LOCAL`, then cosine search via pgvector `<=>` operator filtered to `namespace = tenant.slug`. **Critical**: never `db.commit()` between the `SET LOCAL` statements and the `SELECT` — that ends the transaction and loses the settings.
+5. Chunks below `MIN_SIMILARITY = 0.20` are dropped; second-pass at `LOW_MIN_SIMILARITY = 0.10` gives approximate matches (LLM notified via `low_confidence=True`). If both fail and images are present, `_extract_search_terms_from_images()` runs vision extraction and retries.
+6. No context found → web search fallback (if `tenant.web_search_enabled`) → `_triage_response()` classifies as `greeting | off_topic | needs_human | ambiguous`
+7. `generate_answer()` calls the LLM with `system → last-6-history → (context + question)`
+8. `validate_output()` logs a warning if the canary token leaks; then `save_turn()` persists the exchange
 
 Conversation history is auto-trimmed to `HISTORY_ROW_CAP = 50` rows per user+namespace. FAQ chunks are indexed under `source = "__faq__"` and re-synced whenever `example_questions` changes.
 
@@ -72,8 +74,10 @@ Conversation history is auto-trimmed to `HISTORY_ROW_CAP = 50` rows per user+nam
 
 **Runtime config overlay** (`src/config_overlay.py` + `src/crypto.py`):
 - `SystemConfig` DB table stores encrypted key-value pairs that override `.env` at runtime without restart
-- `get_setting(key, fallback)` resolves: DB override → fallback (.env value)
+- `get_setting(key, fallback)` resolves: DB override → fallback (.env value); `get_setting_int(key, fallback)` for int settings (e.g. `hnsw_ef_search`)
 - Values encrypted with Fernet AES-128-CBC (`src/crypto.py`); requires `ENCRYPTION_KEY` env var. If unset, values stored/read as plaintext with a warning. Decryption failure (e.g., value stored before encryption was enabled) falls back to plaintext silently.
+
+**Contextual retrieval** (`LLM_CONTEXT_MODEL`): config key exists; `index_chunks()` does not yet use it. When implemented, a cheap model will prepend 50-100 token context summaries to each chunk *before* embedding (not stored in DB `content` column — original text stays clean for display).
 
 **Channel abstraction** (`src/channels/`):
 - `protocol.py` defines `ChannelAdapter` (Protocol), `ChannelMessage`, `ChannelSendError`, and per-channel formatting specs (`CHANNEL_FORMATTING`)
@@ -110,3 +114,9 @@ Conversation history is auto-trimmed to `HISTORY_ROW_CAP = 50` rows per user+nam
 ## Testing
 
 `tests/conftest.py` provides a **session-scoped** `TestClient` that patches `lifespan.init_db`, `db.AsyncSessionLocal`, and `services.ngrok.get_ngrok_domain`. Also sets `app.dependency_overrides[get_db]` with a mock DB. Use fixtures `api_client` (unauthenticated) or `authed_api_client` (overrides `require_tenant`) from conftest. Mock `rag.call_chat`, not HTTP internals, when testing RAG paths. When patching module-level functions, patch the module that **uses** the function (e.g., `patch("services.wa_processor.rag_query")`) not the module that defines it — because of `from X import Y` local references.
+
+Test files: `test_rag_pipeline.py` (core RAG + API), `test_security.py`, `test_edge_cases.py`, `test_vision.py`, `test_web_search.py`, `test_whatsapp_integration.py`, `test_whatsapp_adapter.py`, `test_admin_redesign.py`, `test_image_buffer.py`.
+
+## Plans
+
+`PLAN_main_refactor.md` — T1–T15 implementation plan for extracting the former 1267-line GOD `main.py` into the current modular structure. Architecture decisions locked in that document (D1–D20). Consult before proposing structural changes to routes, services, or channel modules.

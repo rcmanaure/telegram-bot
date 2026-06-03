@@ -20,7 +20,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from db import DocumentChunk, Conversation, UnansweredQuery, Tenant
 from config import settings
-from config_overlay import get_setting
+from config_overlay import get_setting, get_setting_int
 from llm import call_chat, call_embeddings, extract_json_from_llm_response
 
 http_client = httpx.AsyncClient(timeout=60)
@@ -232,6 +232,17 @@ async def retrieve_context(
 
     # Embed the query
     query_embedding = (await call_embeddings([query]))[0]
+
+    # HNSW tuning: SET LOCAL persists within SQLAlchemy's autobegin transaction.
+    # DO NOT insert db.commit() between these SET LOCAL statements and the
+    # SELECT below — that would end the implicit transaction and lose the settings.
+    ef_search = get_setting_int("hnsw_ef_search", settings.hnsw_ef_search)
+    iterative_scan = get_setting("hnsw_iterative_scan", settings.hnsw_iterative_scan)
+    if iterative_scan not in ("on", "off"):
+        logger.warning("invalid hnsw_iterative_scan=%r, using default", iterative_scan)
+        iterative_scan = settings.hnsw_iterative_scan
+    await db.execute(text(f"SET LOCAL hnsw.ef_search = {int(ef_search)}"))
+    await db.execute(text(f"SET LOCAL hnsw.iterative_scan = {iterative_scan}"))
 
     # pgvector cosine similarity search
     # <=> is cosine distance (lower = more similar)
