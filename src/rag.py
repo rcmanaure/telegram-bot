@@ -314,6 +314,7 @@ async def retrieve_context(
                    1 - (embedding <=> CAST(:query_vec AS vector)) AS similarity
             FROM document_chunks
             WHERE namespace = :namespace
+              AND embedding IS NOT NULL
             ORDER BY embedding <=> CAST(:query_vec AS vector)
             LIMIT :top_k
         """),

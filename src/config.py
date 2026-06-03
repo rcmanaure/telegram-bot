@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     embedding_base_url: str = "https://openrouter.ai/api/v1"
     embedding_api_key: str = ""  # Must be set explicitly — no fallback to LLM_API_KEY
     embedding_model: str = "openai/text-embedding-3-small"
-    embedding_dim: int = 1536
+    embedding_dim: int = 512  # MRL: text-embedding-3-small supports 512-dim truncation
 
     # ─── Deprecated aliases (backwards compat) ───────────────────────────────────
     # openrouter_api_key still works but LLM_API_KEY takes precedence.
