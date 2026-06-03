@@ -28,9 +28,9 @@ def build_system_prompt(
     if no_length_limit:
         length_guidance = "\n- Listá TODOS los ítems del contexto sin excepción. La respuesta puede ser larga — no truncar, no omitir ningún estudio ni precio."
     elif channel == "whatsapp":
-        length_guidance = "\n- Respuestas cortas: idealmente menos de 300 caracteres, máximo 500. WhatsApp no maneja bien textos largos."
+        length_guidance = "\n- Respuestas cortas: idealmente menos de 300 caracteres, máximo 500. WhatsApp no maneja bien textos largos.\n- EXCEPCIÓN de brevedad: si el contexto contiene múltiples variantes o tipos del mismo ítem con distintos precios, listá TODAS las variantes con sus precios. Nunca omitas una opción cuando hay varias con precios diferentes."
     elif channel == "telegram":
-        length_guidance = "\n- Podés ser más extenso, hasta ~800 caracteres. Pero si la respuesta es simple, sé breve."
+        length_guidance = "\n- Podés ser más extenso, hasta ~800 caracteres. Pero si la respuesta es simple, sé breve.\n- EXCEPCIÓN de brevedad: si el contexto contiene múltiples variantes o tipos del mismo ítem con distintos precios, listá TODAS las variantes con sus precios. Nunca omitas una opción cuando hay varias con precios diferentes."
 
     # Source attribution guidance (replaces blanket prohibition)
     source_guidance = """\
