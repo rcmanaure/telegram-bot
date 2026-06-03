@@ -58,7 +58,7 @@ async def upload_document(
     return {
         "status": "indexed",
         "namespace": tenant.slug,
-        "filename": file.filename,
+        "filename": source_name,
         "pages_processed": pages_processed,
         "chunks_stored": stored,
     }
