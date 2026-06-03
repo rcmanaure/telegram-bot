@@ -90,10 +90,11 @@ async def describe_image_for_upload(content: bytes, filename: str) -> str:
     return description
 
 
-def process_uploaded_file(content: bytes, filename: str, source_name: str) -> tuple[list[dict], int]:
+def process_uploaded_file(content: bytes, filename: str, source_name: str) -> tuple[list[dict], int, str]:
     """Parse uploaded file content into chunks.
 
-    Returns (chunks, pages_processed).
+    Returns (chunks, pages_processed, full_doc_text).
+    full_doc_text is passed to index_chunks() for contextual retrieval embedding.
     Raises HTTPException on unsupported format, corrupt PDF, etc.
     """
     fname = filename.lower()
@@ -101,27 +102,31 @@ def process_uploaded_file(content: bytes, filename: str, source_name: str) -> tu
         raise HTTPException(400, "Supported formats: PDF, Markdown (.md), plain text (.txt)")
 
     all_chunks = []
+    full_doc_text = ""
     if fname.endswith(".pdf"):
         try:
             reader = PdfReader(io.BytesIO(content))
         except Exception as e:
             raise HTTPException(400, f"Could not read PDF: {e}")
+        page_texts = []
         for page_num, page in enumerate(reader.pages):
             page_text = page.extract_text() or ""
             if page_text.strip():
+                page_texts.append(page_text)
                 chunks = chunk_text(page_text, source=source_name, page=page_num + 1)
                 all_chunks.extend(chunks)
+        full_doc_text = "\n\n".join(page_texts)
         pages_processed = len(reader.pages)
     else:
         try:
-            text = content.decode("utf-8")
+            full_doc_text = content.decode("utf-8")
         except UnicodeDecodeError:
             raise HTTPException(400, "File must be UTF-8 encoded")
-        if text.strip():
-            all_chunks = chunk_text(text, source=source_name, page=1)
+        if full_doc_text.strip():
+            all_chunks = chunk_text(full_doc_text, source=source_name, page=1)
         pages_processed = 1
 
     if not all_chunks:
         raise HTTPException(400, "No text could be extracted from this file")
 
-    return all_chunks, pages_processed
+    return all_chunks, pages_processed, full_doc_text

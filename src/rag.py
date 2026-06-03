@@ -6,6 +6,7 @@ This is the core of the demo. Shows clients:
 2. How semantic search works (not keyword search)
 3. How the LLM answers ONLY from retrieved context (no hallucination)
 """
+import asyncio
 import json
 import logging
 import re
@@ -163,6 +164,45 @@ async def sync_faq_chunks(
     return stored
 
 
+# ─── Contextual retrieval ────────────────────────────────────────────────────
+
+_CONTEXT_SEMAPHORE = asyncio.Semaphore(5)  # max 5 concurrent LLM context calls
+
+
+async def _add_contextual_summary(full_doc_text: str, chunk_content: str) -> str:
+    """Generate a 1-2 sentence context summary to prepend before embedding.
+
+    The summary situates the chunk within the document so the embedding
+    captures section context, not just chunk content.
+    Returns "" if LLM_CONTEXT_MODEL is unset or the call fails — caller falls
+    back to embedding chunk_content directly.
+    """
+    context_model = get_setting("llm_context_model", settings.llm_context_model)
+    if not context_model:
+        return ""
+
+    messages = [
+        {
+            "role": "user",
+            "content": (
+                "Dado el siguiente documento completo y un fragmento específico del mismo, "
+                "escribí en 1-2 oraciones un contexto breve que sitúe este fragmento dentro "
+                "del documento. No repitas el contenido del fragmento. "
+                "Respondé solo con el contexto, nada más.\n\n"
+                f"Documento completo:\n{full_doc_text[:3000]}\n\n"
+                f"Fragmento:\n{chunk_content}"
+            ),
+        }
+    ]
+    try:
+        async with _CONTEXT_SEMAPHORE:
+            result = await call_chat(messages, max_tokens=100, temperature=0.0, model=context_model)
+        return result.strip() if result else ""
+    except Exception as e:
+        logger.warning("contextual_summary_failed chunk_preview=%r error=%s", chunk_content[:60], e)
+        return ""
+
+
 # ─── Indexing ────────────────────────────────────────────────────────────────
 
 async def index_chunks(
@@ -170,6 +210,7 @@ async def index_chunks(
     chunks: list[dict],
     namespace: str,
     auto_commit: bool = True,
+    full_doc_text: str | None = None,
 ) -> int:
     """
     Embed and store chunks in pgvector.
@@ -177,6 +218,11 @@ async def index_chunks(
 
     When auto_commit=False, the caller is responsible for committing the
     transaction (used for atomic upsert: DELETE old + INSERT new in one commit).
+
+    When full_doc_text is provided and LLM_CONTEXT_MODEL is configured, each
+    chunk gets a contextual summary prepended to its embedding input (not stored
+    in DB — original content stays clean). FAQ chunks pass full_doc_text=None
+    to skip contextual retrieval.
     """
     if not chunks:
         return 0
@@ -195,7 +241,23 @@ async def index_chunks(
     if not clean_chunks:
         return 0
 
-    texts = [c["content"] for c in clean_chunks]
+    # Contextual retrieval: parallel LLM calls outside DB transaction.
+    # DB transaction only covers the INSERT below.
+    if full_doc_text and get_setting("llm_context_model", settings.llm_context_model):
+        summaries = await asyncio.gather(
+            *[_add_contextual_summary(full_doc_text, c["content"]) for c in clean_chunks]
+        )
+        texts = [
+            f"{summary}\n{c['content']}" if summary else c["content"]
+            for summary, c in zip(summaries, clean_chunks)
+        ]
+        logger.info(
+            "contextual_retrieval ns=%s chunks=%d with_context=%d",
+            namespace, len(clean_chunks), sum(1 for s in summaries if s),
+        )
+    else:
+        texts = [c["content"] for c in clean_chunks]
+
     embeddings = await call_embeddings(texts)
 
     db_chunks = [
@@ -203,7 +265,7 @@ async def index_chunks(
             namespace=namespace,
             source=chunk["source"],
             page=chunk["page"],
-            content=chunk["content"],
+            content=chunk["content"],  # always store original, never contextual text
             embedding=embedding,
         )
         for chunk, embedding in zip(clean_chunks, embeddings)

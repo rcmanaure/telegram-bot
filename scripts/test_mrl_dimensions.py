@@ -66,8 +66,8 @@ async def main() -> None:
         print()
         print("Decision: use T5-mrl instead of T5 halfvec.")
         print("Deploy sequence:")
-        print("  1. Alembic migration: vector(1536) → vector(512) + rebuild HNSW index")
-        print("  2. Change embedding_dim=512 in config.py → redeploy")
+        print("  1. Alembic migration: vector(1536) -> vector(512) + rebuild HNSW index")
+        print("  2. Change embedding_dim=512 in config.py -> redeploy")
         print("  3. validate_config() at startup verifies match automatically")
         print("  4. Re-upload all documents (covered by T6)")
     else:

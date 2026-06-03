@@ -537,3 +537,126 @@ async def test_hyde_enabled_uses_hypothetical_for_search():
         await rag_query(MagicMock(), "pregunta original", "ns", "user1", expertise_area="médico", tenant=mock_tenant)
 
     assert captured_query["q"] == "respuesta hipotética"
+
+
+# ─── Unit: contextual retrieval / index_chunks (T6) ──────────────────────────
+
+@pytest.mark.asyncio
+async def test_index_chunks_no_full_doc_skips_contextual():
+    """FAQ chunks (full_doc_text=None) must not call _add_contextual_summary."""
+    from rag import index_chunks
+    mock_db = MagicMock()
+    mock_db.add_all = MagicMock()
+    mock_db.commit = AsyncMock()
+
+    with patch("rag.call_embeddings", new_callable=AsyncMock, return_value=[[0.1] * 5]) as mock_emb, \
+         patch("rag._add_contextual_summary", new_callable=AsyncMock) as mock_ctx, \
+         patch("rag.get_setting", return_value="gpt-4o-mini"):
+        await index_chunks(mock_db, [{"content": "texto", "source": "doc.pdf", "page": 1}], "ns")
+
+    mock_ctx.assert_not_called()
+    # embedding input must be original content, not contextual
+    mock_emb.assert_called_once_with(["texto"])
+
+
+@pytest.mark.asyncio
+async def test_index_chunks_with_full_doc_calls_contextual():
+    """When full_doc_text is provided and llm_context_model is set, contextual summary is prepended."""
+    from rag import index_chunks
+    mock_db = MagicMock()
+    mock_db.add_all = MagicMock()
+    mock_db.commit = AsyncMock()
+
+    with patch("rag.call_embeddings", new_callable=AsyncMock, return_value=[[0.1] * 5]) as mock_emb, \
+         patch("rag._add_contextual_summary", new_callable=AsyncMock, return_value="contexto del doc") as mock_ctx, \
+         patch("rag.get_setting", return_value="gpt-4o-mini"):
+        await index_chunks(
+            mock_db,
+            [{"content": "texto del chunk", "source": "doc.pdf", "page": 1}],
+            "ns",
+            full_doc_text="documento completo",
+        )
+
+    mock_ctx.assert_called_once_with("documento completo", "texto del chunk")
+    # embedding receives context + chunk, not just chunk
+    mock_emb.assert_called_once_with(["contexto del doc\ntexto del chunk"])
+
+
+@pytest.mark.asyncio
+async def test_index_chunks_contextual_failure_falls_back():
+    """If _add_contextual_summary returns '', embed the chunk without context."""
+    from rag import index_chunks
+    mock_db = MagicMock()
+    mock_db.add_all = MagicMock()
+    mock_db.commit = AsyncMock()
+
+    with patch("rag.call_embeddings", new_callable=AsyncMock, return_value=[[0.1] * 5]) as mock_emb, \
+         patch("rag._add_contextual_summary", new_callable=AsyncMock, return_value="") as mock_ctx, \
+         patch("rag.get_setting", return_value="gpt-4o-mini"):
+        await index_chunks(
+            mock_db,
+            [{"content": "texto", "source": "doc.pdf", "page": 1}],
+            "ns",
+            full_doc_text="doc",
+        )
+
+    mock_ctx.assert_called_once()
+    # fallback: embed original content only
+    mock_emb.assert_called_once_with(["texto"])
+
+
+@pytest.mark.asyncio
+async def test_index_chunks_stores_original_content_not_contextual():
+    """DB must always store original chunk content, never the contextual text."""
+    from rag import index_chunks
+    from db import DocumentChunk
+    mock_db = MagicMock()
+    stored_chunks = []
+    mock_db.add_all = MagicMock(side_effect=lambda chunks: stored_chunks.extend(chunks))
+    mock_db.commit = AsyncMock()
+
+    with patch("rag.call_embeddings", new_callable=AsyncMock, return_value=[[0.1] * 5]), \
+         patch("rag._add_contextual_summary", new_callable=AsyncMock, return_value="CONTEXTO PREPENDED"), \
+         patch("rag.get_setting", return_value="gpt-4o-mini"):
+        await index_chunks(
+            mock_db,
+            [{"content": "original chunk content", "source": "doc.pdf", "page": 1}],
+            "ns",
+            full_doc_text="full doc",
+        )
+
+    assert len(stored_chunks) == 1
+    assert stored_chunks[0].content == "original chunk content"
+    assert "CONTEXTO" not in stored_chunks[0].content
+
+
+@pytest.mark.asyncio
+async def test_add_contextual_summary_no_model_returns_empty():
+    """When LLM_CONTEXT_MODEL is not configured, skip contextual summary."""
+    from rag import _add_contextual_summary
+    with patch("rag.get_setting", return_value=""), \
+         patch("rag.call_chat", new_callable=AsyncMock) as mock_chat:
+        result = await _add_contextual_summary("doc completo", "chunk text")
+    assert result == ""
+    mock_chat.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_add_contextual_summary_llm_failure_returns_empty():
+    """LLM failure must return '' and not raise — upload must not fail."""
+    from rag import _add_contextual_summary
+    with patch("rag.get_setting", return_value="gpt-4o-mini"), \
+         patch("rag.call_chat", new_callable=AsyncMock, side_effect=RuntimeError("rate limit")):
+        result = await _add_contextual_summary("doc", "chunk")
+    assert result == ""
+
+
+def test_process_uploaded_file_returns_full_doc_text():
+    """process_uploaded_file must return 3-tuple including full_doc_text."""
+    from services.upload import process_uploaded_file
+    content = b"Primera parte del documento.\n\nSegunda parte del documento."
+    chunks, pages, full_text = process_uploaded_file(content, "doc.txt", "doc.txt")
+    assert isinstance(chunks, list)
+    assert pages == 1
+    assert "Primera parte" in full_text
+    assert "Segunda parte" in full_text
