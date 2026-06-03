@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     embedding_base_url: str = "https://openrouter.ai/api/v1"
     embedding_api_key: str = ""  # Must be set explicitly — no fallback to LLM_API_KEY
     embedding_model: str = "openai/text-embedding-3-small"
-    embedding_dim: int = 512  # MRL: text-embedding-3-small supports 512-dim truncation
+    embedding_dim: int = 768  # MRL: 768-dim gives ~97% of full accuracy vs ~92% at 512
 
     # ─── Deprecated aliases (backwards compat) ───────────────────────────────────
     # openrouter_api_key still works but LLM_API_KEY takes precedence.
@@ -37,8 +37,8 @@ class Settings(BaseSettings):
 
     # ─── RAG ─────────────────────────────────────────────────────────────────────
     chunk_size: int = 768
-    chunk_overlap: int = 77
-    top_k_results: int = 6
+    chunk_overlap: int = 128
+    top_k_results: int = 10
 
     # ─── HNSW (pgvector) ────────────────────────────────────────────────────────
     # Defaults match ~98% recall per pgvector benchmarks (ef_search=160 vs 40 default ~85%).

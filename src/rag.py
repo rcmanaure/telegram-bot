@@ -54,18 +54,32 @@ def _split_markdown_tables(text: str) -> str:
     result_lines: list[str] = []
     current_header = ""
 
+    def _is_separator(s: str) -> bool:
+        return (
+            s.startswith('|') and s.endswith('|')
+            and set(s.replace('|', '').replace('-', '').replace(':', '')) <= {' '}
+        )
+
     in_table = False
-    for line in lines:
+    for i, line in enumerate(lines):
         stripped = line.strip()
-        # Detect markdown table rows (start and end with |)
         is_table_row = stripped.startswith('|') and stripped.endswith('|')
-        is_separator = is_table_row and set(stripped.replace('|', '').replace('-', '').replace(':', '')) <= {' '}
+        is_sep = is_table_row and _is_separator(stripped)
 
         if stripped.startswith('#'):
             current_header = stripped
             in_table = False
 
-        if is_table_row and not is_separator:
+        if is_table_row and not is_sep:
+            # Skip column-header rows: the row immediately before a separator row
+            # (e.g. "| Código | Descripción | Precio |") has no retrieval value.
+            next_nonempty = next((l.strip() for l in lines[i + 1:] if l.strip()), '')
+            if _is_separator(next_nonempty):
+                if not in_table:
+                    if result_lines and result_lines[-1].strip():
+                        result_lines.append('')
+                    in_table = True
+                continue
             if not in_table:
                 # Start of a table — insert blank line before for paragraph break
                 if result_lines and result_lines[-1].strip():
@@ -78,7 +92,7 @@ def _split_markdown_tables(text: str) -> str:
                 result_lines.append(line)
             # Blank line after each row → each row is its own paragraph
             result_lines.append('')
-        elif is_separator:
+        elif is_sep:
             # Skip separator rows (|---|---|...)
             continue
         elif not is_table_row:
@@ -676,6 +690,84 @@ async def _hyde_query(question: str, expertise_area: str) -> str:
     except Exception as e:
         logger.warning("hyde_query failed: %s — using original query", e)
         return ""
+
+
+_SIBLING_STOPWORDS = {
+    "cuanto", "cuesta", "cuestan", "tiene", "tienen", "cual", "cuales", "como",
+    "para", "esta", "este", "ese", "esos", "esas", "que", "del", "los", "las",
+    "una", "unos", "unas", "con", "por", "pero", "mas", "hay", "cada", "examen",
+    "examenes", "estudio", "estudios", "precio", "precios", "informacion", "sobre",
+    "cual", "quiero", "saber", "dame", "dime", "puedes", "decir", "tienes", "tienen",
+}
+
+
+async def _fetch_section_siblings(
+    db: AsyncSession,
+    namespace: str,
+    context_chunks: list[dict],
+    question: str,
+) -> list[dict]:
+    """Fetch sibling table-row chunks from the same catalog section as retrieved chunks.
+
+    HyDE generates a single specific procedure name (e.g. "Tráquea – Endoscópica"),
+    biasing retrieval toward one catalog row and potentially missing siblings
+    (e.g. "Tráquea – Resección") that share the same anatomy/concept.
+
+    For each table-row chunk in context, this queries for other rows in the same
+    section whose content matches keywords from the original question, then appends
+    any missing siblings so the LLM sees all price variants.
+
+    Generic: works for any tenant type — medical procedures, menu items, gym plans, etc.
+    """
+    table_row_chunks = [
+        c for c in context_chunks
+        if '\n' in c["content"]
+        and c["content"].split('\n')[0].startswith('#')
+        and c["content"].split('\n')[1].strip().startswith('|')
+    ]
+    if not table_row_chunks:
+        return []
+
+    section_headers = list({c["content"].split('\n')[0] for c in table_row_chunks})
+
+    import re as _re
+    words = _re.sub(r'[¿?.,!¡\'"()]', '', question.lower()).split()
+    keywords = [w for w in words if len(w) > 3 and w not in _SIBLING_STOPWORDS]
+    if not keywords:
+        return []
+
+    existing = {c["content"] for c in context_chunks}
+    siblings: list[dict] = []
+
+    for section_header in section_headers:
+        for keyword in keywords[:4]:
+            result = await db.execute(
+                text("""
+                    SELECT content, source, page
+                    FROM document_chunks
+                    WHERE namespace = :namespace
+                      AND embedding IS NOT NULL
+                      AND content LIKE :section_prefix
+                      AND content ILIKE :kw_pattern
+                    LIMIT 20
+                """),
+                {
+                    "namespace": namespace,
+                    "section_prefix": section_header + "\n%",
+                    "kw_pattern": f"%{keyword}%",
+                },
+            )
+            for row in result.fetchall():
+                if row.content not in existing:
+                    siblings.append({
+                        "content": row.content,
+                        "source": row.source,
+                        "page": row.page,
+                        "similarity": MIN_SIMILARITY,
+                    })
+                    existing.add(row.content)
+
+    return siblings
 
 
 async def _extract_search_terms_from_images(images: list[dict]) -> str:
@@ -1511,6 +1603,18 @@ async def rag_query(
     raw_results = context  # keep unfiltered for low-confidence fallback
     context = [c for c in context if c["similarity"] >= MIN_SIMILARITY]
     is_low_confidence = False
+
+    # Section-sibling completion: when HyDE biases retrieval toward one variant of a
+    # catalog item, fetch sibling rows from the same section that match the original
+    # question's keywords. Ensures all price variants are visible to the LLM.
+    if context:
+        siblings = await _fetch_section_siblings(db, namespace, context, question)
+        if siblings:
+            context = context + siblings
+            logger.info(
+                "section_siblings ns=%s q=%r added=%d total=%d",
+                namespace, question[:60], len(siblings), len(context),
+            )
 
     # Low-confidence fallback: when normal threshold filters everything out but
     # raw results exist above LOW_MIN_SIMILARITY, use them as approximate matches.

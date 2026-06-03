@@ -6,27 +6,15 @@
 
 ---
 
-## Sobre este documento
-
-Este archivo es la **base de conocimiento** del bot. El bot solo responde con la información que esté acá — cuanto más claro y completo, mejores respuestas va a dar.
-
-### Consejos:
-- Escribí en el idioma en el que tus clientes van a preguntar
-- Separá cada tema con `---` (línea horizontal) para que el bot lo procese mejor
-- No hace falta que incluyas todo — solo lo que querés que el bot sepa responder
-- Podés agregar o quitar secciones según lo que tu negocio necesite
-
----
-
 ## ¿Quiénes somos?
 
-Breve descripción de la empresa: a qué se dedica, desde cuándo, qué la diferencia.
+SP Unidad de Diagnóstico Histológico, C.A. es un laboratorio privado especializado exclusivamente en estudios histopatológicos y citológicos. Ubicado en Puerto la Cruz, Venezuela. Contamos con patólogos certificados y equipos de procesamiento de tejidos. No realizamos laboratorio clínico (hematología, química sanguínea, uroanálisis ni serología).
 
 ---
 
 ## Servicios o Productos
 
-Descripción de los servicios ofrecidos.
+Realizamos biopsias y estudios citológicos de todas las especialidades médicas: ginecología, mama, urología, sistema digestivo, endocrino, respiratorio, piel, sistema nervioso, sistema ocular, hematopoyético y partes blandas. También estudios especiales como biopsia extemporánea (corte congelado) por-operatoria.
 
 ### Lista de Precios vigente – Abril 2026 | Moneda: Dólares (USD)
 
@@ -414,11 +402,7 @@ Envíe el **comprobante de pago** (captura de pantalla o foto de la transferenci
 
 ---
 
----
-
-## Mensaje de bienvenida (plantilla usada en WhatsApp)
-
-Cuando un cliente escribe por primera vez, el bot responde con el siguiente mensaje:
+## Mensaje de bienvenida
 
 > Gracias por comunicarte con SP UNIDAD DE DIAGNOSTICO HISTOLOGICO, C.A. ¿Cómo podemos ayudarte?
 >
