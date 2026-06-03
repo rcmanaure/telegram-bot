@@ -1,0 +1,21 @@
+{
+  "_instructions": [
+    "Add real query→chunk pairs to 'pairs' before running the eval harness.",
+    "Sources: UnansweredQuery table (queries that had no answer) + manual curation.",
+    "Run: docker compose exec api python -m pytest tests/test_recall.py -v -m integration",
+    "Or from host: .venv/Scripts/python.exe -m pytest tests/test_recall.py -v -m integration",
+    "Measure baseline BEFORE vector search changes, then compare AFTER.",
+    "Each pair needs: query, namespace (tenant slug), expected_source (filename).",
+    "Optional: expected_content_contains (substring to confirm correct chunk, not just file)."
+  ],
+  "threshold": 0.0,
+  "pairs": [
+    {
+      "query": "EXAMPLE — replace this with a real query",
+      "namespace": "your-tenant-slug",
+      "expected_source": "your-doc.pdf",
+      "expected_content_contains": "keyword in expected chunk",
+      "description": "example pair — delete and replace with real data"
+    }
+  ]
+}

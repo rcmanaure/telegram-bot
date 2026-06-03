@@ -6,6 +6,7 @@ This is the core of the demo. Shows clients:
 2. How semantic search works (not keyword search)
 3. How the LLM answers ONLY from retrieved context (no hallucination)
 """
+import asyncio
 import json
 import logging
 import re
@@ -20,7 +21,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from db import DocumentChunk, Conversation, UnansweredQuery, Tenant
 from config import settings
-from config_overlay import get_setting
+from config_overlay import get_setting, get_setting_int
 from llm import call_chat, call_embeddings, extract_json_from_llm_response
 
 http_client = httpx.AsyncClient(timeout=60)
@@ -163,6 +164,45 @@ async def sync_faq_chunks(
     return stored
 
 
+# ─── Contextual retrieval ────────────────────────────────────────────────────
+
+_CONTEXT_SEMAPHORE = asyncio.Semaphore(5)  # max 5 concurrent LLM context calls
+
+
+async def _add_contextual_summary(full_doc_text: str, chunk_content: str) -> str:
+    """Generate a 1-2 sentence context summary to prepend before embedding.
+
+    The summary situates the chunk within the document so the embedding
+    captures section context, not just chunk content.
+    Returns "" if LLM_CONTEXT_MODEL is unset or the call fails — caller falls
+    back to embedding chunk_content directly.
+    """
+    context_model = get_setting("llm_context_model", settings.llm_context_model)
+    if not context_model:
+        return ""
+
+    messages = [
+        {
+            "role": "user",
+            "content": (
+                "Dado el siguiente documento completo y un fragmento específico del mismo, "
+                "escribí en 1-2 oraciones un contexto breve que sitúe este fragmento dentro "
+                "del documento. No repitas el contenido del fragmento. "
+                "Respondé solo con el contexto, nada más.\n\n"
+                f"Documento completo:\n{full_doc_text[:3000]}\n\n"
+                f"Fragmento:\n{chunk_content}"
+            ),
+        }
+    ]
+    try:
+        async with _CONTEXT_SEMAPHORE:
+            result = await call_chat(messages, max_tokens=100, temperature=0.0, model=context_model)
+        return result.strip() if result else ""
+    except Exception as e:
+        logger.warning("contextual_summary_failed chunk_preview=%r error=%s", chunk_content[:60], e)
+        return ""
+
+
 # ─── Indexing ────────────────────────────────────────────────────────────────
 
 async def index_chunks(
@@ -170,6 +210,7 @@ async def index_chunks(
     chunks: list[dict],
     namespace: str,
     auto_commit: bool = True,
+    full_doc_text: str | None = None,
 ) -> int:
     """
     Embed and store chunks in pgvector.
@@ -177,6 +218,11 @@ async def index_chunks(
 
     When auto_commit=False, the caller is responsible for committing the
     transaction (used for atomic upsert: DELETE old + INSERT new in one commit).
+
+    When full_doc_text is provided and LLM_CONTEXT_MODEL is configured, each
+    chunk gets a contextual summary prepended to its embedding input (not stored
+    in DB — original content stays clean). FAQ chunks pass full_doc_text=None
+    to skip contextual retrieval.
     """
     if not chunks:
         return 0
@@ -195,7 +241,23 @@ async def index_chunks(
     if not clean_chunks:
         return 0
 
-    texts = [c["content"] for c in clean_chunks]
+    # Contextual retrieval: parallel LLM calls outside DB transaction.
+    # DB transaction only covers the INSERT below.
+    if full_doc_text and get_setting("llm_context_model", settings.llm_context_model):
+        summaries = await asyncio.gather(
+            *[_add_contextual_summary(full_doc_text, c["content"]) for c in clean_chunks]
+        )
+        texts = [
+            f"{summary}\n{c['content']}" if summary else c["content"]
+            for summary, c in zip(summaries, clean_chunks)
+        ]
+        logger.info(
+            "contextual_retrieval ns=%s chunks=%d with_context=%d",
+            namespace, len(clean_chunks), sum(1 for s in summaries if s),
+        )
+    else:
+        texts = [c["content"] for c in clean_chunks]
+
     embeddings = await call_embeddings(texts)
 
     db_chunks = [
@@ -203,7 +265,7 @@ async def index_chunks(
             namespace=namespace,
             source=chunk["source"],
             page=chunk["page"],
-            content=chunk["content"],
+            content=chunk["content"],  # always store original, never contextual text
             embedding=embedding,
         )
         for chunk, embedding in zip(clean_chunks, embeddings)
@@ -233,6 +295,17 @@ async def retrieve_context(
     # Embed the query
     query_embedding = (await call_embeddings([query]))[0]
 
+    # HNSW tuning: SET LOCAL persists within SQLAlchemy's autobegin transaction.
+    # DO NOT insert db.commit() between these SET LOCAL statements and the
+    # SELECT below — that would end the implicit transaction and lose the settings.
+    ef_search = get_setting_int("hnsw_ef_search", settings.hnsw_ef_search)
+    iterative_scan = get_setting("hnsw_iterative_scan", settings.hnsw_iterative_scan)
+    if iterative_scan not in ("on", "off"):
+        logger.warning("invalid hnsw_iterative_scan=%r, using default", iterative_scan)
+        iterative_scan = settings.hnsw_iterative_scan
+    await db.execute(text(f"SET LOCAL hnsw.ef_search = {int(ef_search)}"))
+    await db.execute(text(f"SET LOCAL hnsw.iterative_scan = {iterative_scan}"))
+
     # pgvector cosine similarity search
     # <=> is cosine distance (lower = more similar)
     result = await db.execute(
@@ -241,6 +314,7 @@ async def retrieve_context(
                    1 - (embedding <=> CAST(:query_vec AS vector)) AS similarity
             FROM document_chunks
             WHERE namespace = :namespace
+              AND embedding IS NOT NULL
             ORDER BY embedding <=> CAST(:query_vec AS vector)
             LIMIT :top_k
         """),
@@ -376,6 +450,37 @@ async def _reformulate_query(question: str, history: list[dict]) -> str:
     except Exception as e:
         logger.warning("reformulate_query failed: %s — using original question", e)
         return question
+
+
+# ─── HyDE (Hypothetical Document Embeddings) ──────────────────────────────────
+
+async def _hyde_query(question: str, expertise_area: str) -> str:
+    """Generate a hypothetical catalog/document answer and return it as the search key.
+
+    Bridges patient-language vs catalog-language vocabulary gap by embedding
+    what the answer would look like, not the question itself.
+    Returns "" on failure — caller falls back to original question.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": (
+                f"Generá una respuesta hipotética breve (1-2 oraciones) a la siguiente pregunta, "
+                f"como si fuera un fragmento de un catálogo o documento sobre {expertise_area}. "
+                f"Respondé SOLO con la respuesta hipotética, sin explicar qué estás haciendo. "
+                f"Pregunta: {question}"
+            ),
+        }
+    ]
+    try:
+        result = await call_chat(messages, max_tokens=100, temperature=0.1)
+        result = result.strip()
+        if not result or len(result) < 3 or len(result) > 500:
+            return ""
+        return result
+    except Exception as e:
+        logger.warning("hyde_query failed: %s — using original query", e)
+        return ""
 
 
 async def _extract_search_terms_from_images(images: list[dict]) -> str:
@@ -900,6 +1005,14 @@ async def rag_query(
     if search_query != question:
         logger.info("reformulate ns=%s original=%r → reformulated=%r",
                      namespace, question[:60], search_query[:60])
+
+    # HyDE: embed a hypothetical answer instead of the question to bridge vocabulary gap
+    if get_setting("hyde_enabled", "on") == "on":
+        hyde_result = await _hyde_query(search_query, expertise_area)
+        if hyde_result:
+            logger.info("hyde ns=%s q=%r → hypothetical=%r",
+                        namespace, search_query[:60], hyde_result[:60])
+            search_query = hyde_result
 
     context = await retrieve_context(db, search_query, namespace)
     logger.info(
