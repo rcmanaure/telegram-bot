@@ -401,6 +401,39 @@ async def retrieve_catalog_overview(
     ]
 
 
+async def retrieve_full_catalog(
+    db: AsyncSession,
+    namespace: str,
+) -> list[dict]:
+    """Return ALL procedure chunks ordered by section for full price-list queries.
+
+    Unlike retrieve_catalog_overview (1 per section), this returns every procedure
+    in the catalog. Used when the user asks for prices across all categories —
+    the LLM needs the complete dataset to enumerate every item.
+    """
+    result = await db.execute(
+        text("""
+            SELECT content, source, page
+            FROM document_chunks
+            WHERE namespace = :namespace
+              AND content ~ '^## '
+              AND embedding IS NOT NULL
+            ORDER BY substring(content FROM '^## ([^\n]+)'), id
+        """),
+        {"namespace": namespace},
+    )
+    rows = result.fetchall()
+    return [
+        {
+            "content": row.content,
+            "source": row.source,
+            "page": row.page,
+            "similarity": 0.5,
+        }
+        for row in rows
+    ]
+
+
 # ─── Generation ──────────────────────────────────────────────────────────────
 
 MIN_SIMILARITY = 0.20  # chunks below this threshold are considered off-topic
@@ -521,7 +554,17 @@ async def _reformulate_query(question: str, history: list[dict]) -> str:
 _LISTING_QUERY_RE = re.compile(
     r'\b(qu[eé]\s+tipo[s]?|qu[eé]\s+(tienen|tienes)|qu[eé]\s+(estudios|ex[aá]menes|servicios|procedimientos|biopsias|citolog[ií]as|an[aá]lisis)|'
     r'todos\s+los|lista\s+(de|completa)|tienen\s+disponible|qu[eé]\s+ofrecen|cu[aá]les\s+son|'
-    r'qu[eé]\s+tipos?\s+de|muestren?\s+(todos|todas)|todo[s]?\s+los\s+(estudios|servicios|ex[aá]menes))\b',
+    r'qu[eé]\s+tipos?\s+de|muestren?\s+(todos|todas)|todo[s]?\s+los\s+(estudios|servicios|ex[aá]menes)|'
+    r'de\s+cada\s+uno|de\s+todos\s+los|precio[s]?\s+de\s+(cada|todos))\b',
+    re.IGNORECASE,
+)
+
+# Detects price-intent within a listing query — triggers full catalog retrieval
+# (all procedures) instead of the section-overview retrieval (1 per section).
+_PRICE_INTENT_RE = re.compile(
+    r'\b(precio[s]?|cu[aá]nto[s]?\s+(cuesta[n]?|vale[n]?|cobran?|salen?)|'
+    r'tarifa[s]?|costo[s]?|cotizaci[oó]n|lista\s+de\s+precios|'
+    r'de\s+cada\s+uno|de\s+todos|de\s+cada)\b',
     re.IGNORECASE,
 )
 
@@ -690,6 +733,8 @@ async def generate_answer(
     images: list[dict] | None = None,
     from_web: bool = False,
     low_confidence: bool = False,
+    max_tokens: int = 800,
+    no_length_limit: bool = False,
 ) -> str:
     """
     Generate an answer using retrieved context + conversation history.
@@ -697,11 +742,14 @@ async def generate_answer(
     When from_web is True, adds web-source framing to the system prompt.
     When low_confidence is True, context came from a second-pass retrieval with
     lower similarity threshold — the LLM should note the approximate match.
+    When no_length_limit is True, overrides the channel length guidance so the
+    LLM lists all items in context without truncating (full catalog queries).
     """
     if not context_chunks and not images:
         return "No encontré información relevante en los documentos para responder tu pregunta."
 
-    system_prompt = build_system_prompt(expertise_area, channel=channel, from_web=from_web)
+    system_prompt = build_system_prompt(expertise_area, channel=channel, from_web=from_web,
+                                        no_length_limit=no_length_limit)
 
     if context_chunks:
         context_text = "\n\n---\n\n".join([
@@ -754,7 +802,7 @@ async def generate_answer(
     vision_model = settings.llm_vision_model or None
     return await call_chat(
         messages,
-        max_tokens=800,
+        max_tokens=max_tokens,
         temperature=0.1,
         channel=channel,
         model=vision_model if images else None,
@@ -1321,32 +1369,49 @@ async def rag_query(
             logger.warning("tool_path_error ns=%s error=%s — falling back to sequential", namespace, e)
     # ── END TOOL PATH ─────────────────────────────────────────────────────────
 
-    # ── CATALOG OVERVIEW PATH ─────────────────────────────────────────────────
-    # Listing/overview queries ("qué tipos tienen", "qué estudios ofrecen") need
-    # all catalog sections represented, not just the semantically closest ones.
-    # Similarity search fills every top-k slot with the 1-2 sections whose names
-    # match the query terms — other sections never appear at any reasonable k.
-    # Solution: bypass similarity entirely and fetch 1 chunk per section via DISTINCT ON.
-    if _LISTING_QUERY_RE.search(question):
-        overview_context = await retrieve_catalog_overview(db, namespace)
-        if overview_context:
+    # ── CATALOG PATH ──────────────────────────────────────────────────────────
+    # Listing/overview queries need all catalog sections, not just the ones that
+    # happen to be most similar to the query terms. Two modes:
+    #
+    #   • Overview  ("qué tipos tienen")  → 1 chunk per section (category names)
+    #   • Full list ("precios de cada uno") → all chunks (every procedure + price)
+    #
+    # Check both the original question AND the reformulated search_query because
+    # follow-up questions (e.g. "y los precios?") only match after reformulation.
+    _is_listing = _LISTING_QUERY_RE.search(question) or _LISTING_QUERY_RE.search(search_query)
+    if _is_listing:
+        _is_price = _PRICE_INTENT_RE.search(question) or _PRICE_INTENT_RE.search(search_query)
+        # Full price list only makes sense for channels that support long messages.
+        # WhatsApp (≤500 chars) always gets the overview; Telegram can handle the full list.
+        _full_list = _is_price and channel == "telegram"
+        if _full_list:
+            catalog_context = await retrieve_full_catalog(db, namespace)
+            _cat_max_tokens = 3000
+        else:
+            catalog_context = await retrieve_catalog_overview(db, namespace)
+            _cat_max_tokens = 800
+        if catalog_context:
             logger.info(
-                "catalog_overview ns=%s q=%r sections=%d",
-                namespace, question[:60], len(overview_context),
+                "catalog_%s ns=%s q=%r items=%d",
+                "full" if _full_list else "overview",
+                namespace, question[:60], len(catalog_context),
             )
             answer = await generate_answer(
-                overview_context, question, history, expertise_area,
+                catalog_context, question, history, expertise_area,
                 channel=channel, images=images,
+                max_tokens=_cat_max_tokens,
+                no_length_limit=_full_list,
             )
             answer = validate_output(answer, user_id=user_id)
             if CANARY_TOKEN in answer:
                 answer = answer.replace(CANARY_TOKEN, "[REDACTED]")
-                logger.warning("canary_redacted user_id=%s catalog_overview", user_id)
+                logger.warning("canary_redacted user_id=%s catalog_%s",
+                               user_id, "full" if _full_list else "overview")
             await save_turn(db, user_id, namespace, question, answer, channel=channel, tenant_id=tenant_id)
-            return answer, overview_context, None
+            return answer, catalog_context, None
         # No section chunks found (unstructured namespace) — fall through to normal path
-        logger.info("catalog_overview ns=%s — no section chunks, falling through to similarity", namespace)
-    # ── END CATALOG OVERVIEW PATH ─────────────────────────────────────────────
+        logger.info("catalog ns=%s — no section chunks, falling through to similarity", namespace)
+    # ── END CATALOG PATH ──────────────────────────────────────────────────────
 
     # HyDE: embed a hypothetical answer instead of the question to bridge vocabulary gap
     if get_setting("hyde_enabled", "on") == "on":

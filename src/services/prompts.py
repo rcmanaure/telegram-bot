@@ -10,6 +10,7 @@ def build_system_prompt(
     channel: str = "telegram",
     from_web: bool = False,
     example_questions: list[str] | None = None,
+    no_length_limit: bool = False,
 ) -> str:
     """Build the system prompt for the LLM, incorporating expertise area, channel formatting,
     web-source framing, and example questions for triage context.
@@ -24,7 +25,9 @@ def build_system_prompt(
 
     # Channel-specific length guidance
     length_guidance = ""
-    if channel == "whatsapp":
+    if no_length_limit:
+        length_guidance = "\n- Listá TODOS los ítems del contexto sin excepción. La respuesta puede ser larga — no truncar, no omitir ningún estudio ni precio."
+    elif channel == "whatsapp":
         length_guidance = "\n- Respuestas cortas: idealmente menos de 300 caracteres, máximo 500. WhatsApp no maneja bien textos largos."
     elif channel == "telegram":
         length_guidance = "\n- Podés ser más extenso, hasta ~800 caracteres. Pero si la respuesta es simple, sé breve."
