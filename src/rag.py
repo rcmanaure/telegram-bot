@@ -293,6 +293,19 @@ _PARTIALLY_LEGIBLE_PATTERNS = [
 ]
 
 
+def _illegible_fallback_msg(images: list[dict] | None) -> str:
+    """Return the appropriate illegible-image message (singular or plural)."""
+    if images and len(images) > 1:
+        return (
+            "No puedo leer las imágenes. La calidad o resolución puede ser insuficiente. "
+            "Intentá enviarlas con mejor iluminación o enfoque, o describí tu consulta por texto."
+        )
+    return (
+        "No puedo leer la imagen. La calidad o resolución puede ser insuficiente. "
+        "Intentá enviarla con mejor iluminación o enfoque, o describí tu consulta por texto."
+    )
+
+
 def _is_illegible_response(answer: str) -> bool:
     """Check if the vision model's response indicates it couldn't read the image.
     Matches common phrases in both Spanish and English.
@@ -924,9 +937,16 @@ async def rag_query(
         if images:
             vision_query = await _extract_search_terms_from_images(images)
             if vision_query:
-                # Sanitize LLM-extracted query (same guard as user input) and limit length
-                vision_query = sanitize_user_input(vision_query)
-                vision_query = vision_query[:200]
+                # Sanitize LLM-extracted query (same guard as user input) and limit length.
+                # LLM output can contain injection patterns; if sanitization rejects it,
+                # fall back to the raw query truncated rather than crashing the pipeline.
+                try:
+                    vision_query = sanitize_user_input(vision_query)
+                except ValueError:
+                    logger.warning("vision_query_sanitization_failed ns=%s user=%s", namespace, user_id)
+                    vision_query = vision_query[:200]
+                else:
+                    vision_query = vision_query[:200]
             if vision_query and vision_query.strip().lower() != search_query.strip().lower():
                 logger.info(
                     "vision_augmented_retrieval ns=%s user=%s original_q=%r vision_q=%r",
@@ -966,12 +986,7 @@ async def rag_query(
                 logger.warning("canary_redacted user_id=%s image_only", user_id)
             # Check if vision model couldn't read the image(s)
             if _is_illegible_response(answer):
-                if len(images) == 1:
-                    answer = "No puedo leer la imagen. La calidad o resolución puede ser insuficiente. " \
-                             "Intentá enviarla con mejor iluminación o enfoque, o describí tu consulta por texto."
-                else:
-                    answer = "No puedo leer las imágenes. La calidad o resolución puede ser insuficiente. " \
-                             "Intentá enviarlas con mejor iluminación o enfoque, o describí tu consulta por texto."
+                answer = _illegible_fallback_msg(images)
                 logger.info("vision_illegible ns=%s user=%s images=%d", namespace, user_id, len(images))
             img_label = "📷 [varias imágenes]" if len(images) > 1 else "📷 [imagen]"
             await save_turn(db, user_id, namespace, question or img_label, answer, channel=channel, tenant_id=tenant_id)
@@ -1020,12 +1035,7 @@ async def rag_query(
         logger.warning("canary_redacted user_id=%s context_answer", user_id)
     # Check if vision model couldn't read the image(s) (applies when image was sent alongside text context)
     if images and _is_illegible_response(answer):
-        if len(images) == 1:
-            answer = "No puedo leer la imagen. La calidad o resolución puede ser insuficiente. " \
-                     "Intentá enviarla con mejor iluminación o enfoque, o describí tu consulta por texto."
-        else:
-            answer = "No puedo leer las imágenes. La calidad o resolución puede ser insuficiente. " \
-                     "Intentá enviarlas con mejor iluminación o enfoque, o describí tu consulta por texto."
+        answer = _illegible_fallback_msg(images)
         logger.info("vision_illegible ns=%s user=%s images=%d", namespace, user_id, len(images))
     await save_turn(db, user_id, namespace, question, answer, channel=channel)
     return answer, context, None

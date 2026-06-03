@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.4.1.0] - 2026-06-02
+
+### Added
+
+- Vision-augmented retrieval — when a user sends an image with no matching text context, the bot extracts key search terms from the image and retries the vector search, handling medical orders, lab results, and other document photos that would otherwise return "not found."
+- Multi-image buffer with debounce — when a user sends multiple photos (Telegram albums or rapid WA messages), images are buffered for 2.5s and processed together in a single LLM call (max 5 images per flush).
+- Web search fallback — when RAG finds no matching documents, the bot can optionally search the web via Ollama Cloud before falling back to triage. Per-tenant toggle (`web_search_enabled`) in admin UI.
+- Low-confidence retrieval fallback — near-match queries that score between 10% and 20% similarity now get a prompt noting the partial match instead of a flat "not found."
+- Partially legible image handling — when the vision model can read part of an image, the bot extracts readable text and notes illegible sections rather than rejecting the entire image.
+- Illegible image detection — images the vision model cannot read produce a clear, helpful message suggesting better lighting or focus.
+- Query reformulation — follow-up questions with pronouns (e.g., "¿cuánto cuesta eso?") are rewritten using conversation history for more accurate retrieval.
+- Conversation history summarization — old history entries beyond 50 rows are summarized by the LLM to keep context within token limits while preserving meaning.
+- Greeting shortcut — common greetings ("hola", "hey", "buenas") skip vector search and triage entirely, responding instantly.
+- Expanded escalation patterns — "contactar" and "representante" now trigger human handoff.
+- Spanish prompt injection patterns — regex guards block LLM-manipulation attempts in Spanish ("ignora instrucciones", "olvida tu rol", etc.).
+- Feedback endpoint — `GET /feedback` returns recent feedback entries (max 500 per tenant).
+- Markdown table chunking — uploaded documents with tables split each row into its own chunk with the header prepended, preventing rows from being lost in large chunks.
+- Source name normalization — browser-added dupe suffixes like `(1)`, `_copy`, `_2` are stripped before upsert, preventing duplicate document entries.
+- Orphaned chunk cleanup on startup — browser-dupe chunks left from interrupted uploads are removed automatically.
+- WA image buffering — WhatsApp images are debounced and flushed with text captions, mirroring the Telegram multi-image experience.
+- WA escalation buttons — off-topic and needs-human responses include a "Contactar" button linking to the tenant's contact URL.
+- Channel formatting — universal `**bold**` and `__italic__` markdown conversion for both Telegram and WhatsApp channels.
+- Web search integration tests — 14 new tests covering enabled/disabled, silent fallback, not invoked when context found, and 404/405 retry with generic format.
+
+### Fixed
+
+- Image buffer self-cancel bug — `_flush` no longer cancels its own asyncio task, preventing `CancelledError` on buffered image processing.
+- Vision guard — no 404 error when `LLM_VISION_MODEL` is not configured; instead returns a clear "not available" message.
+- LLM repeating greetings — prompt change prevents the model from starting every response with "¡Hola! Con gusto te ayudo."
+- Off-topic responses — warm redirection instead of blunt "fuera de mi área" rejection.
+- Triage false negatives — partial-match rules now override `off_topic` classification when the query is within the tenant's expertise area.
+- Low-confidence near-matches — prompt guides LLM to offer relevant information from partially matching documents instead of saying "not found."
+- Upload response returns normalized `source_name` instead of raw browser filename, matching what `/stats` and `DELETE /namespace` use.
+- Sanitize guard on vision-extracted query terms — `ValueError` from injection detection is caught gracefully instead of crashing the pipeline.
+- Duplicated illegible-image message logic extracted to `_illegible_fallback_msg()` helper — single source of truth for singular/plural messages.
+- Duplicated WA reply-sending logic extracted to `_send_wa_reply()` helper — sources footer and escalation button construction no longer duplicated across `_wa_process_flushed` and `handle_wa_message`.
+- Webhook returns 503 (not 200) when bot Application not registered — Telegram retries on 503 instead of silently dropping the message.
+
 ## [0.4.0.0] - 2026-06-02
 
 ### Added
