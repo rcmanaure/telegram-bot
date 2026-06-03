@@ -37,12 +37,13 @@ async def upload_document(
 
     source_name = normalize_source_name(file.filename)
     fname_lower = file.filename.lower()
+    full_doc_text: str | None = None
     if any(fname_lower.endswith(ext) for ext in _IMAGE_EXTS):
         description = await describe_image_for_upload(content, fname_lower)
         all_chunks = chunk_text(description, source=source_name, page=1)
         pages_processed = 1
     else:
-        all_chunks, pages_processed = process_uploaded_file(content, fname_lower, source_name)
+        all_chunks, pages_processed, full_doc_text = process_uploaded_file(content, fname_lower, source_name)
 
     if not all_chunks:
         raise HTTPException(400, "No extractable text in file")
@@ -52,7 +53,7 @@ async def upload_document(
         text("DELETE FROM document_chunks WHERE namespace = :ns AND source = :src"),
         {"ns": tenant.slug, "src": source_name},
     )
-    stored = await index_chunks(db, all_chunks, tenant.slug, auto_commit=False)
+    stored = await index_chunks(db, all_chunks, tenant.slug, auto_commit=False, full_doc_text=full_doc_text)
     await db.commit()
 
     return {

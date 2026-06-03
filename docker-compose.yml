@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:0.8.2-pg16  # pinned; 0.9.x not yet released
     environment:
       POSTGRES_USER: ragbot
       POSTGRES_PASSWORD: ragbot
@@ -18,7 +18,8 @@ services:
 
   api:
     build: .
-    command: sh -c "alembic upgrade head && uvicorn src.main:app --workers 1 --host 0.0.0.0 --port 8000"
+    # --timeout-keep-alive 120: document uploads with contextual retrieval can take 60+s
+    command: sh -c "alembic upgrade head && uvicorn src.main:app --workers 1 --host 0.0.0.0 --port 8000 --timeout-keep-alive 120"
     env_file: .env
     depends_on:
       postgres:
@@ -42,6 +43,14 @@ services:
       - traefik.http.routers.ragbot.tls.certresolver=letsencrypt
       - traefik.http.services.ragbot.loadbalancer.server.port=8000
       - traefik.http.services.ragbot.loadbalancer.server.scheme=http
+      # Separate upload router with longer response timeout (contextual retrieval: 60+s)
+      - traefik.http.routers.ragbot_upload.rule=Host(`${TRAEFIK_HOST}`) && (PathPrefix(`/upload`) || PathPrefix(`/admin/`))
+      - traefik.http.routers.ragbot_upload.entrypoints=websecure
+      - traefik.http.routers.ragbot_upload.tls=true
+      - traefik.http.routers.ragbot_upload.tls.certresolver=letsencrypt
+      - traefik.http.routers.ragbot_upload.service=ragbot_upload
+      - traefik.http.services.ragbot_upload.loadbalancer.server.port=8000
+      - traefik.http.services.ragbot_upload.loadbalancer.server.scheme=http
 
 volumes:
   pgdata:

@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     embedding_base_url: str = "https://openrouter.ai/api/v1"
     embedding_api_key: str = ""  # Must be set explicitly — no fallback to LLM_API_KEY
     embedding_model: str = "openai/text-embedding-3-small"
-    embedding_dim: int = 1536
+    embedding_dim: int = 512  # MRL: text-embedding-3-small supports 512-dim truncation
 
     # ─── Deprecated aliases (backwards compat) ───────────────────────────────────
     # openrouter_api_key still works but LLM_API_KEY takes precedence.
@@ -29,9 +29,15 @@ class Settings(BaseSettings):
     database_url: str
 
     # ─── RAG ─────────────────────────────────────────────────────────────────────
-    chunk_size: int = 500
-    chunk_overlap: int = 50
+    chunk_size: int = 768
+    chunk_overlap: int = 77
     top_k_results: int = 4
+
+    # ─── HNSW (pgvector) ────────────────────────────────────────────────────────
+    # Defaults match ~98% recall per pgvector benchmarks (ef_search=160 vs 40 default ~85%).
+    # Overridable at runtime via SystemConfig (config_overlay).
+    hnsw_ef_search: int = 160
+    hnsw_iterative_scan: str = "on"  # "on" | "off" — enables exact re-ranking after HNSW
 
     # ─── App ─────────────────────────────────────────────────────────────────────
     app_host: str = "0.0.0.0"
@@ -41,6 +47,10 @@ class Settings(BaseSettings):
     # ─── Vision ──────────────────────────────────────────────────────────────────
     # Empty = fall back to LLM_MODEL. Set to a vision-capable model (e.g. llava).
     llm_vision_model: str = ""
+
+    # ─── Contextual retrieval ──────────────────────────────────────────────────
+    # Fast/cheap model for generating chunk context summaries. Empty = disabled.
+    llm_context_model: str = ""
 
     # ─── Web search (E3) ─────────────────────────────────────────────────────────
     # Provider-neutral. Validate Ollama endpoint before use (see TODOS PREREQ-WS).
