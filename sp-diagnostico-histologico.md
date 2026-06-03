@@ -364,6 +364,24 @@ Como norma general, la muestra **debe ser cancelada en su totalidad** antes de s
 
 ---
 
+### ¿Realizan biopsias de riñón? ¿Cuánto cuesta?
+
+Sí. Los estudios de riñón están en la sección **SISTEMA UROLÓGICO Y GENITAL MASCULINO**:
+
+- SUM001 — Riñón – Nefrectomía Total Tumoral: **$300.00**
+- SUM002 — Riñón – Nefrectomía Total no Tumoral: **$240.00**
+- SUM003 — Riñón – Cuña Renal: **$80.00**
+
+Si no sabe cuál aplica, puede enviar la orden médica por WhatsApp y le confirmamos el costo exacto.
+
+---
+
+### ¿Cómo confirmo que recibieron mi pago? ¿Qué hago después de hacer una transferencia?
+
+Envíe el **comprobante de pago** (captura de pantalla o foto de la transferencia) por WhatsApp al **04148050764**. Incluya el **nombre completo del paciente** y el concepto del estudio. Nuestro equipo verificará la transacción y le confirmará la recepción.
+
+---
+
 ### ¿Cuál es el precio del corte congelado?
 
 **Biopsia per-operatoria (Corte Congelado)**
