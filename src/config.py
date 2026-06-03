@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     # Defaults match ~98% recall per pgvector benchmarks (ef_search=160 vs 40 default ~85%).
     # Overridable at runtime via SystemConfig (config_overlay).
     hnsw_ef_search: int = 160
-    hnsw_iterative_scan: str = "on"  # "on" | "off" — enables exact re-ranking after HNSW
+    hnsw_iterative_scan: str = "relaxed_order"  # off | relaxed_order | strict_order
 
     # ─── App ─────────────────────────────────────────────────────────────────────
     app_host: str = "0.0.0.0"

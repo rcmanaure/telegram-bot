@@ -300,7 +300,7 @@ async def retrieve_context(
     # SELECT below — that would end the implicit transaction and lose the settings.
     ef_search = get_setting_int("hnsw_ef_search", settings.hnsw_ef_search)
     iterative_scan = get_setting("hnsw_iterative_scan", settings.hnsw_iterative_scan)
-    if iterative_scan not in ("on", "off"):
+    if iterative_scan not in ("off", "relaxed_order", "strict_order"):
         logger.warning("invalid hnsw_iterative_scan=%r, using default", iterative_scan)
         iterative_scan = settings.hnsw_iterative_scan
     await db.execute(text(f"SET LOCAL hnsw.ef_search = {int(ef_search)}"))
