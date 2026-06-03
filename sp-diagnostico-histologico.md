@@ -364,6 +364,20 @@ No. La muestra **debe ser cancelada en su totalidad** antes de ser procesada. Si
 
 ---
 
+### ¿Cuánto cuesta la biopsia de apéndice (apendicectomía)?
+
+La biopsia de apéndice corresponde al código **SDG033 — Apéndice Cecal**, con un costo de **$90.00 USD**.
+
+---
+
+### ¿Cuánto cuesta la biopsia gástrica / del estómago?
+
+La biopsia de estómago endoscópica corresponde al código **SDG014 — Biopsia Gástrica Endoscópica**, con un costo de **$80.00 USD por envase**.
+
+Recordá: el precio aplica por envase, no por fragmento. Si hay varios pedacitos en un solo frasco = una sola muestra = $80.00.
+
+---
+
 ### ¿Realizan biopsias de riñón? ¿Cuánto cuesta?
 
 Sí. Los estudios de riñón están en la sección **SISTEMA UROLÓGICO Y GENITAL MASCULINO**:
