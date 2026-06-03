@@ -119,11 +119,26 @@ def chunk_text(text_content: str, source: str, page: int = 0) -> list[dict]:
                 raw_pieces.append(para[start:start + size])
                 start += size - overlap
 
-    # Greedily merge adjacent pieces up to chunk_size
+    # Greedily merge adjacent pieces up to chunk_size.
+    # Table row pieces (header + single pipe row) are never merged — each row
+    # gets its own chunk so the embedding captures that specific procedure
+    # without dilution from 8-9 other rows in the same merged block.
+    def _is_table_row_piece(p: str) -> bool:
+        lines = p.split('\n')
+        return (
+            len(lines) == 2
+            and lines[0].startswith('#')
+            and lines[1].strip().startswith('|')
+            and lines[1].strip().endswith('|')
+        )
+
     merged: list[str] = []
     current = ''
     for piece in raw_pieces:
         if not current:
+            current = piece
+        elif _is_table_row_piece(piece) or _is_table_row_piece(current):
+            merged.append(current)
             current = piece
         elif len(current) + 2 + len(piece) <= size:
             current += '\n\n' + piece
