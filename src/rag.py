@@ -389,6 +389,37 @@ async def _reformulate_query(question: str, history: list[dict]) -> str:
         return question
 
 
+# ─── HyDE (Hypothetical Document Embeddings) ──────────────────────────────────
+
+async def _hyde_query(question: str, expertise_area: str) -> str:
+    """Generate a hypothetical catalog/document answer and return it as the search key.
+
+    Bridges patient-language vs catalog-language vocabulary gap by embedding
+    what the answer would look like, not the question itself.
+    Returns "" on failure — caller falls back to original question.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": (
+                f"Generá una respuesta hipotética breve (1-2 oraciones) a la siguiente pregunta, "
+                f"como si fuera un fragmento de un catálogo o documento sobre {expertise_area}. "
+                f"Respondé SOLO con la respuesta hipotética, sin explicar qué estás haciendo. "
+                f"Pregunta: {question}"
+            ),
+        }
+    ]
+    try:
+        result = await call_chat(messages, max_tokens=100, temperature=0.1)
+        result = result.strip()
+        if not result or len(result) < 3 or len(result) > 500:
+            return ""
+        return result
+    except Exception as e:
+        logger.warning("hyde_query failed: %s — using original query", e)
+        return ""
+
+
 async def _extract_search_terms_from_images(images: list[dict]) -> str:
     """Use the vision model to extract key search terms from images.
 
@@ -911,6 +942,14 @@ async def rag_query(
     if search_query != question:
         logger.info("reformulate ns=%s original=%r → reformulated=%r",
                      namespace, question[:60], search_query[:60])
+
+    # HyDE: embed a hypothetical answer instead of the question to bridge vocabulary gap
+    if get_setting("hyde_enabled", "on") == "on":
+        hyde_result = await _hyde_query(search_query, expertise_area)
+        if hyde_result:
+            logger.info("hyde ns=%s q=%r → hypothetical=%r",
+                        namespace, search_query[:60], hyde_result[:60])
+            search_query = hyde_result
 
     context = await retrieve_context(db, search_query, namespace)
     logger.info(
