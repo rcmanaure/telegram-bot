@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: pgvector/pgvector:pg16-0.8.0  # pinned for reproducibility (default pg16 tag floats)
+    image: pgvector/pgvector:0.8.2-pg16  # pinned; 0.9.x not yet released
     environment:
       POSTGRES_USER: ragbot
       POSTGRES_PASSWORD: ragbot
