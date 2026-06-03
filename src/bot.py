@@ -244,7 +244,14 @@ async def _process_question(
         await _send_reply(update, full_reply, reply_markup=reply_markup)
 
     except RuntimeError as e:
-        await update.message.reply_text(str(e))
+        msg = str(e)
+        if "LLM service error" in msg or "llm" in msg.lower() or "model" in msg.lower():
+            logger.warning("llm_runtime_error uid=%s tenant=%s: %s", uid, tenant.slug, msg)
+            await update.message.reply_text(
+                "Disculpá, hubo un problema técnico momentáneo. Intentá de nuevo en unos segundos."
+            )
+        else:
+            await update.message.reply_text(msg)
     except Exception:
         logger.exception("handle_message error for tenant %s uid %s", tenant.slug, uid)
         await update.message.reply_text(
