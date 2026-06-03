@@ -559,12 +559,14 @@ _LISTING_QUERY_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Detects price-intent within a listing query — triggers full catalog retrieval
-# (all procedures) instead of the section-overview retrieval (1 per section).
+# Detects EXPLICIT price-dump intent within a listing query — triggers full catalog
+# retrieval (all procedures) instead of section-overview (1 per section).
+# A bare "precios" in a listing query is NOT enough — user wants overview with prices.
+# Requires explicit "all/each/complete" framing to justify sending 165 chunks to the LLM.
 _PRICE_INTENT_RE = re.compile(
-    r'\b(precio[s]?|cu[aá]nto[s]?\s+(cuesta[n]?|vale[n]?|cobran?|salen?)|'
-    r'tarifa[s]?|costo[s]?|cotizaci[oó]n|lista\s+de\s+precios|'
-    r'de\s+cada\s+uno|de\s+todos|de\s+cada)\b',
+    r'\b(de\s+cada\s+uno|de\s+todos(\s+los)?|todos\s+los\s+precios?|'
+    r'lista\s+(completa\s+)?de\s+precios?|precio[s]?\s+de\s+(cada|todos)|'
+    r'cu[aá]nto\s+cuesta\s+cada|dame\s+(todos?|todos?\s+los)\s+precios?)\b',
     re.IGNORECASE,
 )
 
