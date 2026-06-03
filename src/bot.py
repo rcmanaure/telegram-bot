@@ -11,9 +11,11 @@ from telegram.error import BadRequest, TelegramError
 from telegram.ext import ContextTypes
 
 from config import settings
+from config_overlay import get_setting
 from db import AsyncSessionLocal, Conversation, DocumentChunk, Tenant
 from image_buffer import image_buffer
 from limiter import tg_rate_limiter
+from llm import is_tool_use_available
 from rag import rag_query
 from services.stt import transcribe_voice
 from security import sanitize_user_input
@@ -140,6 +142,21 @@ async def _process_question(
         await update.message.reply_text("Demasiados mensajes, esperá un minuto.")
         return
     language_code = update.effective_user.language_code
+
+    # UX pre-message: signal multi-source search (only when tool path will actually activate)
+    if (
+        tenant.web_search_enabled
+        and get_setting("web_search_url", "") != ""
+        and not images
+        and is_tool_use_available()
+    ):
+        try:
+            await ctx.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="Procesando tu consulta...",
+            )
+        except Exception:
+            pass  # best-effort — never block the actual response
 
     try:
         await ctx.bot.send_chat_action(update.effective_chat.id, "typing")
