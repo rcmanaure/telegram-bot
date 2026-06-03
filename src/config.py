@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     # ─── RAG ─────────────────────────────────────────────────────────────────────
     chunk_size: int = 768
     chunk_overlap: int = 77
-    top_k_results: int = 4
+    top_k_results: int = 6
 
     # ─── HNSW (pgvector) ────────────────────────────────────────────────────────
     # Defaults match ~98% recall per pgvector benchmarks (ef_search=160 vs 40 default ~85%).
