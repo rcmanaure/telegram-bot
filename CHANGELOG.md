@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.2.0] - 2026-06-04
+
+### Added
+
+- N-model LLM fallback chain — `LLM_FALLBACK_MODEL` now accepts comma-separated model names (e.g. `openrouter/free,xiaomi/mimo-v2.5`). Each model is tried in order on failure; primary uses a 60s timeout, fallbacks use 15s each to bound worst-case latency.
+- `reasoning_content` support — when a reasoning model returns `content=null` but populates `reasoning_content`, the reasoning text is used instead of falling through to the next model.
+- Actual resolved model logged — `llm_call` log includes the `model` field from the provider response (shows the real model behind `openrouter/free` meta-routing).
+
+### Fixed
+
+- Empty-string content (`content=""`) now falls through to the next model in the chain instead of being returned as a valid response.
+- `/health` endpoint reports the runtime-overridden model names (via `get_setting()`) instead of the compile-time `.env` values.
+
 ## [0.4.1.0] - 2026-06-02
 
 ### Added

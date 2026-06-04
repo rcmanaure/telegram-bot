@@ -98,6 +98,13 @@ def _error_message(exc: Exception) -> str:
     return "Unexpected response from LLM service."
 
 
+# ─── Helpers ─────────────────────────────────────────────────────────────────
+
+def _parse_fallback_chain(raw: str) -> list[str]:
+    """Parse comma-separated model names, stripping whitespace and empty entries."""
+    return [m.strip() for m in raw.split(",") if m.strip()]
+
+
 # ─── Chat completions ─────────────────────────────────────────────────────────
 
 async def call_chat(
@@ -115,17 +122,20 @@ async def call_chat(
     When model= is set (e.g. for vision), only that model is tried — no fallback.
     Text-only fallback models must not receive image payloads.
     """
+    PRIMARY_TIMEOUT = 60.0
+    FALLBACK_TIMEOUT = 15.0
+
     primary_url = get_setting("llm_base_url", settings.llm_base_url)
     primary_key = get_setting("llm_api_key", settings.effective_llm_api_key)
     primary_model = get_setting("llm_model", settings.llm_model)
 
     if model:
         # Explicit model (e.g. vision) — single attempt, no fallback
-        model_configs: list[tuple[str, str, str]] = [(model, primary_url, primary_key)]
+        model_configs: list[tuple[str, str, str, float]] = [(model, primary_url, primary_key, PRIMARY_TIMEOUT)]
     else:
-        model_configs = [(primary_model, primary_url, primary_key)]
-        fallback = get_setting("llm_fallback_model", settings.llm_fallback_model)
-        if fallback:
+        model_configs = [(primary_model, primary_url, primary_key, PRIMARY_TIMEOUT)]
+        fallback_raw = get_setting("llm_fallback_model", settings.llm_fallback_model)
+        if fallback_raw:
             fb_url = (
                 get_setting("llm_fallback_base_url", settings.llm_fallback_base_url)
                 or primary_url
@@ -134,10 +144,11 @@ async def call_chat(
                 get_setting("llm_fallback_api_key", settings.effective_llm_fallback_api_key)
                 or primary_key
             )
-            model_configs.append((fallback, fb_url, fb_key))
+            for fb_model in _parse_fallback_chain(fallback_raw):
+                model_configs.append((fb_model, fb_url, fb_key, FALLBACK_TIMEOUT))
 
     last_error: Exception | None = None
-    for m, base_url, api_key in model_configs:
+    for m, base_url, api_key, timeout in model_configs:
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -156,12 +167,16 @@ async def call_chat(
                     "max_tokens": max_tokens,
                     "temperature": temperature,
                 },
+                timeout=timeout,
             )
             response.raise_for_status()
-            message_data = response.json()["choices"][0]["message"]
+            resp_json = response.json()
+            message_data = resp_json["choices"][0]["message"]
             content = message_data.get("content")
+            if content is None or content == "":
+                content = message_data.get("reasoning_content")
             elapsed_ms = (time.monotonic() - t0) * 1000
-            if content is None:
+            if content is None or content == "":
                 # Reasoning model used all max_tokens on chain-of-thought, returning null content.
                 # Treat as unusable and try next model rather than propagating None to callers.
                 logger.warning(
@@ -170,14 +185,15 @@ async def call_chat(
                 )
                 last_error = RuntimeError(f"{m} returned null content (reasoning exhausted max_tokens?)")
                 continue
+            actual_model = resp_json.get("model", m)
             logger.info(
-                "llm_call provider=%s model=%s latency_ms=%.0f ok=true",
-                base_url, m, elapsed_ms,
+                "llm_call provider=%s model=%s actual_model=%s latency_ms=%.0f ok=true",
+                base_url, m, actual_model, elapsed_ms,
             )
             if m != primary_model:
                 logger.warning(
-                    "llm_failover primary=%s fallback=%s fallback_provider=%s error_type=%s latency_ms=%.0f",
-                    primary_model, m, base_url,
+                    "llm_failover primary=%s fallback=%s actual_model=%s fallback_provider=%s error_type=%s latency_ms=%.0f",
+                    primary_model, m, actual_model, base_url,
                     type(last_error).__name__ if last_error else "unknown", elapsed_ms,
                 )
             return content
@@ -193,7 +209,7 @@ async def call_chat(
     # All models failed
     logger.error(
         "llm_all_failed models=%s",
-        [(m, url) for m, url, _ in model_configs],
+        [(m, url) for m, url, _key, _timeout in model_configs],
     )
     raise RuntimeError(_error_message(last_error))
 
@@ -408,15 +424,16 @@ async def validate_config() -> None:
     """
     llm_url = get_setting("llm_base_url", settings.llm_base_url)
     llm_m = get_setting("llm_model", settings.llm_model)
-    llm_fb = get_setting("llm_fallback_model", settings.llm_fallback_model)
+    llm_fb_raw = get_setting("llm_fallback_model", settings.llm_fallback_model)
     emb_url = get_setting("embedding_base_url", settings.embedding_base_url)
     emb_m = get_setting("embedding_model", settings.embedding_model)
     emb_dim = get_setting_int("embedding_dim", settings.embedding_dim)
 
     llm_fb_url = get_setting("llm_fallback_base_url", settings.llm_fallback_base_url)
+    fb_chain = _parse_fallback_chain(llm_fb_raw) if llm_fb_raw else []
     logger.info(
-        "LLM config: provider=%s model=%s fallback=%s fallback_provider=%s",
-        llm_url, llm_m, llm_fb or "(disabled)",
+        "LLM config: provider=%s model=%s fallback_chain=%s fallback_provider=%s",
+        llm_url, llm_m, fb_chain if fb_chain else "(disabled)",
         llm_fb_url or "(same as primary)",
     )
     logger.info(

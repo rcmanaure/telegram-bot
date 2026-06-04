@@ -1,5 +1,13 @@
 # TODOS
 
+## LLM Fallback Chain
+
+- [ ] **FALL-1 (P2, fallback alert to operator)** — When `llm_failover` fires in `llm.py:call_chat()`, send a real-time Telegram message to `operator_chat_id` via the tenant's bot: `"⚠️ LLM fallback activated: {model} at {time}. Primary error: {error}"`. Deduped per hour per tenant to prevent alert spam. Piggybacks on the existing `daily_digest_job` pattern in `src/services/jobs.py`. Trigger: first time Ollama Cloud goes down in production and the operator misses it for >1h. Effort: CC ~20min / human ~1 day. Depends on: N-model chain implementation.
+
+- [ ] **FALL-3 (P3, admin UI fallback format hint)** — After T1 ships, the `llm_fallback_model` field in the admin UI accepts comma-separated model names but shows no hint. Add `<small>Separate multiple models with commas: model1,model2</small>` under the input in `src/templates/admin/index.html`. Trigger: first operator reports confusion seeing the comma-separated value. Effort: CC ~5min / human ~10min.
+
+- [ ] **FALL-2 (P3, add paid model to fallback chain when revenue allows)** — Add one paid model (e.g., `anthropic/claude-haiku-4-5` via OpenRouter ~$0.25/MTok) as a 4th fallback after `xiaomi/mimo-v2.5`. Currently both fallbacks (openrouter/free + mimo-v2.5) share OpenRouter as provider — a single OpenRouter outage takes out all fallbacks. A paid model on a separate provider (Anthropic-backed) breaks the concentration. The N-model chain already supports this as a zero-code `.env` addition. Trigger: first paying client complains about downtime from an OpenRouter outage, or monthly LLM budget allows ~$15-20/month. Effort: CC ~5min (env var) / human ~30min (verify + test). Context: accepted as deferred during /plan-ceo-review 2026-06-04.
+
 ## Localization — Spanish Dialect
 
 - [x] **DIAL-0 (P1, neutral LATAM default)** — Added "use tú/usted/ustedes, never vosotros" instruction to `build_system_prompt()` and `_triage_response()` system prompts. Tests T2+T3 verify instruction presence. Shipped as part of localization groundwork.
