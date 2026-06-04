@@ -327,6 +327,25 @@ async def test_triage_response_network_failure_returns_fallback():
     assert "contactanos" in text.lower() or "información" in text.lower()
 
 
+@pytest.mark.asyncio
+async def test_triage_response_system_prompt_uses_latam_spanish():
+    from rag import _triage_response
+
+    captured = {}
+
+    async def capture_messages(messages, **kwargs):
+        captured["system"] = messages[0]["content"]
+        return '{"intent": "ambiguous", "reply": "puedes contactarnos"}'
+
+    with patch("rag.call_chat", new_callable=AsyncMock, side_effect=capture_messages):
+        await _triage_response("¿tienen estudios de biopsia?", "histopatología")
+
+    assert "system" in captured
+    system_msg = captured["system"].lower()
+    assert "latin american spanish" in system_msg or "latinoamericano" in system_msg
+    assert "vosotros" in system_msg
+
+
 # ─── _build_system_prompt ─────────────────────────────────────────────────────
 
 def test_build_system_prompt_includes_expertise_area():
@@ -353,6 +372,17 @@ def test_build_system_prompt_includes_partial_match_guidance():
     # Partial-match rules must have priority — off_topic only when NO relation at all
     assert "PRIORIDAD ALTA" in prompt or "prevalecen" in prompt
     assert "NO HAY NINGUNA relación" in prompt
+
+
+def test_build_system_prompt_uses_latam_spanish():
+    from services.prompts import build_system_prompt
+    prompt = build_system_prompt("histopatología")
+    assert "latinoamericano neutro" in prompt
+    # Conditional form — must not override the "respond in user's language" rule
+    assert "cuando respondas en español" in prompt.lower()
+    assert "siempre en español" not in prompt.lower()
+    # Spain Spanish banned
+    assert "vosotros" in prompt
 
 
 # ─── get_history ──────────────────────────────────────────────────────────────

@@ -855,6 +855,8 @@ async def _triage_response(
                 "- Do NOT ask 'How can I help you?' or similar open-ended questions.\n"
                 "- Answer directly and concisely.\n"
                 "- Respond in the same language the user wrote in.\n"
+                "- When responding in Spanish, use neutral Latin American Spanish: use 'tú/usted/ustedes', "
+                "never 'vosotros'. Avoid Spain-specific vocabulary.\n"
                 "CRITICAL RULE: If the question mentions ANY procedure, study, price, or service "
                 "that could plausibly be offered by the expertise area — classify as 'ambiguous', NEVER 'off_topic'. "
                 "off_topic is ONLY for questions with zero possible connection (cooking recipes, sports scores, software bugs).\n\n"

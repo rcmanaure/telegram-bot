@@ -521,10 +521,10 @@ async def test_hyde_enabled_uses_hypothetical_for_search():
     mock_tenant.web_search_enabled = False
     mock_tenant.language_code = None
 
-    captured_query = {}
+    captured_queries: list[str] = []
 
     async def mock_retrieve(db, query, namespace):
-        captured_query["q"] = query
+        captured_queries.append(query)
         return []
 
     with patch("rag.get_history", new_callable=AsyncMock, return_value=[]), \
@@ -536,7 +536,9 @@ async def test_hyde_enabled_uses_hypothetical_for_search():
          patch("rag.get_setting", return_value="on"):
         await rag_query(MagicMock(), "pregunta original", "ns", "user1", expertise_area="médico", tenant=mock_tenant)
 
-    assert captured_query["q"] == "respuesta hipotética"
+    # Primary search uses HyDE hypothetical; dual retrieval also runs the broad (pre-HyDE) query
+    assert captured_queries[0] == "respuesta hipotética"
+    assert "pregunta original" in captured_queries
 
 
 # ─── Unit: contextual retrieval / index_chunks (T6) ──────────────────────────
