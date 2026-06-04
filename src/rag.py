@@ -697,11 +697,12 @@ def _chunk_base_term(chunk_content: str) -> str:
 
     Chunk format: "## SECTION\n| CODE | Item Name – Variant | Price |"
 
-    For "Tráquea – Endoscópica" → returns "Tráquea"  (term before " – ")
-    For "Apéndice Cecal"        → returns "Apéndice Cecal"  (no separator)
+    "Pizza – Grande"     → "Pizza"      (term before separator)
+    "Membresía – Anual"  → "Membresía"
+    "Ibuprofeno 400mg"   → "Ibuprofeno 400mg"  (no separator → full name)
 
-    Using the chunk's own correctly-accented text avoids accent-mismatch
-    when the user types "traquea" but the catalog stores "Tráquea".
+    Using the chunk's own text avoids accent-mismatch: user types "pizza"
+    but catalog stores "Pízza" — the chunk's own term is always correct.
     """
     lines = chunk_content.split('\n')
     if len(lines) < 2:
@@ -709,7 +710,7 @@ def _chunk_base_term(chunk_content: str) -> str:
     cells = [c.strip() for c in lines[1].split('|') if c.strip()]
     if len(cells) < 2:
         return ""
-    item_name = cells[1]  # e.g. "Tráquea – Endoscópica"
+    item_name = cells[1]
     for sep in (' – ', ' - ', ' / '):
         if sep in item_name:
             return item_name.split(sep)[0].strip()
@@ -722,17 +723,15 @@ async def _fetch_section_siblings(
     context_chunks: list[dict],
     question: str,
 ) -> list[dict]:
-    """Fetch sibling table-row chunks from the same catalog section as retrieved chunks.
+    """Fetch sibling catalog rows from the same section as retrieved chunks.
 
-    HyDE generates a single specific procedure name (e.g. "Tráquea – Endoscópica"),
-    biasing retrieval toward one catalog row and potentially missing siblings
-    (e.g. "Tráquea – Resección") that share the same base term.
+    When HyDE specializes the query to one variant (e.g. "Grande" for pizza,
+    "Mensual" for gym plans, "Endoscópica" for a medical procedure), it may
+    miss sibling rows for the same base item that share the same section header.
 
-    Search term comes from the RETRIEVED CHUNK's own item name (correctly accented),
-    not from the user's question — avoids PostgreSQL ILIKE accent-mismatch where
-    "traquea" (user input) does not match "Tráquea" (stored content, á ≠ a).
-
-    Generic: works for any tenant — medical variants, menu sizes, gym plans, etc.
+    Uses the retrieved chunk's own item name as the ILIKE search term — not the
+    user's question — so accent/spelling differences between user input and
+    catalog content don't cause misses.
     """
     table_row_chunks = [
         c for c in context_chunks
@@ -1607,10 +1606,11 @@ async def rag_query(
     context = await retrieve_context(db, search_query, namespace)
 
     # Dual retrieval: when HyDE specialized the query, also search with the pre-HyDE
-    # (broad) query to recover chunks from different semantic spaces that HyDE crowds out.
-    # Example: "examen de pulmon?" → HyDE → "Citología de Esputo" fills TOP_K with
-    # cytological chunks, missing histopathological lung procedures entirely.
-    # The broad query finds both, and the union exposes all relevant variants to the LLM.
+    # (broad) query to recover chunks from different catalog sections that HyDE crowds out.
+    # HyDE picks one specific item name, whose embedding fills TOP_K with items from
+    # one section, leaving no room for equally relevant items in sibling sections.
+    # The broad query (user's own words) semantically spans multiple sections,
+    # so the union exposes all relevant variants to the LLM regardless of tenant type.
     if search_query != broad_query:
         context_broad = await retrieve_context(db, broad_query, namespace)
         seen = {c["content"] for c in context}
