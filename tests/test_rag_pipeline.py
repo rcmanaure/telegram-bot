@@ -299,6 +299,9 @@ async def test_delete_only_deletes_own_namespace():
         await db.commit()
 
 
+_SAMPLE_CTX = [{"content": "Horarios: Lun-Vie 8am-10pm", "source": "info.pdf", "page": 1}]
+
+
 # ─── Unit: call_chat (via llm module) ───────────────────────────────────────────
 
 def _mock_response(status_code=200, json_data=None):
@@ -413,6 +416,73 @@ async def test_call_chat_malformed_response_fallback():
         mock_client.post = AsyncMock(side_effect=[bad_resp, ok_resp])
         result = await call_chat([{"role": "user", "content": "hi"}])
     assert result == "recovered"
+
+
+@pytest.mark.asyncio
+async def test_call_chat_null_content_falls_through_to_fallback():
+    """Reasoning model returns content=null — should try next model, not return None."""
+    from llm import call_chat
+    null_content_resp = _mock_response(json_data={"choices": [{"message": {"content": None, "reasoning": "thinking..."}}]})
+    ok_resp = _mock_response(json_data={"choices": [{"message": {"content": "fallback reply"}}]})
+    with patch("llm._chat_client") as mock_client, \
+         patch("llm.settings") as mock_settings:
+        mock_settings.llm_model = "primary-model"
+        mock_settings.llm_fallback_model = "fallback-model"
+        mock_settings.effective_llm_api_key = "test-key"
+        mock_settings.llm_base_url = "https://openrouter.ai/api/v1"
+        mock_client.post = AsyncMock(side_effect=[null_content_resp, ok_resp])
+        result = await call_chat([{"role": "user", "content": "hi"}])
+    assert result == "fallback reply"
+    assert mock_client.post.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_call_chat_null_content_raises_when_no_fallback():
+    """Reasoning model returns content=null with no fallback configured → RuntimeError."""
+    from llm import call_chat
+    null_content_resp = _mock_response(json_data={"choices": [{"message": {"content": None, "reasoning": "thinking..."}}]})
+    with patch("llm._chat_client") as mock_client, \
+         patch("llm.settings") as mock_settings:
+        mock_settings.llm_model = "primary-model"
+        mock_settings.llm_fallback_model = ""
+        mock_settings.effective_llm_api_key = "test-key"
+        mock_settings.llm_base_url = "https://openrouter.ai/api/v1"
+        mock_client.post = AsyncMock(return_value=null_content_resp)
+        with pytest.raises(RuntimeError, match="Unexpected response"):
+            await call_chat([{"role": "user", "content": "hi"}])
+
+
+@pytest.mark.asyncio
+async def test_generate_answer_vision_degrades_to_text_on_failure():
+    """When vision primary fails, generate_answer strips images and retries text-only via fallback."""
+    from rag import generate_answer
+
+    calls: list[dict] = []
+
+    async def mock_call_chat(messages, **kwargs):
+        calls.append({"model": kwargs.get("model"), "has_image": _has_image(messages)})
+        if kwargs.get("model"):
+            raise RuntimeError("LLM service is rate-limited.")
+        return "Texto basado en contexto"
+
+    def _has_image(msgs):
+        for m in msgs:
+            if isinstance(m.get("content"), list):
+                return any(p.get("type") == "image_url" for p in m["content"])
+        return False
+
+    images = [{"mime": "image/jpeg", "b64": "abc123"}]
+    with patch("rag.call_chat", new_callable=AsyncMock, side_effect=mock_call_chat), \
+         patch("rag.settings") as ms:
+        ms.llm_vision_model = "vision-model"
+        result = await generate_answer(_SAMPLE_CTX, "¿qué es esto?", [], images=images)
+
+    assert result == "Texto basado en contexto"
+    assert len(calls) == 2
+    assert calls[0]["model"] == "vision-model"   # vision attempt
+    assert calls[0]["has_image"] is True
+    assert calls[1]["model"] is None             # text-only fallback
+    assert calls[1]["has_image"] is False
 
 
 # ─── Unit: call_embeddings passes dimensions to API (T9-pre) ─────────────────
