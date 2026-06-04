@@ -400,6 +400,20 @@ Envíe el **comprobante de pago** (captura de pantalla o foto de la transferenci
 - El número de teléfono debe estar siempre disponible para comunicarnos con el cirujano
 - **Si hay otra muestra adicional a la solicitada en la orden médica podrá incurrir en costos adicionales**
 
+**Para agendar, el cliente debe enviar por WhatsApp la siguiente información:**
+
+*NOMBRE DEL PROCEDIMIENTO - NOMBRE DEL PACIENTE, CI: XXXXXXX*
+
+- Fecha de la intervención
+- Hora (puede ser "a definir")
+- Centro médico / hospital
+- Teléfono del cirujano
+- Teléfono de un pariente
+
+Una vez confirmada la información y realizado el pago, el equipo queda en contacto para coordinar el día de la intervención.
+
+**Importante:** El pago debe realizarse ANTES de la cirugía. Enviar comprobante de pago por WhatsApp al 04148050764 junto con el nombre del paciente.
+
 ---
 
 ## Mensaje de bienvenida
