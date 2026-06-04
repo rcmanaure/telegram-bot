@@ -974,13 +974,32 @@ async def generate_answer(
         messages.append({"role": "user", "content": text_content})
 
     vision_model = settings.llm_vision_model or None
-    return await call_chat(
-        messages,
-        max_tokens=max_tokens,
-        temperature=0.1,
-        channel=channel,
-        model=vision_model if images else None,
-    )
+    try:
+        return await call_chat(
+            messages,
+            max_tokens=max_tokens,
+            temperature=0.1,
+            channel=channel,
+            model=vision_model if images else None,
+        )
+    except RuntimeError:
+        if not images:
+            raise
+        # Vision primary failed (e.g. rate-limit). Degrade: strip image payloads and
+        # retry via the normal fallback chain (no explicit model= → fallback allowed).
+        logger.warning("generate_answer: vision call failed — retrying as text-only with fallback chain")
+        text_messages = list(messages)
+        last_msg = text_messages[-1]
+        if isinstance(last_msg.get("content"), list):
+            text_parts = [p["text"] for p in last_msg["content"] if p.get("type") == "text"]
+            note = "\n\n[La imagen no pudo procesarse — respondé basándote solo en el contexto de texto disponible.]"
+            text_messages[-1] = {"role": last_msg["role"], "content": "".join(text_parts) + note}
+        return await call_chat(
+            text_messages,
+            max_tokens=max_tokens,
+            temperature=0.1,
+            channel=channel,
+        )
 
 
 # ─── Conversation History ─────────────────────────────────────────────────────

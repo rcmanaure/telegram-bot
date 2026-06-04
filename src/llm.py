@@ -158,8 +158,18 @@ async def call_chat(
                 },
             )
             response.raise_for_status()
-            content = response.json()["choices"][0]["message"]["content"]
+            message_data = response.json()["choices"][0]["message"]
+            content = message_data.get("content")
             elapsed_ms = (time.monotonic() - t0) * 1000
+            if content is None:
+                # Reasoning model used all max_tokens on chain-of-thought, returning null content.
+                # Treat as unusable and try next model rather than propagating None to callers.
+                logger.warning(
+                    "llm_null_content provider=%s model=%s latency_ms=%.0f — null content, trying next",
+                    base_url, m, elapsed_ms,
+                )
+                last_error = RuntimeError(f"{m} returned null content (reasoning exhausted max_tokens?)")
+                continue
             logger.info(
                 "llm_call provider=%s model=%s latency_ms=%.0f ok=true",
                 base_url, m, elapsed_ms,
