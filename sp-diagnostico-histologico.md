@@ -354,11 +354,13 @@ No. La muestra **debe ser cancelada en su totalidad** antes de ser procesada. Si
 
 ### ¿Cuántos días puede pasar una muestra en formol antes de llevarla al laboratorio?
 
-Si la muestra está en formol, se conserva y no se daña. Llévela lo antes posible.
+El formol es un fijador de larga duración: preserva el tejido por semanas o meses sin que se deteriore para el diagnóstico histopatológico. Los laboratorios y museos de patología conservan especímenes en formol por décadas.
+
+Lo ideal es traerla lo antes posible. Para estudios especializados como inmunohistoquímica (IHC) o molecular, la fijación prolongada puede afectar la calidad de esos estudios específicos — pero para el diagnóstico histológico rutinario, el tejido en formol se mantiene estable.
 
 - **Corte congelado (biopsia per-operatoria):** **no debe estar en formol** — llévela directamente el día de la intervención, sin fijar.
 
-Para orientación específica sobre tiempos según el tipo de muestra, contáctenos directamente.
+Si tiene dudas sobre su muestra específica, contáctenos antes de llevarla.
 
 ---
 
