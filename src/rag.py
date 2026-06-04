@@ -1596,6 +1596,7 @@ async def rag_query(
     # ── END CATALOG PATH ──────────────────────────────────────────────────────
 
     # HyDE: embed a hypothetical answer instead of the question to bridge vocabulary gap
+    broad_query = search_query  # pre-HyDE query: broader, used as retrieval supplement
     if get_setting("hyde_enabled", "on") == "on":
         hyde_result = await _hyde_query(search_query, expertise_area)
         if hyde_result:
@@ -1604,6 +1605,23 @@ async def rag_query(
             search_query = hyde_result
 
     context = await retrieve_context(db, search_query, namespace)
+
+    # Dual retrieval: when HyDE specialized the query, also search with the pre-HyDE
+    # (broad) query to recover chunks from different semantic spaces that HyDE crowds out.
+    # Example: "examen de pulmon?" → HyDE → "Citología de Esputo" fills TOP_K with
+    # cytological chunks, missing histopathological lung procedures entirely.
+    # The broad query finds both, and the union exposes all relevant variants to the LLM.
+    if search_query != broad_query:
+        context_broad = await retrieve_context(db, broad_query, namespace)
+        seen = {c["content"] for c in context}
+        new_from_broad = [c for c in context_broad if c["content"] not in seen]
+        if new_from_broad:
+            context = context + new_from_broad
+            logger.info(
+                "dual_retrieve ns=%s broad_q=%r added=%d total=%d",
+                namespace, broad_query[:60], len(new_from_broad), len(context),
+            )
+
     logger.info(
         "retrieve ns=%s q=%r search_q=%r top_scores=%s",
         namespace,
