@@ -17,3 +17,4 @@ pyproject.toml
 # Planning / audit artifacts
 PLAN_*.md
 *.docx
+.gstack/
