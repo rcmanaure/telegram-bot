@@ -453,23 +453,23 @@ async def test_call_chat_null_content_raises_when_no_fallback():
 
 
 @pytest.mark.asyncio
-async def test_generate_answer_vision_degrades_to_text_on_failure():
-    """When vision primary fails, generate_answer strips images and retries text-only via fallback."""
+async def test_generate_answer_vision_falls_back_with_images_preserved():
+    """When vision primary fails, generate_answer retries via fallback chain keeping images intact.
+    The fallback model (mimo-v2.5) is omnimodal — no need to strip image payloads."""
     from rag import generate_answer
 
     calls: list[dict] = []
 
     async def mock_call_chat(messages, **kwargs):
-        calls.append({"model": kwargs.get("model"), "has_image": _has_image(messages)})
+        has_img = any(
+            isinstance(m.get("content"), list) and
+            any(p.get("type") == "image_url" for p in m["content"])
+            for m in messages
+        )
+        calls.append({"model": kwargs.get("model"), "has_image": has_img})
         if kwargs.get("model"):
             raise RuntimeError("LLM service is rate-limited.")
-        return "Texto basado en contexto"
-
-    def _has_image(msgs):
-        for m in msgs:
-            if isinstance(m.get("content"), list):
-                return any(p.get("type") == "image_url" for p in m["content"])
-        return False
+        return "Respuesta con imagen"
 
     images = [{"mime": "image/jpeg", "b64": "abc123"}]
     with patch("rag.call_chat", new_callable=AsyncMock, side_effect=mock_call_chat), \
@@ -477,12 +477,12 @@ async def test_generate_answer_vision_degrades_to_text_on_failure():
         ms.llm_vision_model = "vision-model"
         result = await generate_answer(_SAMPLE_CTX, "¿qué es esto?", [], images=images)
 
-    assert result == "Texto basado en contexto"
+    assert result == "Respuesta con imagen"
     assert len(calls) == 2
-    assert calls[0]["model"] == "vision-model"   # vision attempt
+    assert calls[0]["model"] == "vision-model"  # explicit vision attempt
     assert calls[0]["has_image"] is True
-    assert calls[1]["model"] is None             # text-only fallback
-    assert calls[1]["has_image"] is False
+    assert calls[1]["model"] is None            # fallback chain (no explicit model)
+    assert calls[1]["has_image"] is True        # images preserved — fallback is omnimodal
 
 
 # ─── Unit: call_embeddings passes dimensions to API (T9-pre) ─────────────────

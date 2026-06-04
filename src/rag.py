@@ -985,17 +985,12 @@ async def generate_answer(
     except RuntimeError:
         if not images:
             raise
-        # Vision primary failed (e.g. rate-limit). Degrade: strip image payloads and
-        # retry via the normal fallback chain (no explicit model= → fallback allowed).
-        logger.warning("generate_answer: vision call failed — retrying as text-only with fallback chain")
-        text_messages = list(messages)
-        last_msg = text_messages[-1]
-        if isinstance(last_msg.get("content"), list):
-            text_parts = [p["text"] for p in last_msg["content"] if p.get("type") == "text"]
-            note = "\n\n[La imagen no pudo procesarse — respondé basándote solo en el contexto de texto disponible.]"
-            text_messages[-1] = {"role": last_msg["role"], "content": "".join(text_parts) + note}
+        # Vision primary failed (e.g. rate-limit). Retry via the normal fallback
+        # chain WITHOUT an explicit model= so fallback is allowed. Images are kept:
+        # the fallback model (mimo-v2.5) is omnimodal and handles image payloads.
+        logger.warning("generate_answer: vision call failed — retrying with fallback chain (images preserved)")
         return await call_chat(
-            text_messages,
+            messages,
             max_tokens=max_tokens,
             temperature=0.1,
             channel=channel,
