@@ -352,6 +352,18 @@ No. La muestra **debe ser cancelada en su totalidad** antes de ser procesada. Si
 
 ---
 
+### ¿Cuántos días puede pasar una muestra en formol antes de llevarla al laboratorio?
+
+Si la muestra está correctamente fijada en **formol al 10%**, puede conservarse sin problemas durante **varios días** a temperatura ambiente. El formol detiene la degradación del tejido y lo preserva para el análisis histopatológico.
+
+- **En formol:** puede esperar de **3 a 7 días** sin que se deteriore la calidad del estudio. Lo ideal es traerla lo antes posible.
+- **Sin formol:** el tejido se degrada rápidamente — debe traerse **de inmediato** (en pocas horas).
+- **Corte congelado (biopsia per-operatoria):** **no debe estar en formol** y debe llevarse directamente al laboratorio el día de la intervención, sin fijar.
+
+Si tiene alguna duda sobre cómo conservar una muestra específica, contáctenos antes de llevarla.
+
+---
+
 ### ¿Cuánto cuesta la biopsia de apéndice (apendicectomía)?
 
 La biopsia de apéndice corresponde al código **SDG033 — Apéndice Cecal**, con un costo de **$90.00 USD**.
