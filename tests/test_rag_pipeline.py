@@ -452,6 +452,115 @@ async def test_call_chat_null_content_raises_when_no_fallback():
             await call_chat([{"role": "user", "content": "hi"}])
 
 
+def test_parse_fallback_chain_helper():
+    """_parse_fallback_chain strips whitespace, trailing commas, and empty entries."""
+    from llm import _parse_fallback_chain
+    assert _parse_fallback_chain("model-a,model-b") == ["model-a", "model-b"]
+    assert _parse_fallback_chain(" model-a , model-b , ") == ["model-a", "model-b"]
+    assert _parse_fallback_chain("model-a,") == ["model-a"]
+    assert _parse_fallback_chain("") == []
+    assert _parse_fallback_chain("  ,  ,  ") == []
+
+
+@pytest.mark.asyncio
+async def test_call_chat_three_model_chain_primary_and_first_fallback_fail():
+    """With 2 comma-separated fallbacks, 3rd model succeeds after primary+first fail."""
+    from llm import call_chat
+    fail_resp = _mock_response(status_code=429)
+    ok_resp = _mock_response(json_data={"choices": [{"message": {"content": "third model reply"}}]})
+    with patch("llm._chat_client") as mock_client, \
+         patch("llm.settings") as mock_settings:
+        mock_settings.llm_model = "primary-model"
+        mock_settings.llm_fallback_model = "openrouter/free,xiaomi/mimo-v2.5"
+        mock_settings.effective_llm_api_key = "test-key"
+        mock_settings.effective_llm_fallback_api_key = "fb-key"
+        mock_settings.llm_base_url = "https://ollama.com/v1"
+        mock_settings.llm_fallback_base_url = "https://openrouter.ai/api/v1"
+        mock_client.post = AsyncMock(side_effect=[fail_resp, fail_resp, ok_resp])
+        result = await call_chat([{"role": "user", "content": "hi"}])
+    assert result == "third model reply"
+    assert mock_client.post.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_call_chat_three_model_chain_all_fail():
+    """All 3 models in chain fail → RuntimeError."""
+    from llm import call_chat
+    fail_resp = _mock_response(status_code=500)
+    with patch("llm._chat_client") as mock_client, \
+         patch("llm.settings") as mock_settings:
+        mock_settings.llm_model = "primary-model"
+        mock_settings.llm_fallback_model = "openrouter/free,xiaomi/mimo-v2.5"
+        mock_settings.effective_llm_api_key = "test-key"
+        mock_settings.effective_llm_fallback_api_key = "fb-key"
+        mock_settings.llm_base_url = "https://ollama.com/v1"
+        mock_settings.llm_fallback_base_url = "https://openrouter.ai/api/v1"
+        mock_client.post = AsyncMock(return_value=fail_resp)
+        with pytest.raises(RuntimeError):
+            await call_chat([{"role": "user", "content": "hi"}])
+    assert mock_client.post.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_call_chat_empty_string_content_tries_next_model():
+    """content='' (not None) must also fall through to next model."""
+    from llm import call_chat
+    empty_resp = _mock_response(json_data={"choices": [{"message": {"content": ""}}]})
+    ok_resp = _mock_response(json_data={"choices": [{"message": {"content": "recovered"}}]})
+    with patch("llm._chat_client") as mock_client, \
+         patch("llm.settings") as mock_settings:
+        mock_settings.llm_model = "primary-model"
+        mock_settings.llm_fallback_model = "fallback-model"
+        mock_settings.effective_llm_api_key = "test-key"
+        mock_settings.effective_llm_fallback_api_key = "test-key"
+        mock_settings.llm_base_url = "https://openrouter.ai/api/v1"
+        mock_settings.llm_fallback_base_url = ""
+        mock_client.post = AsyncMock(side_effect=[empty_resp, ok_resp])
+        result = await call_chat([{"role": "user", "content": "hi"}])
+    assert result == "recovered"
+    assert mock_client.post.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_call_chat_reasoning_content_used_when_content_none():
+    """When content=None but reasoning_content is present, return reasoning_content."""
+    from llm import call_chat
+    reasoning_resp = _mock_response(json_data={
+        "choices": [{"message": {"content": None, "reasoning_content": "deep thinking"}}]
+    })
+    with patch("llm._chat_client") as mock_client, \
+         patch("llm.settings") as mock_settings:
+        mock_settings.llm_model = "primary-model"
+        mock_settings.llm_fallback_model = ""
+        mock_settings.effective_llm_api_key = "test-key"
+        mock_settings.llm_base_url = "https://openrouter.ai/api/v1"
+        mock_client.post = AsyncMock(return_value=reasoning_resp)
+        result = await call_chat([{"role": "user", "content": "hi"}])
+    assert result == "deep thinking"
+    assert mock_client.post.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_call_chat_per_model_timeout_primary_and_fallback():
+    """Primary uses timeout=60.0; fallback uses timeout=15.0."""
+    from llm import call_chat
+    fail_resp = _mock_response(status_code=429)
+    ok_resp = _mock_response(json_data={"choices": [{"message": {"content": "ok"}}]})
+    with patch("llm._chat_client") as mock_client, \
+         patch("llm.settings") as mock_settings:
+        mock_settings.llm_model = "primary-model"
+        mock_settings.llm_fallback_model = "fallback-model"
+        mock_settings.effective_llm_api_key = "test-key"
+        mock_settings.effective_llm_fallback_api_key = "test-key"
+        mock_settings.llm_base_url = "https://openrouter.ai/api/v1"
+        mock_settings.llm_fallback_base_url = ""
+        mock_client.post = AsyncMock(side_effect=[fail_resp, ok_resp])
+        await call_chat([{"role": "user", "content": "hi"}])
+    calls = mock_client.post.call_args_list
+    assert calls[0].kwargs.get("timeout") == 60.0, "primary must use 60s timeout"
+    assert calls[1].kwargs.get("timeout") == 15.0, "fallback must use 15s timeout"
+
+
 @pytest.mark.asyncio
 async def test_generate_answer_vision_falls_back_with_images_preserved():
     """When vision primary fails, generate_answer retries via fallback chain keeping images intact.

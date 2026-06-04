@@ -7,6 +7,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
+from config_overlay import get_setting
 from db import get_db, DocumentChunk, Feedback, Tenant
 from dependencies import require_tenant
 from limiter import limiter
@@ -20,7 +21,11 @@ router = APIRouter()
 
 @router.get("/health")
 async def health():
-    return {"status": "ok", "model": settings.llm_model, "fallback_model": settings.llm_fallback_model}
+    return {
+        "status": "ok",
+        "model": get_setting("llm_model", settings.llm_model),
+        "fallback_model": get_setting("llm_fallback_model", settings.llm_fallback_model),
+    }
 
 
 @router.post("/upload")
