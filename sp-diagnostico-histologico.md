@@ -356,7 +356,7 @@ No. La muestra **debe ser cancelada en su totalidad** antes de ser procesada. Si
 
 Depende de cómo esté conservada la muestra:
 
-🧪 **En formol** — la muestra no se daña. Tráigala lo antes posible.
+🧪 **En formol** — Una vez en formol, la muestra no se daña. Lo ideal es traerla lo antes posible.
 
 ⚠️ **Sin formol** — se degrada rápidamente, debe traerla de inmediato (en pocas horas).
 
