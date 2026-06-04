@@ -356,7 +356,7 @@ No. La muestra **debe ser cancelada en su totalidad** antes de ser procesada. Si
 
 Depende de cómo esté conservada la muestra:
 
-🧪 **En formol** — puede esperar de 3 a 7 días sin problemas. Lo ideal es traerla lo antes posible. Una vez en formol, la muestra no se daña.
+🧪 **En formol** — la muestra no se daña. Tráigala lo antes posible.
 
 ⚠️ **Sin formol** — se degrada rápidamente, debe traerla de inmediato (en pocas horas).
 
