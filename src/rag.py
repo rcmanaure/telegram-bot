@@ -925,6 +925,12 @@ async def generate_answer(
     system_prompt = build_system_prompt(expertise_area, channel=channel, from_web=from_web,
                                         no_length_limit=no_length_limit)
 
+    # Vision calls: cap context at 5 chunks. Reasoning models scale reasoning cost with
+    # input size; 19 chunks + image exhausts the entire max_tokens budget on chain-of-thought.
+    # Chunks are sorted by relevance (descending similarity), so the top 5 are the most useful.
+    if images and len(context_chunks) > 5:
+        context_chunks = context_chunks[:5]
+
     if context_chunks:
         context_text = "\n\n---\n\n".join([
             f"[Source: {c['source']}, Page {c['page']}]\n{c['content']}"
