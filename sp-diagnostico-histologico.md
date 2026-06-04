@@ -354,11 +354,15 @@ No. La muestra **debe ser cancelada en su totalidad** antes de ser procesada. Si
 
 ### ¿Cuántos días puede pasar una muestra en formol antes de llevarla al laboratorio?
 
-Si la muestra está en formol, se conserva. Tráigala lo antes posible, pero no se dañará si tarda unos días.
+Depende de cómo esté conservada la muestra:
 
-- **Corte congelado (biopsia per-operatoria):** **no debe estar en formol** — llévela el día de la intervención, sin fijar.
+🧪 **En formol** — puede esperar de 3 a 7 días sin problemas. Lo ideal es traerla lo antes posible. Una vez en formol, la muestra no se daña.
 
-Si tiene alguna duda, contáctenos antes de traerla.
+⚠️ **Sin formol** — se degrada rápidamente, debe traerla de inmediato (en pocas horas).
+
+❄️ **Corte congelado (biopsia per-operatoria)** — no debe estar en formol y debe llevarse el mismo día de la intervención, directo al laboratorio.
+
+Si tiene dudas sobre cómo conservar su muestra, contáctenos antes de llevarla.
 
 ---
 
