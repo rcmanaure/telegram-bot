@@ -619,7 +619,7 @@ async def _reformulate_query(question: str, history: list[dict]) -> str:
     ]
 
     try:
-        reformulated = await call_chat(messages, max_tokens=100, temperature=0.0)
+        reformulated = await call_chat(messages, max_tokens=500, temperature=0.0)
         reformulated = reformulated.strip().strip('"').strip("'")
         # Sanity check: if reformulation is wildly different length, keep original
         if len(reformulated) < len(question) * 0.3 or len(reformulated) > len(question) * 5:
@@ -682,7 +682,7 @@ async def _hyde_query(question: str, expertise_area: str) -> str:
         }
     ]
     try:
-        result = await call_chat(messages, max_tokens=60, temperature=0.0)
+        result = await call_chat(messages, max_tokens=300, temperature=0.0)
         result = result.strip()
         if not result or len(result) < 3 or len(result) > 500:
             return ""
@@ -973,11 +973,16 @@ async def generate_answer(
     else:
         messages.append({"role": "user", "content": text_content})
 
+    # Reasoning-model fallbacks (e.g. mimo-v2.5) split max_tokens between
+    # chain-of-thought and content. Vision analysis of complex documents needs
+    # headroom so content isn't truncated mid-sentence.
+    effective_max_tokens = max(max_tokens, 2000) if images else max_tokens
+
     vision_model = settings.llm_vision_model or None
     try:
         return await call_chat(
             messages,
-            max_tokens=max_tokens,
+            max_tokens=effective_max_tokens,
             temperature=0.1,
             channel=channel,
             model=vision_model if images else None,
@@ -991,7 +996,7 @@ async def generate_answer(
         logger.warning("generate_answer: vision call failed — retrying with fallback chain (images preserved)")
         return await call_chat(
             messages,
-            max_tokens=max_tokens,
+            max_tokens=effective_max_tokens,
             temperature=0.1,
             channel=channel,
         )
