@@ -503,10 +503,7 @@ def _format_catalog_as_text(chunks: list[dict]) -> str:
     if not section_order:
         return "No encontré información de precios en los documentos."
 
-    lines = [
-        "*Lista de Precios — SP Unidad de Diagnóstico Histológico*",
-        "_Moneda: USD · Vigente Junio 2026_\n",
-    ]
+    lines = ["*Lista de Precios*\n"]
     for section in section_order:
         emoji = _CATALOG_SECTION_EMOJI.get(section.upper(), "🔬")
         lines.append(f"*{section}*")
@@ -634,19 +631,11 @@ async def _reformulate_query(question: str, history: list[dict]) -> str:
 
 # ─── HyDE (Hypothetical Document Embeddings) ──────────────────────────────────
 
-_LISTING_QUERY_RE = re.compile(
-    r'\b(qu[eé]\s+tipo[s]?|qu[eé]\s+(tienen|tienes)|qu[eé]\s+(estudios|ex[aá]menes|servicios|procedimientos|biopsias|citolog[ií]as|an[aá]lisis)|'
-    r'todos\s+los|lista\s+(de|completa)|tienen\s+disponible|qu[eé]\s+ofrecen|cu[aá]les\s+son|'
-    r'qu[eé]\s+tipos?\s+de|muestren?\s+(todos|todas)|todo[s]?\s+los\s+(estudios|servicios|ex[aá]menes)|'
-    r'de\s+cada\s+uno|de\s+todos\s+los|precio[s]?\s+de\s+(cada|todos))\b',
-    re.IGNORECASE,
-)
-
-# Detects price intent within a listing query — triggers code-generated full catalog
-# (bypasses LLM entirely; always complete, no hallucination, no context limits).
-# Bare "precio[s]?" is enough: if user asks for types AND mentions prices, they want prices.
+# Detects explicit "all prices" intent — triggers code-generated full catalog.
+# Intentionally narrow: only matches queries asking for ALL prices, not a specific item's price.
+# (The bare `precio[s]?` term was removed to avoid matching "precio de la biopsia X".)
 _PRICE_INTENT_RE = re.compile(
-    r'\b(precio[s]?|de\s+cada\s+uno|de\s+todos(\s+los)?|todos\s+los\s+precios?|'
+    r'\b(de\s+cada\s+uno|de\s+todos(\s+los)?|todos\s+los\s+precios?|'
     r'lista\s+(completa\s+)?de\s+precios?|precio[s]?\s+de\s+(cada|todos)|'
     r'cu[aá]nto\s+cuesta\s+cada|dame\s+(todos?|todos?\s+los)\s+precios?)\b',
     re.IGNORECASE,
@@ -664,9 +653,6 @@ async def _hyde_query(question: str, expertise_area: str) -> str:
     generates a single procedure name which biases the embedding toward one catalog section,
     suppressing all other categories from the top-k results.
     """
-    if _LISTING_QUERY_RE.search(question):
-        return ""
-
     messages = [
         {
             "role": "user",
@@ -1568,58 +1554,22 @@ async def rag_query(
             logger.warning("tool_path_error ns=%s error=%s — falling back to sequential", namespace, e)
     # ── END TOOL PATH ─────────────────────────────────────────────────────────
 
-    # ── CATALOG PATH ──────────────────────────────────────────────────────────
-    # Listing/overview queries need all catalog sections, not just the ones that
-    # happen to be most similar to the query terms. Two modes:
-    #
-    #   • Overview  ("qué tipos tienen")     → LLM + 1 chunk/section (category names)
-    #   • Price list ("tipos y precios", "y los precios de cada uno?")
-    #       → code-generated from all chunks, no LLM
-    #         Bypasses context limits AND the LLM's false "data not loaded" response
-    #         that occurs when it receives only 1 item per section.
-    #
-    # Check both original question AND reformulated search_query because
-    # follow-up questions only match after reformulation.
-    _is_listing = _LISTING_QUERY_RE.search(question) or _LISTING_QUERY_RE.search(search_query)
-    if _is_listing:
-        _is_price = _PRICE_INTENT_RE.search(question) or _PRICE_INTENT_RE.search(search_query)
-        _use_codegen = _is_price and channel == "telegram"
-
-        if _use_codegen:
-            # Code-generated path: fetch all procedures, format in Python, skip LLM.
-            full_chunks = await retrieve_full_catalog(db, namespace)
-            if full_chunks:
-                logger.info(
-                    "catalog_codegen ns=%s q=%r items=%d",
-                    namespace, question[:60], len(full_chunks),
-                )
-                answer = _format_catalog_as_text(full_chunks)
-                await save_turn(db, user_id, namespace, question, answer,
-                                channel=channel, tenant_id=tenant_id)
-                return answer, full_chunks, None
-        else:
-            # LLM overview path: 1 chunk per section → category names (no price intent).
-            overview_chunks = await retrieve_catalog_overview(db, namespace)
-            if overview_chunks:
-                logger.info(
-                    "catalog_overview ns=%s q=%r sections=%d",
-                    namespace, question[:60], len(overview_chunks),
-                )
-                answer = await generate_answer(
-                    overview_chunks, question, history, expertise_area,
-                    channel=channel, images=images,
-                )
-                answer = validate_output(answer, user_id=user_id)
-                if CANARY_TOKEN in answer:
-                    answer = answer.replace(CANARY_TOKEN, "[REDACTED]")
-                    logger.warning("canary_redacted user_id=%s catalog_overview", user_id)
-                await save_turn(db, user_id, namespace, question, answer,
-                                channel=channel, tenant_id=tenant_id)
-                return answer, overview_chunks, None
-
-        # No section chunks found (unstructured namespace) — fall through to normal path
-        logger.info("catalog ns=%s — no section chunks, falling through to similarity", namespace)
-    # ── END CATALOG PATH ──────────────────────────────────────────────────────
+    # ── PRICE CODEGEN PATH ────────────────────────────────────────────────────
+    # Full price list queries: code-generated from all catalog chunks, bypassing the LLM.
+    # Only Telegram (WhatsApp doesn't support the Markdown table format).
+    # Check both original question AND reformulated search_query (follow-ups match after reformulation).
+    _is_price_list = (
+        _PRICE_INTENT_RE.search(question) or _PRICE_INTENT_RE.search(search_query)
+    ) and channel == "telegram"
+    if _is_price_list:
+        full_chunks = await retrieve_full_catalog(db, namespace)
+        if full_chunks:
+            logger.info("catalog_codegen ns=%s q=%r items=%d", namespace, question[:60], len(full_chunks))
+            answer = _format_catalog_as_text(full_chunks)
+            await save_turn(db, user_id, namespace, question, answer, channel=channel, tenant_id=tenant_id)
+            return answer, full_chunks, None
+        logger.info("catalog_codegen ns=%s — no section chunks, falling through", namespace)
+    # ── END PRICE CODEGEN PATH ────────────────────────────────────────────────
 
     # HyDE: embed a hypothetical answer instead of the question to bridge vocabulary gap
     broad_query = search_query  # pre-HyDE query: broader, used as retrieval supplement
@@ -1634,10 +1584,6 @@ async def rag_query(
 
     # Dual retrieval: when HyDE specialized the query, also search with the pre-HyDE
     # (broad) query to recover chunks from different catalog sections that HyDE crowds out.
-    # HyDE picks one specific item name, whose embedding fills TOP_K with items from
-    # one section, leaving no room for equally relevant items in sibling sections.
-    # The broad query (user's own words) semantically spans multiple sections,
-    # so the union exposes all relevant variants to the LLM regardless of tenant type.
     if search_query != broad_query:
         context_broad = await retrieve_context(db, broad_query, namespace)
         seen = {c["content"] for c in context}
@@ -1648,6 +1594,11 @@ async def rag_query(
                 "dual_retrieve ns=%s broad_q=%r added=%d total=%d",
                 namespace, broad_query[:60], len(new_from_broad), len(context),
             )
+
+    # Catalog overview: 1 representative chunk per section (cheap DB query, no embedding).
+    # Collected now, merged into context after the similarity filter so catalog sections
+    # don't rescue off-topic queries from triage (which requires context=[] to trigger).
+    overview_chunks = await retrieve_catalog_overview(db, namespace)
 
     logger.info(
         "retrieve ns=%s q=%r search_q=%r top_scores=%s",
@@ -1728,6 +1679,20 @@ async def rag_query(
                         namespace, vision_query[:60],
                         [(round(c["similarity"], 3), c["source"], c["content"][:40]) for c in context[:3]],
                     )
+
+    # Merge catalog overview sections into context when we have some similarity results.
+    # Overview gives 1 representative chunk per section for listing/broad queries.
+    # Not merged when context is empty — off-topic queries intentionally need
+    # context=[] so triage fires correctly rather than generating from catalog headers.
+    if context and overview_chunks:
+        seen = {c["content"] for c in context}
+        catalog_new = [c for c in overview_chunks if c["content"] not in seen]
+        if catalog_new:
+            context = context + catalog_new
+            logger.info(
+                "catalog_sections_merged ns=%s added=%d total=%d",
+                namespace, len(catalog_new), len(context),
+            )
 
     # If vision-augmented retrieval found context, fall through to the main
     # generate_answer path below. Otherwise, handle the no-context cases.
