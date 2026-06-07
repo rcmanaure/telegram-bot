@@ -304,7 +304,7 @@ Realizamos biopsias y estudios citológicos de todas las especialidades médicas
 
 ### Políticas principales
 
-1. **Muestras en formol:** Todas las muestras deben venir fijadas en formol, EXCEPTO los cortes congelados (biopsia per-operatoria) que NO deben estar en ningún líquido fijador (formol, alcohol, etc.). La empresa no se hace responsable por muestras que no vengan fijadas en formol cuando corresponde.
+1. **Muestras en formol:** El único líquido preservante aceptado es el **formol**. No se aceptan muestras en otros líquidos fijadores (alcohol, suero fisiológico, agua u otros). Todas las muestras deben venir fijadas en formol, EXCEPTO los cortes congelados (biopsia per-operatoria) que NO deben estar en ningún líquido fijador (formol, alcohol, etc.). La empresa no se hace responsable por muestras que no vengan fijadas en formol cuando corresponde.
 
 2. **Pago obligatorio:** La muestra debe ser cancelada en su totalidad antes de ser procesada. No se realizan excepciones por este canal. En el caso de la biopsia per-operatoria (corte congelado), el estudio debe ser pagado previo a la intervención quirúrgica.
 
@@ -349,6 +349,19 @@ Los resultados se entregan en **3 a 5 días hábiles** dependiendo del tamaño d
 ### ¿Puedo pagar una parte ahora y el resto al retirar el resultado?
 
 No. La muestra **debe ser cancelada en su totalidad** antes de ser procesada. Si tiene una situación especial, puede solicitar hablar con un representante de nuestro equipo.
+
+---
+
+### ¿Qué líquido fijador o preservante aceptan para las muestras?
+
+El **único líquido preservante aceptado es el formol**. No se acepta ningún otro líquido fijador.
+
+❌ **No se aceptan:** agua, suero fisiológico, alcohol, ni ningún otro líquido que no sea formol.
+✅ **Aceptado:** formol (único).
+
+Si su muestra llegó en otro líquido (agua, alcohol, suero, etc.), comuníquese de inmediato al 04148050764 para evaluar si es viable procesarla. El laboratorio no se hace responsable por muestras que no vengan fijadas en formol cuando corresponde.
+
+**Excepción:** Los cortes congelados (biopsia per-operatoria) NO deben estar en ningún líquido fijador — ni formol ni ningún otro.
 
 ---
 
