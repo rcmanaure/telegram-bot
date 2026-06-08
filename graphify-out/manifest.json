@@ -1,0 +1,367 @@
+{
+  "/root/telegram-bot/alembic/env.py": {
+    "mtime": 1779840275.608171,
+    "ast_hash": "3ce131446ecea16f838234881221b025",
+    "semantic_hash": "3ce131446ecea16f838234881221b025"
+  },
+  "/root/telegram-bot/alembic/versions/3f8a1c2e9d47_add_expertise_area.py": {
+    "mtime": 1779840275.608171,
+    "ast_hash": "f1dac21011338a88b3192728eb6d49e1",
+    "semantic_hash": "f1dac21011338a88b3192728eb6d49e1"
+  },
+  "/root/telegram-bot/alembic/versions/766462df7dd1_multi_tenant_schema.py": {
+    "mtime": 1779840275.608171,
+    "ast_hash": "169a2b8fcb995f0b126ac61c992baa3f",
+    "semantic_hash": "169a2b8fcb995f0b126ac61c992baa3f"
+  },
+  "/root/telegram-bot/alembic/versions/a1b2c3d4e5f6_smart_chatbot_v2.py": {
+    "mtime": 1779840275.609171,
+    "ast_hash": "86f654574d76f5e62619f85989d253ee",
+    "semantic_hash": "86f654574d76f5e62619f85989d253ee"
+  },
+  "/root/telegram-bot/alembic/versions/af07e4f0ea14_baseline.py": {
+    "mtime": 1779844574.320888,
+    "ast_hash": "2dcc0baa7f6e11cffc556b0ad8a240cc",
+    "semantic_hash": "2dcc0baa7f6e11cffc556b0ad8a240cc"
+  },
+  "/root/telegram-bot/alembic/versions/b2c3d4e5f6g7_whatsapp_multi_channel.py": {
+    "mtime": 1780412823.8778543,
+    "ast_hash": "9192a2bfdb284acc7f99d38db9a42f86",
+    "semantic_hash": "9192a2bfdb284acc7f99d38db9a42f86"
+  },
+  "/root/telegram-bot/alembic/versions/c3d4e5f6g7h8_vision_web_search.py": {
+    "mtime": 1780412823.8778543,
+    "ast_hash": "cd812b8ddd26f24bb1703075b528b5f0",
+    "semantic_hash": "cd812b8ddd26f24bb1703075b528b5f0"
+  },
+  "/root/telegram-bot/alembic/versions/d4e5f6g7h8i9_namespace_source_index.py": {
+    "mtime": 1780412823.8778543,
+    "ast_hash": "86fc958ece25b48b7791729bb0c9ac3b",
+    "semantic_hash": "86fc958ece25b48b7791729bb0c9ac3b"
+  },
+  "/root/telegram-bot/alembic/versions/e5f6g7h8i9j0_system_config_and_indexes.py": {
+    "mtime": 1780412823.8788545,
+    "ast_hash": "a779bbabfc0a6791813ec368fd61d9b6",
+    "semantic_hash": "a779bbabfc0a6791813ec368fd61d9b6"
+  },
+  "/root/telegram-bot/alembic/versions/f6g7h8i9j0k1_feedback_table.py": {
+    "mtime": 1780412823.8788545,
+    "ast_hash": "4d1df82e532a2779baefb5661a8495a4",
+    "semantic_hash": "4d1df82e532a2779baefb5661a8495a4"
+  },
+  "/root/telegram-bot/alembic/versions/g7h8i9j0k1l2_mrl_vector_512.py": {
+    "mtime": 1780457246.6662698,
+    "ast_hash": "786e85644dfcf507f252b03e62ba37b4",
+    "semantic_hash": "786e85644dfcf507f252b03e62ba37b4"
+  },
+  "/root/telegram-bot/alembic/versions/h8i9j0k1l2m3_mrl_vector_768.py": {
+    "mtime": 1780520726.2725344,
+    "ast_hash": "2f88e302c28311de20f91b731d42e210",
+    "semantic_hash": "2f88e302c28311de20f91b731d42e210"
+  },
+  "/root/telegram-bot/backup_20260603.sql": {
+    "mtime": 1780458356.4913697,
+    "ast_hash": "2b5242f5d879be050fb3bee8d9da59fa",
+    "semantic_hash": "2b5242f5d879be050fb3bee8d9da59fa"
+  },
+  "/root/telegram-bot/scripts/create_tenant.py": {
+    "mtime": 1779935825.0684648,
+    "ast_hash": "e1fc79879ba3f0fbd41c7800c5e7dd33",
+    "semantic_hash": "e1fc79879ba3f0fbd41c7800c5e7dd33"
+  },
+  "/root/telegram-bot/scripts/seed_demo.py": {
+    "mtime": 1779840275.611171,
+    "ast_hash": "1a4bfcd08488d7863b1bd932011692dc",
+    "semantic_hash": "1a4bfcd08488d7863b1bd932011692dc"
+  },
+  "/root/telegram-bot/scripts/test_mrl_dimensions.py": {
+    "mtime": 1780457246.6662698,
+    "ast_hash": "18090de92b479b2f33149be1fd3bf08d",
+    "semantic_hash": "18090de92b479b2f33149be1fd3bf08d"
+  },
+  "/root/telegram-bot/src/bot.py": {
+    "mtime": 1780516501.6300285,
+    "ast_hash": "a117c2e800bdcd9c71e7e442f53f87f5",
+    "semantic_hash": "a117c2e800bdcd9c71e7e442f53f87f5"
+  },
+  "/root/telegram-bot/src/channels/__init__.py": {
+    "mtime": 1780412823.8798544,
+    "ast_hash": "d410f21429b132168a6434a2ebe9e508",
+    "semantic_hash": "d410f21429b132168a6434a2ebe9e508"
+  },
+  "/root/telegram-bot/src/channels/protocol.py": {
+    "mtime": 1780431774.8416917,
+    "ast_hash": "23fe559166da38f3116beb6f041c8aab",
+    "semantic_hash": "23fe559166da38f3116beb6f041c8aab"
+  },
+  "/root/telegram-bot/src/channels/telegram.py": {
+    "mtime": 1780412823.8808544,
+    "ast_hash": "0058caa680ccdd0877aa92148400e6bd",
+    "semantic_hash": "0058caa680ccdd0877aa92148400e6bd"
+  },
+  "/root/telegram-bot/src/channels/whatsapp.py": {
+    "mtime": 1780431774.8416917,
+    "ast_hash": "ec64d8240ab6dbab3d552bcee567e43d",
+    "semantic_hash": "ec64d8240ab6dbab3d552bcee567e43d"
+  },
+  "/root/telegram-bot/src/config.py": {
+    "mtime": 1780520710.9046571,
+    "ast_hash": "7b16dddcaa1715ddd033c8323045aa3f",
+    "semantic_hash": "7b16dddcaa1715ddd033c8323045aa3f"
+  },
+  "/root/telegram-bot/src/config_overlay.py": {
+    "mtime": 1780412823.8818543,
+    "ast_hash": "fc9ca4fa24685ac0c8380584447859b1",
+    "semantic_hash": "fc9ca4fa24685ac0c8380584447859b1"
+  },
+  "/root/telegram-bot/src/crypto.py": {
+    "mtime": 1780412823.8828545,
+    "ast_hash": "6bf945b592acee412e4c28cb9f009887",
+    "semantic_hash": "6bf945b592acee412e4c28cb9f009887"
+  },
+  "/root/telegram-bot/src/db.py": {
+    "mtime": 1780457246.6672697,
+    "ast_hash": "8225980a2863cfd61c2c3932cdf1275c",
+    "semantic_hash": "8225980a2863cfd61c2c3932cdf1275c"
+  },
+  "/root/telegram-bot/src/dependencies.py": {
+    "mtime": 1780412823.8828545,
+    "ast_hash": "3baed88425f97d6db8958bbba3947a66",
+    "semantic_hash": "3baed88425f97d6db8958bbba3947a66"
+  },
+  "/root/telegram-bot/src/image_buffer.py": {
+    "mtime": 1780433151.9626207,
+    "ast_hash": "e7d08e53de9020571ff7a45bf9e2f0c5",
+    "semantic_hash": "e7d08e53de9020571ff7a45bf9e2f0c5"
+  },
+  "/root/telegram-bot/src/lifespan.py": {
+    "mtime": 1780432429.3034325,
+    "ast_hash": "a2f2b23bbb52f238ab705a31ba817e1f",
+    "semantic_hash": "a2f2b23bbb52f238ab705a31ba817e1f"
+  },
+  "/root/telegram-bot/src/limiter.py": {
+    "mtime": 1780412823.8838544,
+    "ast_hash": "f83afb0da858ed62713fb4e62a802413",
+    "semantic_hash": "f83afb0da858ed62713fb4e62a802413"
+  },
+  "/root/telegram-bot/src/llm.py": {
+    "mtime": 1780615001.859278,
+    "ast_hash": "71520ca0b6b58b412889b1aeab127a05",
+    "semantic_hash": "71520ca0b6b58b412889b1aeab127a05"
+  },
+  "/root/telegram-bot/src/logging_config.py": {
+    "mtime": 1779840275.6131709,
+    "ast_hash": "b62d901ddbbaad941738a66efabe9bf7",
+    "semantic_hash": "b62d901ddbbaad941738a66efabe9bf7"
+  },
+  "/root/telegram-bot/src/main.py": {
+    "mtime": 1780412823.8848543,
+    "ast_hash": "862f83c39db31f0fa724c85a00a511f0",
+    "semantic_hash": "862f83c39db31f0fa724c85a00a511f0"
+  },
+  "/root/telegram-bot/src/rag.py": {
+    "mtime": 1780668729.2299175,
+    "ast_hash": "849a2f2db3781d2796b43687b10fc8cd",
+    "semantic_hash": "849a2f2db3781d2796b43687b10fc8cd"
+  },
+  "/root/telegram-bot/src/routes/__init__.py": {
+    "mtime": 1780412823.8858545,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/root/telegram-bot/src/routes/admin.py": {
+    "mtime": 1780490618.2593403,
+    "ast_hash": "cd44a90945460b9fb5fbf703efa1e921",
+    "semantic_hash": "cd44a90945460b9fb5fbf703efa1e921"
+  },
+  "/root/telegram-bot/src/routes/api.py": {
+    "mtime": 1780615011.9812012,
+    "ast_hash": "9a9852d3a5eb2380c4242d708f5a2a8f",
+    "semantic_hash": "9a9852d3a5eb2380c4242d708f5a2a8f"
+  },
+  "/root/telegram-bot/src/routes/webhook.py": {
+    "mtime": 1780412823.8868544,
+    "ast_hash": "caf13aee845ed5736b6967f74d00682c",
+    "semantic_hash": "caf13aee845ed5736b6967f74d00682c"
+  },
+  "/root/telegram-bot/src/security.py": {
+    "mtime": 1779904722.9749184,
+    "ast_hash": "b8298a7ac0353818c4f02650def4d7ef",
+    "semantic_hash": "b8298a7ac0353818c4f02650def4d7ef"
+  },
+  "/root/telegram-bot/src/services/__init__.py": {
+    "mtime": 1780412823.8868544,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/root/telegram-bot/src/services/jobs.py": {
+    "mtime": 1780431774.8426917,
+    "ast_hash": "8d3d8517828de1f82e85b17ee87cafcb",
+    "semantic_hash": "8d3d8517828de1f82e85b17ee87cafcb"
+  },
+  "/root/telegram-bot/src/services/ngrok.py": {
+    "mtime": 1780412823.8878543,
+    "ast_hash": "dbe05c2470b991c08cb86b9dbaf36bdd",
+    "semantic_hash": "dbe05c2470b991c08cb86b9dbaf36bdd"
+  },
+  "/root/telegram-bot/src/services/prompts.py": {
+    "mtime": 1780609063.0348573,
+    "ast_hash": "f49617bb28c0c0191b1ffbad2c1c0e7a",
+    "semantic_hash": "f49617bb28c0c0191b1ffbad2c1c0e7a"
+  },
+  "/root/telegram-bot/src/services/stt.py": {
+    "mtime": 1780412823.8878543,
+    "ast_hash": "fc26f1e65ee68bc082a3cf74a4b3d3db",
+    "semantic_hash": "fc26f1e65ee68bc082a3cf74a4b3d3db"
+  },
+  "/root/telegram-bot/src/services/tenant_bot.py": {
+    "mtime": 1780412823.8888543,
+    "ast_hash": "45c23a997f23bc3072564182b9231e43",
+    "semantic_hash": "45c23a997f23bc3072564182b9231e43"
+  },
+  "/root/telegram-bot/src/services/upload.py": {
+    "mtime": 1780457246.6702697,
+    "ast_hash": "0e34d2a058542f364cd47f6d5a6165e6",
+    "semantic_hash": "0e34d2a058542f364cd47f6d5a6165e6"
+  },
+  "/root/telegram-bot/src/services/wa_processor.py": {
+    "mtime": 1780490618.2603402,
+    "ast_hash": "75efdead14dcca46a173ec9442d21f13",
+    "semantic_hash": "75efdead14dcca46a173ec9442d21f13"
+  },
+  "/root/telegram-bot/src/state.py": {
+    "mtime": 1780412823.8898544,
+    "ast_hash": "b6df4d7ef70962d86ec9b339dcc3a41a",
+    "semantic_hash": "b6df4d7ef70962d86ec9b339dcc3a41a"
+  },
+  "/root/telegram-bot/tests/__init__.py": {
+    "mtime": 1779840275.614171,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/root/telegram-bot/tests/conftest.py": {
+    "mtime": 1780412823.8928542,
+    "ast_hash": "078ea3c1bc1fc57e9f4cabd51e7992d4",
+    "semantic_hash": "078ea3c1bc1fc57e9f4cabd51e7992d4"
+  },
+  "/root/telegram-bot/tests/fixtures/eval_pairs.json": {
+    "mtime": 1780457246.6712697,
+    "ast_hash": "426b33a13065d9664cb6e7138b2e1616",
+    "semantic_hash": "426b33a13065d9664cb6e7138b2e1616"
+  },
+  "/root/telegram-bot/tests/test_admin_redesign.py": {
+    "mtime": 1780416440.5108101,
+    "ast_hash": "ed5b61b0f50a608f162787def25717ed",
+    "semantic_hash": "ed5b61b0f50a608f162787def25717ed"
+  },
+  "/root/telegram-bot/tests/test_edge_cases.py": {
+    "mtime": 1780586338.9718473,
+    "ast_hash": "f8fe69a7a197a67e47916db5c0cb65ce",
+    "semantic_hash": "f8fe69a7a197a67e47916db5c0cb65ce"
+  },
+  "/root/telegram-bot/tests/test_image_buffer.py": {
+    "mtime": 1780433151.9636207,
+    "ast_hash": "2a300bd98328e8be9ee2deea44ccd374",
+    "semantic_hash": "2a300bd98328e8be9ee2deea44ccd374"
+  },
+  "/root/telegram-bot/tests/test_rag_pipeline.py": {
+    "mtime": 1780615085.243643,
+    "ast_hash": "dd7961ca8c799cba716b9e35c6c33849",
+    "semantic_hash": "dd7961ca8c799cba716b9e35c6c33849"
+  },
+  "/root/telegram-bot/tests/test_recall.py": {
+    "mtime": 1780457246.6732697,
+    "ast_hash": "1a6554dfad639305196f2aa42e47a6db",
+    "semantic_hash": "1a6554dfad639305196f2aa42e47a6db"
+  },
+  "/root/telegram-bot/tests/test_security.py": {
+    "mtime": 1779904722.9759183,
+    "ast_hash": "f0fedb54c61f027be7846655c3609585",
+    "semantic_hash": "f0fedb54c61f027be7846655c3609585"
+  },
+  "/root/telegram-bot/tests/test_tool_use.py": {
+    "mtime": 1780490618.2603402,
+    "ast_hash": "be33f0f2ac1db12b523284adb8aa48f4",
+    "semantic_hash": "be33f0f2ac1db12b523284adb8aa48f4"
+  },
+  "/root/telegram-bot/tests/test_vision.py": {
+    "mtime": 1780431774.8436916,
+    "ast_hash": "016c975d0a984babca3f0d679ebfad4e",
+    "semantic_hash": "016c975d0a984babca3f0d679ebfad4e"
+  },
+  "/root/telegram-bot/tests/test_web_search.py": {
+    "mtime": 1780412823.8968544,
+    "ast_hash": "45168e99de3a82b13df4644af6114fd8",
+    "semantic_hash": "45168e99de3a82b13df4644af6114fd8"
+  },
+  "/root/telegram-bot/tests/test_whatsapp_adapter.py": {
+    "mtime": 1780412823.8978543,
+    "ast_hash": "90254a655a5efb73778360738cc5625b",
+    "semantic_hash": "90254a655a5efb73778360738cc5625b"
+  },
+  "/root/telegram-bot/tests/test_whatsapp_integration.py": {
+    "mtime": 1780412823.8988543,
+    "ast_hash": "3c12680240bd50f445f3663bdc985baa",
+    "semantic_hash": "3c12680240bd50f445f3663bdc985baa"
+  },
+  "/root/telegram-bot/CHANGELOG.md": {
+    "mtime": 1780615278.195151,
+    "ast_hash": "ae1a7035d7e65fcdc3440bc5ef4d6952",
+    "semantic_hash": "ae1a7035d7e65fcdc3440bc5ef4d6952"
+  },
+  "/root/telegram-bot/CLAUDE.md": {
+    "mtime": 1780887166.0237434,
+    "ast_hash": "8457998210e83e6951cf1b08a13fb855",
+    "semantic_hash": "8457998210e83e6951cf1b08a13fb855"
+  },
+  "/root/telegram-bot/README.md": {
+    "mtime": 1780012260.5940475,
+    "ast_hash": "7e7beb688f2a813ad3c82326b7e98e9b",
+    "semantic_hash": "7e7beb688f2a813ad3c82326b7e98e9b"
+  },
+  "/root/telegram-bot/TODOS.md": {
+    "mtime": 1780614051.6915712,
+    "ast_hash": "129bb8ca60e3164f5b17e99b4e7fe263",
+    "semantic_hash": "129bb8ca60e3164f5b17e99b4e7fe263"
+  },
+  "/root/telegram-bot/docker-compose.yml": {
+    "mtime": 1780665886.431631,
+    "ast_hash": "87b9e1d58afc25a7d3b343f93a2335f8",
+    "semantic_hash": "87b9e1d58afc25a7d3b343f93a2335f8"
+  },
+  "/root/telegram-bot/documents/acme_fitness.md": {
+    "mtime": 1779840275.610171,
+    "ast_hash": "70c3b7b6085b7261b623de7a8fb20fc7",
+    "semantic_hash": "70c3b7b6085b7261b623de7a8fb20fc7"
+  },
+  "/root/telegram-bot/documents/plantilla.md": {
+    "mtime": 1780009924.0397205,
+    "ast_hash": "a855f4faf47b782f599ee8bd5adcdb3c",
+    "semantic_hash": "a855f4faf47b782f599ee8bd5adcdb3c"
+  },
+  "/root/telegram-bot/requirements.txt": {
+    "mtime": 1780412823.8788545,
+    "ast_hash": "3e0ebd4939337b464186bd5a69d154e0",
+    "semantic_hash": "3e0ebd4939337b464186bd5a69d154e0"
+  },
+  "/root/telegram-bot/sp-diagnostico-histologico.md": {
+    "mtime": 1780665318.0702865,
+    "ast_hash": "4fa8397df5162936b032ca5efa680fb8",
+    "semantic_hash": "4fa8397df5162936b032ca5efa680fb8"
+  },
+  "/root/telegram-bot/src/templates/admin/base.html": {
+    "mtime": 1780412823.8918543,
+    "ast_hash": "12ec2e84a64ee5541a1a2071c3e15740",
+    "semantic_hash": "12ec2e84a64ee5541a1a2071c3e15740"
+  },
+  "/root/telegram-bot/src/templates/admin/index.html": {
+    "mtime": 1780412823.8918543,
+    "ast_hash": "ffc39a6dee2b9d552031dfcf69ab9f94",
+    "semantic_hash": "ffc39a6dee2b9d552031dfcf69ab9f94"
+  },
+  "/root/telegram-bot/src/templates/admin/queries.html": {
+    "mtime": 1780412823.8928542,
+    "ast_hash": "ce6f0dff4e38e6ab8dfc64eeab586e5b",
+    "semantic_hash": "ce6f0dff4e38e6ab8dfc64eeab586e5b"
+  }
+}
