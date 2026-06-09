@@ -364,14 +364,20 @@ def test_build_system_prompt_includes_partial_match_guidance():
     """System prompt must instruct the LLM to provide near-match info instead
     of saying 'not found' when context has a similar term."""
     from services.prompts import build_system_prompt
+    # Without example_questions: dynamic prompt uses expertise_area
     prompt = build_system_prompt("laboratorio de patología")
     assert "COINCIDENCIAS PARCIALES" in prompt
-    assert "similar o equivalente" in prompt
+    assert "laboratorio de patología" in prompt  # expertise_area appears in partial-match example
     # Must instruct to offer what's found and note the difference
     assert "proporciona" in prompt or "proporciona la información" in prompt
     # Partial-match rules must have priority — off_topic only when NO relation at all
     assert "PRIORIDAD ALTA" in prompt or "prevalecen" in prompt
     assert "NO HAY NINGUNA relación" in prompt
+
+    # With example_questions: dynamic prompt uses first example
+    prompt = build_system_prompt("patología", example_questions=["biópsia de apéndice"])
+    assert "COINCIDENCIAS PARCIALES" in prompt
+    assert "biópsia de apéndice" in prompt  # example_question appears in partial-match example
 
 
 def test_build_system_prompt_uses_latam_spanish():

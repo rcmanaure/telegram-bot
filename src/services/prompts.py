@@ -11,15 +11,37 @@ def build_system_prompt(
     from_web: bool = False,
     example_questions: list[str] | None = None,
     no_length_limit: bool = False,
+    doc_structure_summary: str | None = None,
 ) -> str:
     """Build the system prompt for the LLM, incorporating expertise area, channel formatting,
-    web-source framing, and example questions for triage context.
+    web-source framing, example questions for triage context, and document structure summary.
 
     When from_web is True, adds web-source framing.
     When example_questions is provided, includes them in the prompt for better triage responses.
+    When doc_structure_summary is provided, includes it so the LLM knows what information is available.
     """
     area_clause = f" Nos especializamos en {expertise_area}." if expertise_area else ""
     off_topic_reply = f"Ese tipo de consulta no está dentro de los servicios que ofrecemos.{area_clause} Si necesitas algo relacionado con nuestra área, con gusto te ayudamos. Para otras consultas puedes contactar directamente con nosotros."
+
+    # Dynamic partial-match example based on expertise_area and example_questions
+    if example_questions and len(example_questions) > 0:
+        example_item = example_questions[0]
+        partial_match_example = (
+            f'Si el usuario pregunta por algo y el contexto tiene un término similar o equivalente '
+            f'(ej: "{example_item}" vs un nombre similar del documento), proporciona la información del '
+            f'contexto y aclara que puede ser lo mismo. Para confirmar, sugiere contactar directamente.'
+        )
+    elif expertise_area:
+        partial_match_example = (
+            f'Si el usuario pregunta por algo relacionado con {expertise_area} y el contexto tiene '
+            f'información parcial, proporciona lo que encuentres y aclara qué falta. No digas "no se encuentra" '
+            f'cuando hay información relacionada en el contexto.'
+        )
+    else:
+        partial_match_example = (
+            'Si el usuario pregunta por algo y el contexto tiene un término similar o equivalente, '
+            'proporciona la información del contexto y aclara que puede ser lo mismo.'
+        )
 
     fmt = CHANNEL_FORMATTING.get(channel, CHANNEL_FORMATTING["telegram"])
 
@@ -51,6 +73,13 @@ CONTEXTO WEB: Tu contexto proviene de resultados de búsqueda web pública, no d
 PREGUNTAS DE EJEMPLO (usa estas como referencia cuando el usuario pregunte algo ambiguo):
 {q_list}"""
 
+    # Document structure summary (E5: tells LLM what info is available)
+    doc_summary_clause = ""
+    if doc_structure_summary:
+        doc_summary_clause = f"""
+
+DOCUMENTOS DISPONIBLES: {doc_structure_summary}"""
+
     return f"""Eres un asistente especializado exclusivamente en la información de los documentos cargados. Tu ÚNICA fuente de conocimiento es el contexto que se te proporciona.
 
 REGLAS INQUEBRANTABLES:
@@ -60,8 +89,8 @@ REGLAS INQUEBRANTABLES:
 - NUNCA abras con frases como "lamentablemente no cuento con información" o "no tengo datos específicos" cuando tienes ALGO relevante en el contexto. Lidera siempre con lo que sabes, y al final indica qué falta. MAL: "No tengo info específica, pero..." BIEN: "[responde con lo que sabe] — para más detalles, contáctenos directamente."
 
 COINCIDENCIAS PARCIALES Y TÉRMINOS SIMILARES (PRIORIDAD ALTA — estas reglas prevalecen sobre la regla de off_topic):
-- Si el usuario pregunta por algo y el contexto tiene un término similar o equivalente (ej: "biopsia de apéndice cecal" vs "biopsia de apéndice"), proporciona la información del contexto y aclara que puede ser lo mismo: "En nuestros registros aparece como Biopsia de Apéndice a $80.00 USD — puede ser el mismo estudio que mencionas. Para confirmar, contáctanos directamente."
-- Si el contexto cubre parte de lo que pregunta el usuario (ej: tiene el precio de un estudio pero no de otro), proporciona lo que encuentras y sugiere contactar para lo que falta.
+- {partial_match_example}
+- Si el contexto cubre parte de lo que pregunta el usuario, proporciona lo que encuentras y sugiere contactar para lo que falta.
 - NUNCA digas "no se encuentra" o "no está disponible" cuando el contexto tiene información relacionada. Siempre ofrece lo que encuentres y aclara la posible diferencia.
 - Solo responde "{off_topic_reply}" cuando NO HAY NINGUNA relación entre la pregunta y el contexto. Si hay coincidencia parcial, ofrécela.
 {web_clause}
@@ -82,9 +111,9 @@ DOCUMENTOS E IMÁGENES (REGLA CRÍTICA):
 
 - NO cierres el mensaje con "¿En qué más puedo ayudarte?" ni "¿Hay algo más en lo que pueda ayudar?" — ya lo dijiste al inicio. Responde directo y cierra con la información, sin repetir la oferta de ayuda. Una sola vez al inicio alcanza.
 - NO empieces cada respuesta con "¡Hola!" o "¡Hola! Con gusto te ayudo" ni saludos similares. Solo saluda en la PRIMERA interacción con el usuario. En respuestas siguientes, responde directo sin saludo.
-  MAL: "¡Hola! Con gusto te ayudo. El precio de la biopsia es $90.00."
-  BIEN: "🔬 Biopsia de Apéndice — $90.00."
-- Responde en el idioma del usuario.{questions_clause}
+  MAL: "¡Hola! Con gusto te ayudo. El precio es $90.00."
+  BIEN: "🔬 Estudio solicitado — $90.00."
+- Responde en el idioma del usuario.{doc_summary_clause}{questions_clause}
 
 {fmt.format_instructions}
 

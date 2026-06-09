@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from db import AsyncSessionLocal, DocumentChunk, Conversation, UnansweredQuery, Tenant
+from sqlalchemy import update
 from config import settings
 from config_overlay import get_setting, get_setting_int
 from llm import (
@@ -421,34 +422,46 @@ async def retrieve_catalog_overview(
 ) -> list[dict]:
     """Return one representative chunk per catalog section for broad overview queries.
 
-    Similarity search can't handle "what categories do you have" queries — it always
-    concentrates top-k results in the sections that happen to match query terms best,
-    starving all other sections. This function uses DISTINCT ON section header to
-    guarantee exactly one representative chunk per section regardless of similarity.
-
-    Only returns chunks whose content starts with a markdown section header (## ...),
-    which is the format _split_markdown_tables produces for table-row chunks.
-    Falls back gracefully to [] if the namespace has no such structured chunks.
+    Prefers typed chunks (chunk_type = 'section_header') for efficiency.
+    Falls back to regex heuristic (content ~ '^## ') for existing untyped data.
     """
+    # Try typed chunks first (E4 enrichment)
     result = await db.execute(
         text("""
-            SELECT DISTINCT ON (substring(content FROM '^## ([^\n]+)'))
-                   content, source, page
+            SELECT content, source, page, chunk_type, metadata
             FROM document_chunks
             WHERE namespace = :namespace
-              AND content ~ '^## '
+              AND chunk_type = 'section_header'
               AND embedding IS NOT NULL
-            ORDER BY substring(content FROM '^## ([^\n]+)'), id
         """),
         {"namespace": namespace},
     )
     rows = result.fetchall()
+
+    if not rows:
+        # Fallback: regex heuristic for pre-existing untyped data
+        result = await db.execute(
+            text("""
+                SELECT DISTINCT ON (substring(content FROM '^## ([^\n]+)'))
+                       content, source, page
+                FROM document_chunks
+                WHERE namespace = :namespace
+                  AND content ~ '^## '
+                  AND embedding IS NOT NULL
+                ORDER BY substring(content FROM '^## ([^\n]+)'), id
+            """),
+            {"namespace": namespace},
+        )
+        rows = result.fetchall()
+
     return [
         {
             "content": row.content,
             "source": row.source,
             "page": row.page,
             "similarity": 0.5,
+            "chunk_type": getattr(row, "chunk_type", None),
+            "metadata": getattr(row, "metadata", None) if hasattr(row, "metadata") else None,
         }
         for row in rows
     ]
@@ -458,96 +471,204 @@ async def retrieve_full_catalog(
     db: AsyncSession,
     namespace: str,
 ) -> list[dict]:
-    """Return ALL procedure chunks ordered by section for full price-list queries.
+    """Return ALL catalog-relevant chunks ordered by section for full price-list queries.
 
-    Unlike retrieve_catalog_overview (1 per section), this returns every procedure
-    in the catalog. Used when the user asks for prices across all categories —
-    the LLM needs the complete dataset to enumerate every item.
+    Prefers typed chunks (chunk_type IN ('price_row', 'section_header')) for precision.
+    Falls back to regex heuristic (content ~ '^## ') for existing untyped data.
     """
+    # Try typed chunks first (E4 enrichment)
     result = await db.execute(
         text("""
-            SELECT content, source, page
+            SELECT content, source, page, chunk_type, metadata
             FROM document_chunks
             WHERE namespace = :namespace
-              AND content ~ '^## '
+              AND chunk_type IN ('price_row', 'section_header')
               AND embedding IS NOT NULL
-            ORDER BY substring(content FROM '^## ([^\n]+)'), id
+            ORDER BY
+              CASE WHEN chunk_type = 'section_header' THEN 0 ELSE 1 END,
+              id
         """),
         {"namespace": namespace},
     )
     rows = result.fetchall()
+
+    if not rows:
+        # Fallback: regex heuristic for pre-existing untyped data
+        result = await db.execute(
+            text("""
+                SELECT content, source, page
+                FROM document_chunks
+                WHERE namespace = :namespace
+                  AND content ~ '^## '
+                  AND embedding IS NOT NULL
+                ORDER BY substring(content FROM '^## ([^\n]+)'), id
+            """),
+            {"namespace": namespace},
+        )
+        rows = result.fetchall()
+
     return [
         {
             "content": row.content,
             "source": row.source,
             "page": row.page,
             "similarity": 0.5,
+            "chunk_type": getattr(row, "chunk_type", None),
+            "metadata": getattr(row, "metadata", None) if hasattr(row, "metadata") else None,
         }
         for row in rows
     ]
 
 
-_CATALOG_SECTION_EMOJI: dict[str, str] = {
-    "GINECOLÓGICO": "🌸",
-    "GLÁNDULA MAMARIA": "🎀",
-    "SISTEMA UROLÓGICO Y GENITAL MASCULINO": "🔵",
-    "SISTEMA RESPIRATORIO": "🫁",
-    "SISTEMA DIGESTIVO": "🍽️",
-    "SISTEMA ENDOCRINO": "🦋",
-    "SISTEMA CARDIO-CIRCULATORIO": "❤️",
-    "SISTEMA OSTEO-MUSCULAR Y PARTES BLANDAS": "🦴",
-    "SISTEMA NERVIOSO CENTRAL Y PERIFÉRICO": "🧠",
-    "SISTEMA OCULAR": "👁️",
-    "SISTEMA HEMATOPOYÉTICO Y GANGLIONAR LINFÁTICO": "🩸",
-    "PIEL Y ANEXOS CUTÁNEOS": "🧴",
-    "ESTUDIOS CITOLÓGICOS ESPECÍFICOS": "🔬",
-    "ESTUDIOS ESPECIALES": "❄️",
-}
+_CATALOG_LLM_PROMPT = """\
+Eres un asistente que formatea listas de precios. A continuación recibirás fragmentos
+de un catálogo de servicios/productos. Tu trabajo es listar TODOS los ítems exactamente
+como aparecen, organizados por sección.
 
-_CATALOG_ROW_RE = re.compile(
-    r'^\s*\|\s*[A-Z]{2,4}\d+\s*\|\s*(.+?)\s*\|\s*(\$[\d,.]+)\s*\|'
-)
-_CATALOG_HEADER_RE = re.compile(r'^## (.+)')
+REGLAS INQUEBRANTABLES:
+- Lista CADA ítem que aparece en los fragmentos. No omitas ninguno.
+- No inventes ítems, precios, ni secciones que no estén en los fragmentos.
+- Usa los nombres exactos del documento. No parafrasees ni simplifiques.
+- Agrupa por sección cuando los fragmentos tengan encabezados de sección.
+- Si un ítem tiene precio, inclúyelo. Si no tiene precio, inclúyelo igual.
+- Usa el emoji que aparece en el encabezado de sección si existe. Si no, usa el emoji
+  más apropiado para esa sección.
+- Formato: *Sección*\n emoji Nombre del ítem — precio\n
+- Si el documento no tiene formato de tabla o lista de precios, responde con lo que
+  encuentres organizado de la forma más clara posible.
+
+Fragmentos:
+{chunks_text}
+"""
+
+_CATALOG_RETRY_PROMPT = """\
+REINTENTO: Tu respuesta anterior omitió demasiados ítems. Debes incluir TODOS los ítems
+de los fragmentos. Lista CADA ítem exactamente como aparece. No omitas ninguno.
+
+Fragmentos:
+{chunks_text}
+"""
+
+_CATALOG_BATCH_SIZE = 30  # chunks per LLM call for large catalogs
 
 
-def _format_catalog_as_text(chunks: list[dict]) -> str:
-    """Format a complete price list from catalog chunks — no LLM required.
+async def _format_catalog_with_llm(
+    chunks: list[dict],
+    channel: str = "telegram",
+    on_failover: Callable[[], Awaitable[None]] | None = None,
+) -> str:
+    """Format a complete price list using LLM, with hallucination guard.
 
-    Parses each chunk's "## SECTION\n| CODE | Description | $PRICE |" structure
-    and emits a grouped, Telegram-formatted price list.
+    Replaces the old regex-based _format_catalog_as_text with an LLM-first approach
+    that works for any document format (not just markdown tables with CODE|DESC|PRICE).
 
-    Bypasses the LLM entirely: avoids context-window limits, hallucination, and
-    the false "data not loaded" response the LLM produces when given only 1
-    item per section.
+    Item-count verification: if the LLM output has ≤50% of the distinct items found
+    in the chunks, retry once with a stricter prompt. If still failing, fall back to
+    listing the raw chunks as-is.
     """
-    section_items: dict[str, list[tuple[str, str]]] = {}
+    # Count distinct items in source chunks for hallucination guard
+    source_item_count = 0
+    for c in chunks:
+        ct = c.get("chunk_type")
+        if ct == "price_row":
+            source_item_count += 1
+        elif ct == "section_header":
+            pass  # headers aren't items
+        elif ct is None:
+            # Fallback: count lines that look like price rows in untyped chunks
+            for line in c["content"].split("\n"):
+                if "|" in line and "$" in line:
+                    source_item_count += 1
+
+    # For large catalogs, batch the chunks
+    if len(chunks) > _CATALOG_BATCH_SIZE:
+        batches = [chunks[i:i + _CATALOG_BATCH_SIZE] for i in range(0, len(chunks), _CATALOG_BATCH_SIZE)]
+    else:
+        batches = [chunks]
+
+    formatted_sections: list[str] = []
+
+    for batch in batches:
+        chunks_text = "\n\n---\n\n".join(c["content"] for c in batch)
+        messages = [
+            {"role": "system", "content": _CATALOG_LLM_PROMPT.format(chunks_text=chunks_text)},
+            {"role": "user", "content": "Formatea la lista completa de precios."},
+        ]
+        result = await call_chat(messages, max_tokens=2000, temperature=0.0,
+                                 channel=channel, on_failover=on_failover)
+
+        # Hallucination guard: count items in LLM output vs source
+        if source_item_count > 0:
+            llm_item_lines = sum(1 for line in result.split("\n")
+                                 if line.strip() and not line.strip().startswith("*") and "—" in line)
+            if llm_item_lines <= source_item_count * 0.5:
+                logger.warning("catalog_hallucination_guard items=%d llm_items=%d — retrying",
+                               source_item_count, llm_item_lines)
+                retry_messages = [
+                    {"role": "system", "content": _CATALOG_RETRY_PROMPT.format(chunks_text=chunks_text)},
+                    {"role": "user", "content": "Formatea la lista completa de precios. No omitas ningún ítem."},
+                ]
+                result = await call_chat(retry_messages, max_tokens=2000, temperature=0.0,
+                                         channel=channel, on_failover=on_failover)
+                llm_item_lines = sum(1 for line in result.split("\n")
+                                     if line.strip() and not line.strip().startswith("*") and "—" in line)
+                if llm_item_lines <= source_item_count * 0.5:
+                    logger.warning("catalog_hallucination_guard still failing items=%d llm_items=%d — raw fallback",
+                                   source_item_count, llm_item_lines)
+                    formatted_sections.append(_format_catalog_raw(batch))
+                    continue
+
+        formatted_sections.append(result)
+
+    if len(formatted_sections) == 1:
+        return formatted_sections[0]
+
+    return "\n\n".join(formatted_sections)
+
+
+def _format_catalog_raw(chunks: list[dict]) -> str:
+    """Fallback: list raw chunk content when LLM formatting fails verification."""
+    sections: dict[str, list[str]] = {}
     section_order: list[str] = []
 
-    for chunk in chunks:
-        content = chunk["content"]
-        header_m = _CATALOG_HEADER_RE.match(content)
-        if not header_m:
-            continue
-        section = header_m.group(1).strip()
-        if section not in section_items:
-            section_items[section] = []
-            section_order.append(section)
-        for line in content.split("\n"):
-            m = _CATALOG_ROW_RE.match(line)
-            if m:
-                section_items[section].append((m.group(1).strip(), m.group(2).strip()))
+    for c in chunks:
+        content = c["content"]
+        metadata = c.get("metadata") or {}
+        ct = c.get("chunk_type")
 
-    # Drop sections with no priced procedures (e.g. schedule tables)
-    section_order = [s for s in section_order if section_items.get(s)]
+        if ct == "section_header":
+            section_name = metadata.get("section_name", content.strip().lstrip("#").strip())
+            if section_name not in sections:
+                sections[section_name] = []
+                section_order.append(section_name)
+            sections[section_name].append(content)
+        else:
+            # Find section header in content (## ...)
+            header = ""
+            for line in content.split("\n"):
+                if line.startswith("## "):
+                    header = line[3:].strip()
+                    break
+            if header and header not in sections:
+                sections[header] = []
+                section_order.append(header)
+            target = sections.get(header, None)
+            if target is not None:
+                target.append(content)
+            else:
+                if "General" not in sections:
+                    sections["General"] = []
+                    section_order.append("General")
+                sections["General"].append(content)
+
     if not section_order:
         return "No encontré información de precios en los documentos."
 
-    lines = ["*Lista de Precios*\n"]
+    lines = []
     for section in section_order:
-        emoji = _CATALOG_SECTION_EMOJI.get(section.upper(), "🔬")
         lines.append(f"*{section}*")
-        for desc, price in section_items[section]:
-            lines.append(f"{emoji} {desc} — `{price}`")
+        for text in sections[section]:
+            lines.append(text.strip())
         lines.append("")
 
     return "\n".join(lines).rstrip()
@@ -558,6 +679,206 @@ def _format_catalog_as_text(chunks: list[dict]) -> str:
 MIN_SIMILARITY = 0.20  # chunks below this threshold are considered off-topic
 LOW_MIN_SIMILARITY = 0.10  # second-pass threshold for approximate matches
 VISION_EXTRACT_MAX_TOKENS = 80  # short enough to avoid prose, enough for comma-separated search terms
+
+# ─── Chunk type classification (E4: multi-tenant RAG generalization) ────────────
+
+ALLOWED_CHUNK_TYPES = frozenset({
+    "price_row",       # individual item with price/code (e.g. "| GIN001 | Biopsia ... | $80 |")
+    "faq_answer",      # Q&A pair (e.g. "### ¿Cuánto cuesta...?\nRespuesta: ...")
+    "policy_statement",  # rules, terms, conditions (e.g. "El pago es obligatorio...")
+    "section_header",  # category/section heading (e.g. "## GINECOLÓGICO")
+    "general_info",    # everything else (hours, contact info, descriptions)
+})
+
+_CLASSIFY_SEMAPHORE = asyncio.Semaphore(5)  # limit concurrent classification calls
+
+
+async def classify_chunk_type(chunk_content: str) -> str:
+    """Classify a single chunk into one of ALLOWED_CHUNK_TYPES using LLM.
+
+    Returns 'general_info' on any failure (safe default).
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": (
+                "Classify this text chunk as exactly one of:\n"
+                "- price_row: an individual item with a price, code, or catalog entry\n"
+                "- faq_answer: a question and answer pair\n"
+                "- policy_statement: rules, terms, conditions, or requirements\n"
+                "- section_header: a category or section heading\n"
+                "- general_info: anything else (hours, contact info, descriptions)\n\n"
+                "Reply with ONLY the classification word, nothing else.\n\n"
+                f"Chunk:\n{chunk_content[:500]}"
+            ),
+        },
+    ]
+    try:
+        async with _CLASSIFY_SEMAPHORE:
+            raw = await call_chat(messages, max_tokens=10, temperature=0.0)
+        result = raw.strip().lower()
+        if result in ALLOWED_CHUNK_TYPES:
+            return result
+        logger.warning("classify_chunk_type: unexpected result=%r, defaulting to general_info", result)
+        return "general_info"
+    except Exception as e:
+        logger.warning("classify_chunk_type failed: %s — defaulting to general_info", e)
+        return "general_info"
+
+
+async def classify_chunks_batch(chunks: list[dict]) -> list[str]:
+    """Classify a batch of chunks in parallel. Returns a list of chunk_type strings."""
+    return await asyncio.gather(*[classify_chunk_type(c["content"]) for c in chunks])
+
+
+async def generate_section_emoji(section_name: str) -> str:
+    """Generate a single emoji for a section name using LLM.
+
+    Returns the emoji character, or '🔬' on failure (safe default).
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": (
+                f"Pick exactly one emoji that best represents this section: {section_name}\n"
+                "Reply with only the emoji character, nothing else."
+            ),
+        },
+    ]
+    try:
+        async with _CLASSIFY_SEMAPHORE:
+            raw = await call_chat(messages, max_tokens=5, temperature=0.0)
+        emoji = raw.strip()
+        # Validate: single emoji or short emoji sequence (some emojis are 2+ chars with ZWJ)
+        if emoji and len(emoji) <= 8:
+            return emoji
+        logger.warning("generate_section_emoji: unexpected result=%r, defaulting to 🔬", emoji)
+        return "🔬"
+    except Exception as e:
+        logger.warning("generate_section_emoji failed: %s — defaulting to 🔬", e)
+        return "🔬"
+
+
+async def generate_doc_structure_summary(
+    chunk_types: list[str],
+    section_names: list[str],
+    total_chunks: int,
+) -> str:
+    """Generate a 2-3 sentence summary of the document structure for the system prompt.
+
+    Uses pre-computed chunk_type counts and section names (no LLM call needed).
+    """
+    from collections import Counter
+    type_counts = Counter(chunk_types)
+    price_count = type_counts.get("price_row", 0)
+    faq_count = type_counts.get("faq_answer", 0)
+    policy_count = type_counts.get("policy_statement", 0)
+    header_count = type_counts.get("section_header", 0)
+
+    parts = []
+    if price_count > 0:
+        parts.append(f"{price_count} ítems con precio")
+    if faq_count > 0:
+        parts.append(f"{faq_count} preguntas frecuentes")
+    if policy_count > 0:
+        parts.append(f"{policy_count} políticas o condiciones")
+    if header_count > 0:
+        parts.append(f"{header_count} secciones")
+
+    if not parts:
+        return f"Documento con {total_chunks} fragmentos de información."
+
+    content_desc = ", ".join(parts)
+
+    if section_names:
+        # Up to 5 section names, then "y más"
+        if len(section_names) > 5:
+            sections_str = ", ".join(section_names[:5]) + ", y más"
+        else:
+            sections_str = ", ".join(section_names)
+        return f"Documento organizado en secciones ({sections_str}). Contiene {content_desc}."
+    return f"Documento con {content_desc}."
+
+
+async def post_index_enrichment(
+    db: AsyncSession,
+    namespace: str,
+    tenant_id: int | None,
+    chunks: list[dict],
+) -> None:
+    """Post-index enrichment: classify chunks, generate emojis, and build doc structure summary.
+
+    Called after index_chunks() completes. Runs as an async background task
+    so it doesn't block the upload HTTP response. On failure, chunks remain
+    usable with NULL chunk_type (fallback heuristics in query pipeline).
+    """
+    if not chunks or not tenant_id:
+        return
+
+    try:
+        # 1. Classify chunk types in parallel
+        chunk_types = await classify_chunks_batch(chunks)
+
+        # 2. Extract section headers and generate emojis for them
+        section_names: list[str] = []
+        section_emojis: dict[str, str] = {}
+        for i, chunk in enumerate(chunks):
+            content = chunk.get("content", "")
+            # Detect section headers: lines starting with ##
+            lines = content.split("\n", 1)
+            if lines[0].startswith("#"):
+                section_name = lines[0].lstrip("#").strip()
+                if section_name and section_name not in section_emojis:
+                    section_names.append(section_name)
+                    emoji = await generate_section_emoji(section_name)
+                    section_emojis[section_name] = emoji
+
+        # 3. Update chunks with chunk_type and metadata
+        chunk_type_map: dict[str, str] = {}  # content → chunk_type (for dedup)
+        for chunk, ctype in zip(chunks, chunk_types):
+            chunk_type_map[chunk["content"][:200]] = ctype
+
+        # Build metadata per chunk
+        for i, (chunk, ctype) in enumerate(zip(chunks, chunk_types)):
+            metadata: dict = {}
+            lines = chunk.get("content", "").split("\n", 1)
+            if lines[0].startswith("#"):
+                section_name = lines[0].lstrip("#").strip()
+                metadata["section_name"] = section_name
+                if section_name in section_emojis:
+                    metadata["section_emoji"] = section_emojis[section_name]
+
+            # Update the chunk row in DB
+            await db.execute(
+                update(DocumentChunk)
+                .where(
+                    DocumentChunk.namespace == namespace,
+                    DocumentChunk.source == chunk["source"],
+                    DocumentChunk.content == chunk["content"],
+                )
+                .values(
+                    chunk_type=ctype,
+                    metadata_=metadata if metadata else None,
+                )
+            )
+
+        # 4. Generate and store doc_structure_summary on Tenant
+        doc_summary = generate_doc_structure_summary(chunk_types, section_names, len(chunks))
+        if tenant_id:
+            await db.execute(
+                update(Tenant)
+                .where(Tenant.id == tenant_id)
+                .values(doc_structure_summary=doc_summary)
+            )
+
+        await db.commit()
+        logger.info(
+            "post_index_enrichment ns=%s: classified %d chunks, %d sections, summary=%r",
+            namespace, len(chunks), len(section_names), doc_summary[:80],
+        )
+    except Exception as e:
+        logger.warning("post_index_enrichment failed ns=%s: %s", namespace, e, exc_info=True)
+        # Non-critical: chunks are still usable with NULL chunk_type
 
 # ─── Illegible image detection ─────────────────────────────────────────────────
 
@@ -649,7 +970,7 @@ async def _hyde_query(question: str, expertise_area: str) -> str:
             "content": (
                 f"Eres un especialista en {expertise_area}. Dado el siguiente texto de un cliente, "
                 f"escribe el nombre técnico/formal del procedimiento o servicio como aparecería "
-                f"en una lista de precios o catálogo de {expertise_area}. "
+                f"en un documento de {expertise_area}. "
                 f"Usa nomenclatura técnica formal — NO el lenguaje coloquial del cliente. "
                 f"NO inventes precios. NO expliques. Responde SOLO con el nombre técnico "
                 f"del procedimiento (1-2 líneas máximo).\n\n"
@@ -899,6 +1220,7 @@ async def generate_answer(
     max_tokens: int = 800,
     no_length_limit: bool = False,
     on_failover: Callable[[], Awaitable[None]] | None = None,
+    doc_structure_summary: str | None = None,
 ) -> str:
     """
     Generate an answer using retrieved context + conversation history.
@@ -913,7 +1235,8 @@ async def generate_answer(
         return "No encontré información relevante en los documentos para responder tu pregunta."
 
     system_prompt = build_system_prompt(expertise_area, channel=channel, from_web=from_web,
-                                        no_length_limit=no_length_limit)
+                                        no_length_limit=no_length_limit,
+                                        doc_structure_summary=doc_structure_summary)
 
     # Vision calls: cap context at 5 chunks. Reasoning models scale reasoning cost with
     # input size; 19 chunks + image exhausts the entire max_tokens budget on chain-of-thought.
@@ -1475,15 +1798,33 @@ async def _log_unanswered(
         logger.warning("Failed to log UnansweredQuery: %s", e)
 
 
-async def _classify_intent(question: str, last_bot_turn: str | None = None) -> str:
+async def _classify_intent(question: str, last_bot_turn: str | None = None, expertise_area: str = "") -> str:
     """
     Lightweight pre-RAG intent classification. Called after the tool-use block in rag_query().
     Returns one of: search_docs | needs_human | price_catalog
     Falls back to "search_docs" on any LLM or parse failure (safe default).
+    When expertise_area is provided, counter-examples use domain-specific terminology.
     """
+    # Derive a singular noun for counter-examples from expertise_area
+    area_singular = ""
+    if expertise_area:
+        # Take the first noun-like word (e.g. "diagnóstico histológico" → "diagnóstico")
+        words = expertise_area.strip().split()
+        area_singular = words[0].lower() if words else expertise_area.lower()
+
     context_hint = (
         f"\nPrevious bot reply (context only): {last_bot_turn[:120]}"
         if last_bot_turn else ""
+    )
+    # E3: Dynamic counter-examples based on expertise_area
+    price_counter = (
+        f"  'cuánto cuesta {area_singular}' → search_docs\n"
+        f"  'precio del {area_singular}' → search_docs\n"
+        "  'dame todos los precios' → price_catalog"
+        if area_singular
+        else "  'cuánto cuesta X' → search_docs\n"
+        "  'precio del estudio X' → search_docs\n"
+        "  'dame todos los precios' → price_catalog"
     )
     messages = [
         {"role": "system", "content": (
@@ -1494,11 +1835,9 @@ async def _classify_intent(question: str, last_bot_turn: str | None = None) -> s
             "- needs_human: user EXPLICITLY wants to speak with a real person right now\n"
             "- price_catalog: user wants the COMPLETE price list for all services\n"
             "Counter-examples for price_catalog:\n"
-            "  'cuánto cuesta la biopsia' → search_docs\n"
-            "  'precio del estudio X' → search_docs\n"
-            "  'dame todos los precios' → price_catalog\n"
+            f"{price_counter}\n"
             "Counter-examples for needs_human:\n"
-            "  '¿cómo puedo contactar el laboratorio?' → search_docs\n"
+            "  '¿cómo puedo contactar?' → search_docs\n"
             "  'necesito contactar para saber mis resultados' → search_docs\n"
             "  'quiero hablar con un humano' → needs_human\n"
             "  'necesito hablar con una persona' → needs_human"
@@ -1541,7 +1880,17 @@ async def rag_query(
     """
     # Pre-RAG: local greeting classifier — skip LLM for obvious greetings
     if _GREETING_PATTERN.match(question.strip()):
-        answer = f"¡Hola! ¿En qué puedo ayudarte?{(' ' + expertise_area) if expertise_area else ''}"
+        # Tenant-adaptive greeting: use example_questions if available
+        _eq = getattr(tenant, "example_questions", None) if tenant else None
+        if _eq and len(_eq) > 0:
+            # Suggest up to 2 example questions
+            suggestions = _eq[:2]
+            suggestion_text = " Por ejemplo:\n" + "\n".join(f"• {s}" for s in suggestions)
+            answer = f"¡Hola! ¿En qué puedo ayudarte?{suggestion_text}"
+        elif expertise_area:
+            answer = f"¡Hola! ¿En qué puedo ayudarte con {expertise_area}?"
+        else:
+            answer = "¡Hola! ¿En qué puedo ayudarte?"
         await save_turn(db, user_id, namespace, question, answer, channel=channel, tenant_id=tenant_id)
         return answer, [], "greeting"
 
@@ -1563,6 +1912,9 @@ async def rag_query(
         logger.info("reformulate ns=%s original=%r → reformulated=%r",
                      namespace, question[:60], search_query[:60])
 
+    # E5: Extract doc_structure_summary from tenant for system prompt enrichment
+    _doc_summary = getattr(tenant, "doc_structure_summary", None) if tenant else None
+
     # Build failover alert callback (one per rag_query call, shared by all generate_answer calls)
     _on_failover: Callable[[], Awaitable[None]] | None = None
     if tenant:
@@ -1581,7 +1933,8 @@ async def rag_query(
 
     if is_tool_use_available() and not images and len(_available_tools) >= 2:
         try:
-            _system_prompt = build_system_prompt(expertise_area, channel=channel)
+            _system_prompt = build_system_prompt(expertise_area, channel=channel,
+                                                   doc_structure_summary=_doc_summary)
             r1_content, tool_calls = await call_chat_with_tools(
                 messages=[*history[-6:], {"role": "user", "content": question}],
                 tools=_available_tools,
@@ -1664,7 +2017,7 @@ async def rag_query(
     last_bot_turn = next(
         (m["content"] for m in reversed(history) if m.get("role") == "assistant"), None
     )
-    intent = await _classify_intent(question, last_bot_turn=last_bot_turn)
+    intent = await _classify_intent(question, last_bot_turn=last_bot_turn, expertise_area=expertise_area)
     logger.info("classify_intent ns=%s intent=%s q=%r", namespace, intent, question[:60])
 
     if intent == "needs_human":
@@ -1675,14 +2028,18 @@ async def rag_query(
         logger.info("unanswered_escalation ns=%s source=intent_router q=%r", namespace, question[:60])
         return answer, [], "needs_human"
 
-    if intent == "price_catalog" and channel == "telegram":
+    if intent == "price_catalog":
         full_chunks = await retrieve_full_catalog(db, namespace)
         if full_chunks:
-            logger.info("catalog_codegen ns=%s q=%r items=%d", namespace, question[:60], len(full_chunks))
-            answer = _format_catalog_as_text(full_chunks)
+            logger.info("catalog_llm ns=%s q=%r items=%d", namespace, question[:60], len(full_chunks))
+            answer = await _format_catalog_with_llm(full_chunks, channel=channel, on_failover=_on_failover)
+            answer = validate_output(answer, user_id=user_id)
+            if CANARY_TOKEN in answer:
+                answer = answer.replace(CANARY_TOKEN, "[REDACTED]")
+                logger.warning("canary_redacted user_id=%s catalog", user_id)
             await save_turn(db, user_id, namespace, question, answer, channel=channel, tenant_id=tenant_id)
             return answer, full_chunks, None
-        logger.info("catalog_codegen ns=%s — no section chunks, falling through", namespace)
+        logger.info("catalog_llm ns=%s — no section chunks, falling through", namespace)
     # ── END INTENT ROUTER ─────────────────────────────────────────────────────
 
     # HyDE: embed a hypothetical answer instead of the question to bridge vocabulary gap
@@ -1824,6 +2181,7 @@ async def rag_query(
                 [], question, history, expertise_area,
                 channel=channel, images=images,
                 on_failover=_on_failover,
+                doc_structure_summary=_doc_summary,
             )
             answer = validate_output(answer, user_id=user_id)
             if CANARY_TOKEN in answer:
@@ -1844,6 +2202,7 @@ async def rag_query(
                     channel=channel, images=images,
                     from_web=True,
                     on_failover=_on_failover,
+                    doc_structure_summary=_doc_summary,
                 )
                 answer = validate_output(answer, user_id=user_id)
                 # Redact canary token at write time
@@ -1870,6 +2229,7 @@ async def rag_query(
         channel=channel, images=images,
         low_confidence=is_low_confidence,
         on_failover=_on_failover,
+        doc_structure_summary=_doc_summary,
     )
     answer = validate_output(answer, user_id=user_id)
     # Redact canary token at write time — prevents exfiltration via history
