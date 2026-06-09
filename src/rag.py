@@ -225,9 +225,9 @@ async def _add_contextual_summary(full_doc_text: str, chunk_content: str) -> str
             "role": "user",
             "content": (
                 "Dado el siguiente documento completo y un fragmento específico del mismo, "
-                "escribí en 1-2 oraciones un contexto breve que sitúe este fragmento dentro "
+                "escribe en 1-2 oraciones un contexto breve que sitúe este fragmento dentro "
                 "del documento. No repitas el contenido del fragmento. "
-                "Respondé solo con el contexto, nada más.\n\n"
+                "Responde solo con el contexto, nada más.\n\n"
                 f"Documento completo:\n{full_doc_text[:3000]}\n\n"
                 f"Fragmento:\n{chunk_content}"
             ),
@@ -527,11 +527,11 @@ def _illegible_fallback_msg(images: list[dict] | None) -> str:
     if images and len(images) > 1:
         return (
             "No puedo leer las imágenes. La calidad o resolución puede ser insuficiente. "
-            "Intentá enviarlas con mejor iluminación o enfoque, o describí tu consulta por texto."
+            "Intenta enviarlas con mejor iluminación o enfoque, o describe tu consulta por texto."
         )
     return (
         "No puedo leer la imagen. La calidad o resolución puede ser insuficiente. "
-        "Intentá enviarla con mejor iluminación o enfoque, o describí tu consulta por texto."
+        "Intenta enviarla con mejor iluminación o enfoque, o describe tu consulta por texto."
     )
 
 
@@ -608,11 +608,11 @@ async def _hyde_query(question: str, expertise_area: str) -> str:
         {
             "role": "user",
             "content": (
-                f"Sos un especialista en {expertise_area}. Dado el siguiente texto de un cliente, "
-                f"escribí el nombre técnico/formal del procedimiento o servicio como aparecería "
+                f"Eres un especialista en {expertise_area}. Dado el siguiente texto de un cliente, "
+                f"escribe el nombre técnico/formal del procedimiento o servicio como aparecería "
                 f"en una lista de precios o catálogo de {expertise_area}. "
-                f"Usá nomenclatura técnica formal — NO el lenguaje coloquial del cliente. "
-                f"NO inventes precios. NO expliques. Respondé SOLO con el nombre técnico "
+                f"Usa nomenclatura técnica formal — NO el lenguaje coloquial del cliente. "
+                f"NO inventes precios. NO expliques. Responde SOLO con el nombre técnico "
                 f"del procedimiento (1-2 líneas máximo).\n\n"
                 f"Texto del cliente: {question}"
             ),
@@ -886,7 +886,7 @@ async def generate_answer(
             f"[Source: {c['source']}, Page {c['page']}]\n{c['content']}"
             for c in context_chunks
         ])
-        confidence_note = "\n\nNOTA: Los siguientes documentos son coincidencias aproximadas (no exactas). Proporcioná la información que encontrés y aclará que puede ser similar pero no idéntico a lo que pregunta el usuario.\n" if low_confidence else ""
+        confidence_note = "\n\nNOTA: Los siguientes documentos son coincidencias aproximadas (no exactas). Proporciona la información que encuentres y aclara que puede ser similar pero no idéntico a lo que pregunta el usuario.\n" if low_confidence else ""
         text_content = (
             f"<document_context>\n{context_text}\n</document_context>{confidence_note}\n\n"
             f"<user_question>\n{question}\n</user_question>"
@@ -901,16 +901,16 @@ async def generate_answer(
         count_text = f"{len(images)} imágenes" if len(images) > 1 else "una imagen"
         image_instruction = (
             f"\n\n[INSTRUCCIÓN IMPORTANTE: El usuario ya envió {count_text}. "
-            "Analizá la(s) imagen(es) que recibiste y respondé basándote en lo que ves. "
+            "Analiza la(s) imagen(es) que recibiste y responde basándote en lo que ves. "
             "NUNCA le digas al usuario que envíe una imagen o que contacte por WhatsApp "
             "para enviar una imagen — YA la envió. Si la imagen contiene una orden "
-            "médica o documento, extraé la información y respondé con los precios "
-            "que encontrés en el contexto. "
-            "Si la imagen está PARCIALMENTE legible (podés leer algunas partes pero no todas): "
-            "1) Proporcioná la información que SÍ podés leer. "
-            "2) Aclará explícitamente qué partes no se pudieron leer (ej: 'No se pudo leer el monto de X'). "
-            "3) Sugerí enviar una imagen más clara solo para las partes que no se pudieron leer. "
-            "NUNCA descartes toda la imagen si podés leer algo — siempre extraé lo que puedas.]"
+            "médica o documento, extrae la información y responde con los precios "
+            "que encuentres en el contexto. "
+            "Si la imagen está PARCIALMENTE legible (puedes leer algunas partes pero no todas): "
+            "1) Proporciona la información que SÍ puedes leer. "
+            "2) Aclara explícitamente qué partes no se pudieron leer (ej: 'No se pudo leer el monto de X'). "
+            "3) Sugiere enviar una imagen más clara solo para las partes que no se pudieron leer. "
+            "NUNCA descartes toda la imagen si puedes leer algo — siempre extrae lo que puedas.]"
         )
         text_content += image_instruction
 
@@ -1455,7 +1455,7 @@ async def rag_query(
     # produces opaque 404 errors from the provider.
     if images and not get_setting("llm_vision_model", settings.llm_vision_model):
         logger.info("vision_guard ns=%s user=%s — no vision model configured", namespace, user_id)
-        answer = "No puedo procesar imágenes en este momento. Por favor, enviá tu consulta por texto."
+        answer = "No puedo procesar imágenes en este momento. Por favor, envía tu consulta por texto."
         img_label = "📷 [varias imágenes]" if len(images) > 1 else "📷 [imagen]"
         await save_turn(db, user_id, namespace, question or img_label, answer, channel=channel, tenant_id=tenant_id)
         return answer, [], "no_vision_model"
@@ -1565,7 +1565,7 @@ async def rag_query(
 
     if intent == "needs_human":
         area_clause = f" Mi área de expertise: {expertise_area}." if expertise_area else ""
-        answer = f"Entiendo que querés hablar con alguien.{area_clause} Contactamos directamente."
+        answer = f"Entiendo que quieres hablar con alguien.{area_clause} Contactamos directamente."
         await save_turn(db, user_id, namespace, question, answer, channel=channel, tenant_id=tenant_id)
         await _log_unanswered(db, namespace, question, user_id, "needs_human", tenant_id)
         logger.info("unanswered_escalation ns=%s source=intent_router q=%r", namespace, question[:60])

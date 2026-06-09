@@ -105,7 +105,7 @@ async def _wa_process_flushed(
             except Exception as e:
                 logger.error("wa_rag_error user=%s: %s", user_id, e)
                 try:
-                    await adapter.send_reply(user_id, "Lo siento, hubo un error. Intentá de nuevo en un momento.")
+                    await adapter.send_reply(user_id, "Lo siento, hubo un error. Intenta de nuevo en un momento.")
                 except ChannelSendError:
                     pass
                 return
@@ -138,7 +138,7 @@ async def handle_wa_message(
                 await adapter.send_reply(
                     user_id,
                     "Solo puedo procesar texto, imágenes y notas de voz. "
-                    "Escribí tu consulta o enviá una imagen o nota de voz.",
+                    "Escribe tu consulta o envía una imagen o nota de voz.",
                 )
             except ChannelSendError:
                 logger.warning("wa_send_failed user=%s — media fallback", user_id)
@@ -149,7 +149,7 @@ async def handle_wa_message(
             try:
                 await adapter.send_reply(
                     user_id,
-                    "Las notas de voz aún no están disponibles. Escribí tu consulta por texto.",
+                    "Las notas de voz aún no están disponibles. Escribe tu consulta por texto.",
                 )
             except ChannelSendError:
                 logger.warning("wa_send_failed user=%s — voice fallback", user_id)
@@ -178,7 +178,7 @@ async def handle_wa_message(
             except Exception as e:
                 logger.warning("wa_image_download_failed user=%s: %s", user_id, e)
                 try:
-                    await adapter.send_reply(user_id, "No pude descargar la imagen. Intentá de nuevo.")
+                    await adapter.send_reply(user_id, "No pude descargar la imagen. Intenta de nuevo.")
                 except ChannelSendError:
                     pass
                 return
@@ -277,7 +277,7 @@ async def handle_wa_message(
             except Exception as e:
                 logger.error("wa_rag_error user=%s: %s", user_id, e)
                 try:
-                    await adapter.send_reply(user_id, "Lo siento, hubo un error. Intentá de nuevo en un momento.")
+                    await adapter.send_reply(user_id, "Lo siento, hubo un error. Intenta de nuevo en un momento.")
                 except ChannelSendError:
                     pass
                 return

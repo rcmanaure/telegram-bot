@@ -125,9 +125,9 @@ class ImageBuffer:
         # Use singular/plural default question
         if not entry.question.strip():
             if len(entry.images) == 1:
-                entry.question = "¿Qué querés saber sobre esta imagen?"
+                entry.question = "¿Qué quieres saber sobre esta imagen?"
             else:
-                entry.question = "¿Qué querés saber sobre estas imágenes?"
+                entry.question = "¿Qué quieres saber sobre estas imágenes?"
 
         logger.info(
             "image_buffer_flush key=%s images=%d question=%r",
