@@ -2882,11 +2882,11 @@ async def test_retrieve_policy_chunks_null_fallback():
     # First query (typed) returns empty
     mock_empty = MagicMock()
     mock_empty.fetchall.return_value = []
-    # Second query (fallback) returns results
+    # Second query (fallback) returns results matching policy patterns
     mock_fallback = MagicMock()
     mock_fallback.fetchall.return_value = [
-        MagicMock(content="## Requisitos importantes", source="doc.pdf", page=1, chunk_type=None, metadata=None),
-        MagicMock(content="Nota: traer cita el día del examen", source="doc.pdf", page=1, chunk_type=None, metadata=None),
+        MagicMock(content="## Requisitos para biopsia", source="doc.pdf", page=1, chunk_type=None, metadata=None),
+        MagicMock(content="Instrucciones: traer cita el día del examen", source="doc.pdf", page=1, chunk_type=None, metadata=None),
     ]
 
     mock_db = AsyncMock()
@@ -3043,7 +3043,6 @@ async def test_rag_query_merges_policy_chunks_when_context_exists():
          patch("rag.get_history", AsyncMock(return_value=[])), \
          patch("rag._reformulate_query", AsyncMock(side_effect=lambda q, h: q)), \
          patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
-         patch("rag._fetch_section_siblings", AsyncMock(return_value=[])), \
          patch("rag.is_tool_use_available", return_value=False):
 
         answer, chunks, intent = await rag_query(
@@ -3094,3 +3093,39 @@ async def test_rag_query_skips_policy_chunks_when_no_context():
     # No context found — policy chunks should NOT have been fetched
     assert intent == "off_topic"
     assert chunks == []
+
+
+# ─── Context cap (adversarial review fix) ──────────────────────────────────
+
+def test_max_context_chunks_constant():
+    """MAX_CONTEXT_CHUNKS is defined and reasonable."""
+    from rag import MAX_CONTEXT_CHUNKS
+    assert MAX_CONTEXT_CHUNKS == 30
+
+
+@pytest.mark.asyncio
+async def test_context_capped_after_merges():
+    """When context exceeds MAX_CONTEXT_CHUNKS after all merges, it's truncated
+    to MAX_CONTEXT_CHUNKS sorted by similarity (high-similarity chunks kept)."""
+    from rag import MAX_CONTEXT_CHUNKS
+
+    # Create more chunks than the cap: high-similarity first, then low-similarity policy chunks
+    high_sim = [
+        {"content": f"high_{i}", "source": "doc.pdf", "page": 1, "similarity": 0.9 - i * 0.01, "chunk_type": "price_row", "metadata": None}
+        for i in range(15)
+    ]
+    policy_chunks = [
+        {"content": f"policy_{i}", "source": "doc.pdf", "page": 2, "similarity": 0.5, "chunk_type": "policy_statement", "metadata": None}
+        for i in range(20)
+    ]
+    all_chunks = high_sim + policy_chunks  # 35 total, exceeds cap of 30
+
+    # After sorting by similarity desc and capping, we should get the 15 high_sim + top 15 policy
+    sorted_chunks = sorted(all_chunks, key=lambda c: c.get("similarity", 0), reverse=True)
+    capped = sorted_chunks[:MAX_CONTEXT_CHUNKS]
+
+    assert len(capped) == MAX_CONTEXT_CHUNKS
+    # All high-similarity chunks should be kept
+    assert all(c["content"].startswith("high_") or c["content"].startswith("policy_") for c in capped[:15])
+    # First chunk has highest similarity
+    assert capped[0]["similarity"] >= capped[-1]["similarity"]

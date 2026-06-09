@@ -678,6 +678,7 @@ def _format_catalog_raw(chunks: list[dict]) -> str:
 
 MIN_SIMILARITY = 0.20  # chunks below this threshold are considered off-topic
 LOW_MIN_SIMILARITY = 0.10  # second-pass threshold for approximate matches
+MAX_CONTEXT_CHUNKS = 30   # cap after all merges to prevent context window blowup
 VISION_EXTRACT_MAX_TOKENS = 80  # short enough to avoid prose, enough for comma-separated search terms
 
 # ─── Chunk type classification (E4: multi-tenant RAG generalization) ────────────
@@ -989,94 +990,6 @@ async def _hyde_query(question: str, expertise_area: str) -> str:
         return ""
 
 
-def _chunk_base_term(chunk_content: str) -> str:
-    """Extract the base/category term from a table-row chunk's item name.
-
-    Chunk format: "## SECTION\n| CODE | Item Name – Variant | Price |"
-
-    "Pizza – Grande"     → "Pizza"      (term before separator)
-    "Membresía – Anual"  → "Membresía"
-    "Ibuprofeno 400mg"   → "Ibuprofeno 400mg"  (no separator → full name)
-
-    Using the chunk's own text avoids accent-mismatch: user types "pizza"
-    but catalog stores "Pízza" — the chunk's own term is always correct.
-    """
-    lines = chunk_content.split('\n')
-    if len(lines) < 2:
-        return ""
-    cells = [c.strip() for c in lines[1].split('|') if c.strip()]
-    if len(cells) < 2:
-        return ""
-    item_name = cells[1]
-    for sep in (' – ', ' - ', ' / '):
-        if sep in item_name:
-            return item_name.split(sep)[0].strip()
-    return item_name.strip()
-
-
-async def _fetch_section_siblings(
-    db: AsyncSession,
-    namespace: str,
-    context_chunks: list[dict],
-    question: str,
-) -> list[dict]:
-    """Fetch sibling catalog rows from the same section as retrieved chunks.
-
-    When HyDE specializes the query to one variant (e.g. "Grande" for pizza,
-    "Mensual" for gym plans, "Endoscópica" for a medical procedure), it may
-    miss sibling rows for the same base item that share the same section header.
-
-    Uses the retrieved chunk's own item name as the ILIKE search term — not the
-    user's question — so accent/spelling differences between user input and
-    catalog content don't cause misses.
-    """
-    table_row_chunks = [
-        c for c in context_chunks
-        if '\n' in c["content"]
-        and c["content"].split('\n')[0].startswith('#')
-        and c["content"].split('\n')[1].strip().startswith('|')
-    ]
-    if not table_row_chunks:
-        return []
-
-    existing = {c["content"] for c in context_chunks}
-    siblings: list[dict] = []
-
-    for chunk in table_row_chunks:
-        section_header = chunk["content"].split('\n')[0]
-        base_term = _chunk_base_term(chunk["content"])
-        if not base_term or len(base_term) < 3:
-            continue
-
-        result = await db.execute(
-            text("""
-                SELECT content, source, page
-                FROM document_chunks
-                WHERE namespace = :namespace
-                  AND embedding IS NOT NULL
-                  AND content LIKE :section_prefix
-                  AND content ILIKE :kw_pattern
-                LIMIT 20
-            """),
-            {
-                "namespace": namespace,
-                "section_prefix": section_header + "\n%",
-                "kw_pattern": f"%{base_term}%",
-            },
-        )
-        for row in result.fetchall():
-            if row.content not in existing:
-                siblings.append({
-                    "content": row.content,
-                    "source": row.source,
-                    "page": row.page,
-                    "similarity": MIN_SIMILARITY,
-                })
-                existing.add(row.content)
-
-    return siblings
-
-
 async def retrieve_policy_chunks(db: AsyncSession, namespace: str) -> list[dict]:
     """Fetch ALL policy_statement and section_header chunks for a namespace.
 
@@ -1102,7 +1015,10 @@ async def retrieve_policy_chunks(db: AsyncSession, namespace: str) -> list[dict]
     rows = result.fetchall()
 
     if not rows:
-        # NULL chunk_type fallback: pre-E4 data — use content patterns
+        # NULL chunk_type fallback: pre-E4 data — use content patterns.
+        # Only include section headers and high-confidence policy patterns.
+        # Broad patterns like '%importante%' and '%nota:%' were removed because
+        # they over-match non-policy chunks (pricing notes, general descriptions).
         result = await db.execute(
             text("""
                 SELECT content, source, page, chunk_type, metadata
@@ -1117,10 +1033,8 @@ async def retrieve_policy_chunks(db: AsyncSession, namespace: str) -> list[dict]
                     OR content ILIKE '%condiciones%'
                     OR content ILIKE '%política%'
                     OR content ILIKE '%instrucciones%'
-                    OR content ILIKE '%importante%'
-                    OR content ILIKE '%nota:%'
-                    OR content ILIKE '%aviso%'
                   )
+                LIMIT 15
             """),
             {"namespace": namespace},
         )
@@ -1154,6 +1068,8 @@ async def retrieve_section_siblings(
 
     E9: Cross-section retrieval for procedure requirements.
     """
+    MAX_SECTIONS = 5  # cap to prevent unbounded OR conditions
+
     # Collect unique (source, section_name) pairs from price_row chunks
     sections = set()
     for c in matched_chunks:
@@ -1181,6 +1097,9 @@ async def retrieve_section_siblings(
     if not sections:
         return []
 
+    # Cap sections to prevent unbounded queries
+    sections = set(list(sections)[:MAX_SECTIONS])
+
     # Build query for all chunks in those sections
     # Using metadata->>'section_name' for typed chunks
     conditions = []
@@ -1206,7 +1125,7 @@ async def retrieve_section_siblings(
 
     if not rows and sections:
         # Fallback for NULL metadata: use content-based section matching
-        # Fetch all chunks from the same source and filter in Python
+        # Fetch all chunks from the same source and filter by section header
         sources = {src for src, _ in sections}
         source_conditions = []
         params2: dict = {"namespace": namespace}
@@ -1227,12 +1146,15 @@ async def retrieve_section_siblings(
         )
         all_rows = result.fetchall()
 
-        # Filter to chunks whose content starts with the same section header
-        section_names = {sec for _, sec in sections}
+        # Filter to chunks that START with the same section header only.
+        # The imprecise substring match (sec in content[:100]) was removed — it
+        # produced false positives by matching section names mentioned in passing
+        # inside chunks that belong to different sections.
+        section_headers = {f"## {sec}" for sec in {s for _, s in sections}} | \
+                          {f"# {sec}" for sec in {s for _, s in sections}}
         rows = [
             r for r in all_rows
-            if any(r.content.startswith(f"## {sec}") or r.content.startswith(f"# {sec}") for sec in section_names)
-            or any(sec in r.content[:100] for sec in section_names)
+            if any(r.content.startswith(h) for h in section_headers)
         ]
 
     return [
@@ -2253,18 +2175,6 @@ async def rag_query(
     context = [c for c in context if c["similarity"] >= MIN_SIMILARITY]
     is_low_confidence = False
 
-    # Section-sibling completion: when HyDE biases retrieval toward one variant of a
-    # catalog item, fetch sibling rows from the same section that match the original
-    # question's keywords. Ensures all price variants are visible to the LLM.
-    if context:
-        siblings = await _fetch_section_siblings(db, namespace, context, question)
-        if siblings:
-            context = context + siblings
-            logger.info(
-                "section_siblings ns=%s q=%r added=%d total=%d",
-                namespace, question[:60], len(siblings), len(context),
-            )
-
     # Low-confidence fallback: when normal threshold filters everything out but
     # raw results exist above LOW_MIN_SIMILARITY, use them as approximate matches.
     # The COINCIDENCIAS PARCIALES prompt section guides the LLM to handle these
@@ -2375,6 +2285,19 @@ async def rag_query(
                         "section_siblings_e9 ns=%s q=%r price_rows=%d added=%d total=%d",
                         namespace, question[:60], len(price_rows), len(sibling_new), len(context),
                     )
+
+    # Context cap: after all merges (retrieval, catalog overview, policy, section siblings),
+    # sort by similarity descending and truncate to MAX_CONTEXT_CHUNKS to prevent LLM context
+    # window blowup. Semantic matches (similarity 0.7+) stay; policy/sibling chunks (0.5) are
+    # kept only when there's room.
+    if len(context) > MAX_CONTEXT_CHUNKS:
+        context.sort(key=lambda c: c.get("similarity", 0), reverse=True)
+        dropped = len(context) - MAX_CONTEXT_CHUNKS
+        context = context[:MAX_CONTEXT_CHUNKS]
+        logger.info(
+            "context_capped ns=%s q=%r dropped=%d kept=%d",
+            namespace, question[:60], dropped, len(context),
+        )
 
     # If vision-augmented retrieval found context, fall through to the main
     # generate_answer path below. Otherwise, handle the no-context cases.
