@@ -522,28 +522,6 @@ VISION_EXTRACT_MAX_TOKENS = 80  # short enough to avoid prose, enough for comma-
 
 # ─── Illegible image detection ─────────────────────────────────────────────────
 
-_ILLEGIBLE_PATTERNS = [
-    re.compile(r"no\s+puedo\s+(leer|ver|descifrar|descifr|interpretar|distinguir)", re.IGNORECASE),
-    re.compile(r"(imagen|foto|imagen)\s+(no\s+)?(ilegible|no\s+es\s+legible|borrosa|oscura|incomprensible)", re.IGNORECASE),
-    re.compile(r"(ilegible|incomprensible|indistinguible|indecifrable)", re.IGNORECASE),
-    re.compile(r"cannot\s+(read|see|interpret|decipher|make\s+out|determine)", re.IGNORECASE),
-    re.compile(r"(image|photo|picture)\s+is\s+(unclear|blurry|dark|illegible|unreadable)", re.IGNORECASE),
-    re.compile(r"unable\s+to\s+(read|see|interpret|view|process)\s+(the\s+)?(image|photo|picture)", re.IGNORECASE),
-]
-
-# Patterns that indicate PARTIAL legibility — the model could read some text
-# but not all. These should NOT trigger the full-illegible fallback; instead
-# the LLM is already instructed (via image instruction) to extract what it can.
-_PARTIALLY_LEGIBLE_PATTERNS = [
-    re.compile(r"(parcialmente|parte|algunas?\s+(partes?|secciones?|palabras?|líneas?|campos?)).*(ilegible|borros[oa]|no\s+puedo|indecifr|dif[ií]cil|indistinguible)", re.IGNORECASE),
-    re.compile(r"(ilegible|borros[oa]|indecifrable|no\s+se\s+(lee|ve|puede)).*(parcial|algunas?\s+|parte)", re.IGNORECASE),
-    re.compile(r"(puedo\s+)?(leer|ver|distinguir|identificar).*(pero|aunque|sin embargo|no\s+puedo).*(otra|el\s+resto|lo\s+demás|algunas?\s+partes?)", re.IGNORECASE),
-    re.compile(r"(some|parts?|sections?).*(illegible|blurry|unreadable|unclear|cannot\s+read)", re.IGNORECASE),
-    re.compile(r"(can\s+read|can\s+see|able\s+to\s+read).*(but|however|although).*(some|other|rest|remaining).*(cannot|unreadable|illegible|blurry|unclear)", re.IGNORECASE),
-    re.compile(r"(no\s+puedo\s+(leer|descifrar|distinguir)).*(algunas?\s+|ciertos?\s+|parte).*(partes?|secciones?|palabras?|nombres?|montos?)", re.IGNORECASE),
-]
-
-
 def _illegible_fallback_msg(images: list[dict] | None) -> str:
     """Return the appropriate illegible-image message (singular or plural)."""
     if images and len(images) > 1:
@@ -555,23 +533,6 @@ def _illegible_fallback_msg(images: list[dict] | None) -> str:
         "No puedo leer la imagen. La calidad o resolución puede ser insuficiente. "
         "Intentá enviarla con mejor iluminación o enfoque, o describí tu consulta por texto."
     )
-
-
-def _is_illegible_response(answer: str) -> bool:
-    """Check if the vision model's response indicates it couldn't read the image.
-    Matches common phrases in both Spanish and English.
-
-    Returns True for fully illegible, False for normal or partially legible.
-    Partially legible responses are NOT caught here — the LLM handles them via
-    the image instruction (extract what it can, note what's illegible).
-    """
-    if not answer or len(answer.strip()) < 15:
-        return True
-    # If partially legible, do NOT treat as fully illegible
-    answer_lower = answer.lower()
-    if any(p.search(answer_lower) for p in _PARTIALLY_LEGIBLE_PATTERNS):
-        return False
-    return any(p.search(answer_lower) for p in _ILLEGIBLE_PATTERNS)
 
 
 # ─── Query reformulation ──────────────────────────────────────────────────────
@@ -756,7 +717,7 @@ async def _fetch_section_siblings(
     return siblings
 
 
-async def _extract_search_terms_from_images(images: list[dict]) -> str:
+async def _extract_search_terms_from_images(images: list[dict]) -> tuple[str, str]:
     """Use the vision model to extract key search terms from images.
 
     When a user sends an image with no caption (or a generic default question),
@@ -765,21 +726,29 @@ async def _extract_search_terms_from_images(images: list[dict]) -> str:
     key terms (e.g., study names, medical terms) that can be used as a
     search query for the RAG vector search.
 
-    Returns a search query string, or empty string on failure.
+    Returns (legibility, terms) where legibility is one of:
+      - "legible": image fully readable
+      - "partial": some parts readable, others not
+      - "illegible": cannot read image at all
+    And terms is a comma-separated search string (empty if illegible).
+    On any failure, returns ("illegible", "").
     """
     vision_model = get_setting("llm_vision_model", settings.llm_vision_model)
     if not vision_model:
-        return ""
+        return "illegible", ""
 
     content: list[dict] = [
         {
             "type": "text",
             "text": (
-                "Extraé los términos clave de esta imagen que podrían usarse para "
-                "buscar información en una base de datos. Por ejemplo: nombres de "
-                "estudios médicos, diagnósticos, o procedimientos. Respondé SOLO con "
-                "los términos separados por comas, nada más. Ejemplo: Biopsia de "
-                "apéndice cecal, Anexo de apéndice cecal"
+                "Analizá esta imagen y extraé los términos clave para búsqueda.\n"
+                "Respondé SOLO con JSON: "
+                '{"legibility": "legible"|"partial"|"illegible", "terms": "término1, término2"}\n'
+                "- legible: la imagen se puede leer completamente\n"
+                "- partial: algunas partes son legibles, otras no\n"
+                "- illegible: no se puede leer nada (borrosa, oscura, etc.)\n"
+                "- terms: términos clave separados por comas (vacío si illegible)\n"
+                "Ejemplo: {\"legibility\": \"legible\", \"terms\": \"Biopsia de apéndice cecal, Anexo de apéndice cecal\"}"
             ),
         },
     ]
@@ -791,14 +760,19 @@ async def _extract_search_terms_from_images(images: list[dict]) -> str:
 
     messages = [{"role": "user", "content": content}]
     try:
-        result = await call_chat(messages, max_tokens=VISION_EXTRACT_MAX_TOKENS, temperature=0.0, model=vision_model)
-        result = result.strip()
-        if result:
-            logger.info("vision_extracted_terms terms=%r", result[:120])
-        return result
+        raw = await call_chat(messages, max_tokens=VISION_EXTRACT_MAX_TOKENS, temperature=0.0, model=vision_model)
+        parsed = extract_json_from_llm_response(raw.strip())
+        legibility = parsed.get("legibility", "legible")
+        if legibility not in {"legible", "partial", "illegible"}:
+            legibility = "legible"
+        terms = parsed.get("terms", "")
+        if not isinstance(terms, str):
+            terms = str(terms)
+        logger.info("vision_extracted legibility=%s terms=%r", legibility, terms[:120])
+        return legibility, terms
     except Exception as e:
-        logger.warning("vision_extract_failed: %s", e)
-        return ""
+        logger.warning("vision_extract_failed: %s — fallback illegible", e)
+        return "illegible", ""
 
 
 # ─── LLM calls (delegated to llm.call_chat) ──────────────────────────────────
@@ -1681,7 +1655,13 @@ async def rag_query(
         # the generic default question won't match any documents, but the actual
         # study names in the image (e.g. "Biopsia de apéndice cecal") will.
         if images:
-            vision_query = await _extract_search_terms_from_images(images)
+            vision_legibility, vision_query = await _extract_search_terms_from_images(images)
+            if vision_legibility == "illegible":
+                answer = _illegible_fallback_msg(images)
+                logger.info("vision_illegible ns=%s user=%s images=%d", namespace, user_id, len(images))
+                img_label = "📷 [varias imágenes]" if len(images) > 1 else "📷 [imagen]"
+                await save_turn(db, user_id, namespace, question or img_label, answer, channel=channel, tenant_id=tenant_id)
+                return answer, [], None
             if vision_query:
                 # Sanitize LLM-extracted query (same guard as user input) and limit length.
                 # LLM output can contain injection patterns; if sanitization rejects it,
@@ -1744,10 +1724,6 @@ async def rag_query(
             if CANARY_TOKEN in answer:
                 answer = answer.replace(CANARY_TOKEN, "[REDACTED]")
                 logger.warning("canary_redacted user_id=%s image_only", user_id)
-            # Check if vision model couldn't read the image(s)
-            if _is_illegible_response(answer):
-                answer = _illegible_fallback_msg(images)
-                logger.info("vision_illegible ns=%s user=%s images=%d", namespace, user_id, len(images))
             img_label = "📷 [varias imágenes]" if len(images) > 1 else "📷 [imagen]"
             await save_turn(db, user_id, namespace, question or img_label, answer, channel=channel, tenant_id=tenant_id)
             return answer, [], None
@@ -1793,9 +1769,5 @@ async def rag_query(
     if CANARY_TOKEN in answer:
         answer = answer.replace(CANARY_TOKEN, "[REDACTED]")
         logger.warning("canary_redacted user_id=%s context_answer", user_id)
-    # Check if vision model couldn't read the image(s) (applies when image was sent alongside text context)
-    if images and _is_illegible_response(answer):
-        answer = _illegible_fallback_msg(images)
-        logger.info("vision_illegible ns=%s user=%s images=%d", namespace, user_id, len(images))
     await save_turn(db, user_id, namespace, question, answer, channel=channel)
     return answer, context, None

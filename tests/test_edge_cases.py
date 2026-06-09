@@ -1194,10 +1194,10 @@ async def test_rag_query_image_no_text_context_goes_to_vision():
     with patch("rag.retrieve_context", new=AsyncMock(return_value=[])), \
          patch("rag.get_history", new=AsyncMock(return_value=[])), \
          patch("rag._reformulate_query", new=AsyncMock(side_effect=lambda q, h: q)), \
+         patch("rag._extract_search_terms_from_images", new=AsyncMock(return_value=("legible", ""))), \
          patch("rag.generate_answer", new=AsyncMock(return_value="Es un resultado de laboratorio.")) as mock_generate, \
          patch("rag.validate_output", side_effect=lambda x, **kw: x), \
          patch("rag.save_turn", new=AsyncMock()), \
-         patch("rag._is_illegible_response", return_value=False), \
          patch("rag.settings") as mock_settings, \
          patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback), \
          patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
@@ -1221,8 +1221,8 @@ async def test_rag_query_image_no_text_context_goes_to_vision():
 
 @pytest.mark.asyncio
 async def test_rag_query_illegible_image_returns_clear_message():
-    """When the vision model can't read the image, rag_query returns a
-    clear message about image quality."""
+    """When the vision model reports image as illegible via JSON extraction,
+    rag_query returns a clear message about image quality."""
     from rag import rag_query
 
     mock_db = AsyncMock()
@@ -1232,10 +1232,8 @@ async def test_rag_query_illegible_image_returns_clear_message():
     with patch("rag.retrieve_context", new=AsyncMock(return_value=[])), \
          patch("rag.get_history", new=AsyncMock(return_value=[])), \
          patch("rag._reformulate_query", new=AsyncMock(side_effect=lambda q, h: q)), \
-         patch("rag.generate_answer", new=AsyncMock(return_value="No puedo leer la imagen, está borrosa.")), \
-         patch("rag.validate_output", side_effect=lambda x, **kw: x), \
+         patch("rag._extract_search_terms_from_images", new=AsyncMock(return_value=("illegible", ""))), \
          patch("rag.save_turn", new=AsyncMock()), \
-         patch("rag._is_illegible_response", return_value=True), \
          patch("rag.settings") as mock_settings, \
          patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback), \
          patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
@@ -1249,13 +1247,6 @@ async def test_rag_query_illegible_image_returns_clear_message():
     assert "No puedo leer la imagen" in answer
     assert "iluminación" in answer or "enfoque" in answer or "resolución" in answer
 
-
-def test_is_illegible_response_detects_spanish():
-    """_is_illegible_response detects Spanish illegibility phrases."""
-    from rag import _is_illegible_response
-    assert _is_illegible_response("No puedo leer la imagen, está borrosa.")
-    assert _is_illegible_response("La imagen es ilegible")
-    assert _is_illegible_response("No puedo descifrar lo que dice la foto")
 
 
 @pytest.mark.asyncio
@@ -1282,11 +1273,10 @@ async def test_vision_augmented_retrieval_finds_context():
     with patch("rag.retrieve_context", side_effect=mock_retrieve), \
          patch("rag.get_history", new=AsyncMock(return_value=[])), \
          patch("rag._reformulate_query", new=AsyncMock(side_effect=lambda q, h: q)), \
-         patch("rag._extract_search_terms_from_images", new=AsyncMock(return_value="Biopsia de apéndice cecal, Anexo de apéndice cecal")), \
+         patch("rag._extract_search_terms_from_images", new=AsyncMock(return_value=("legible", "Biopsia de apéndice cecal, Anexo de apéndice cecal"))), \
          patch("rag.generate_answer", new=AsyncMock(return_value="🔬 Biopsia de Apéndice — $90.00")) as mock_generate, \
          patch("rag.validate_output", side_effect=lambda x, **kw: x), \
          patch("rag.save_turn", new=AsyncMock()), \
-         patch("rag._is_illegible_response", return_value=False), \
          patch("rag.settings") as mock_settings, \
          patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback), \
          patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
@@ -1319,11 +1309,10 @@ async def test_vision_augmented_retrieval_falls_back_when_no_context():
     with patch("rag.retrieve_context", new=AsyncMock(return_value=[])), \
          patch("rag.get_history", new=AsyncMock(return_value=[])), \
          patch("rag._reformulate_query", new=AsyncMock(side_effect=lambda q, h: q)), \
-         patch("rag._extract_search_terms_from_images", new=AsyncMock(return_value="foto de paciente")), \
+         patch("rag._extract_search_terms_from_images", new=AsyncMock(return_value=("legible", "foto de paciente"))), \
          patch("rag.generate_answer", new=AsyncMock(return_value="Veo un documento médico pero no encuentro precios.")) as mock_generate, \
          patch("rag.validate_output", side_effect=lambda x, **kw: x), \
          patch("rag.save_turn", new=AsyncMock()), \
-         patch("rag._is_illegible_response", return_value=False), \
          patch("rag.settings") as mock_settings, \
          patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback), \
          patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
@@ -1353,7 +1342,7 @@ async def test_vision_augmented_retrieval_skipped_when_no_vision_model():
     with patch("rag.retrieve_context", new=AsyncMock(return_value=[])), \
          patch("rag.get_history", new=AsyncMock(return_value=[])), \
          patch("rag._reformulate_query", new=AsyncMock(side_effect=lambda q, h: q)), \
-         patch("rag._extract_search_terms_from_images", new=AsyncMock(return_value="")) as mock_extract, \
+         patch("rag._extract_search_terms_from_images", new=AsyncMock(return_value=("legible", ""))) as mock_extract, \
          patch("rag.save_turn", new=AsyncMock()), \
          patch("rag.settings") as mock_settings, \
          patch("rag.get_setting", new=lambda k, fallback="": "" if k == "llm_vision_model" else fallback):
@@ -1370,74 +1359,35 @@ async def test_vision_augmented_retrieval_skipped_when_no_vision_model():
 
 @pytest.mark.asyncio
 async def test_extract_search_terms_from_images():
-    """_extract_search_terms_from_images calls vision model and returns terms."""
+    """_extract_search_terms_from_images calls vision model and returns (legibility, terms)."""
     from rag import _extract_search_terms_from_images
 
-    with patch("rag.call_chat", new=AsyncMock(return_value="Biopsia de apéndice cecal, Anexo de apéndice cecal")), \
+    with patch("rag.call_chat", new=AsyncMock(return_value='{"legibility": "legible", "terms": "Biopsia de apéndice cecal, Anexo de apéndice cecal"}')), \
          patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback), \
          patch("rag.settings") as mock_settings:
         mock_settings.llm_vision_model = "gemma4:31b"
-        result = await _extract_search_terms_from_images([{"b64": "dGVzdA==", "mime": "image/jpeg"}])
+        legibility, terms = await _extract_search_terms_from_images([{"b64": "dGVzdA==", "mime": "image/jpeg"}])
 
-    assert "apéndice" in result.lower()
-    assert "cecal" in result.lower()
+    assert legibility == "legible"
+    assert "apéndice" in terms.lower()
+    assert "cecal" in terms.lower()
 
 
 @pytest.mark.asyncio
 async def test_extract_search_terms_returns_empty_on_failure():
-    """_extract_search_terms_from_images returns empty string on LLM failure."""
+    """_extract_search_terms_from_images returns ("illegible", "") on LLM failure."""
     from rag import _extract_search_terms_from_images
 
     with patch("rag.call_chat", new=AsyncMock(side_effect=RuntimeError("model unavailable"))), \
          patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback), \
          patch("rag.settings") as mock_settings:
         mock_settings.llm_vision_model = "gemma4:31b"
-        result = await _extract_search_terms_from_images([{"b64": "dGVzdA==", "mime": "image/jpeg"}])
+        legibility, terms = await _extract_search_terms_from_images([{"b64": "dGVzdA==", "mime": "image/jpeg"}])
 
-    assert result == ""
-
-
-def test_is_illegible_response_detects_english():
-    """_is_illegible_response detects English illegibility phrases."""
-    from rag import _is_illegible_response
-    assert _is_illegible_response("I cannot read the image")
-    assert _is_illegible_response("The image is blurry and unreadable")
-    assert _is_illegible_response("Unable to process the photo")
+    assert legibility == "illegible"
+    assert terms == ""
 
 
-def test_is_illegible_response_allows_normal_response():
-    """_is_illegible_response does not flag normal vision responses."""
-    from rag import _is_illegible_response
-    assert not _is_illegible_response("El resultado muestra un nivel de glucosa de 120 mg/dL.")
-    assert not _is_illegible_response("This is a biopsy report showing normal tissue.")
-    assert not _is_illegible_response("La factura indica un total de $80.00 USD.")
-
-
-def test_is_illegible_response_allows_partially_legible():
-    """Partially legible responses should NOT trigger the full-illegible fallback.
-    The LLM already handles them via the image instruction (extract what it can)."""
-    from rag import _is_illegible_response
-    assert not _is_illegible_response(
-        "Puedo leer algunos estudios: Biopsia de Apéndice $90.00, pero algunas partes "
-        "están ilegibles y no puedo descifrar los montos de otros estudios."
-    )
-    assert not _is_illegible_response(
-        "I can read the procedure names but some amounts are illegible"
-    )
-    assert not _is_illegible_response(
-        "Parte de la imagen es borrosa, pero puedo ver: Hemograma $25.00"
-    )
-    assert not _is_illegible_response(
-        "Some sections are blurry but I can identify: Glucose test $15.00"
-    )
-
-
-def test_partially_legible_does_not_prevent_full_illegible_detection():
-    """Full illegibility phrases without partial qualifiers still trigger."""
-    from rag import _is_illegible_response
-    assert _is_illegible_response("No puedo leer la imagen, está borrosa.")
-    assert _is_illegible_response("La imagen es ilegible")
-    assert _is_illegible_response("The image is blurry and unreadable")
 
 
 @pytest.mark.asyncio
@@ -2378,29 +2328,31 @@ def test_normalize_preserves_dots_in_name():
 
 @pytest.mark.asyncio
 async def test_extract_search_terms_no_vision_model_returns_empty():
-    """_extract_search_terms_from_images returns "" when no vision model configured."""
+    """_extract_search_terms_from_images returns ("illegible", "") when no vision model configured."""
     from rag import _extract_search_terms_from_images
 
     with patch("rag.get_setting", new=lambda k, fallback="": "" if k == "llm_vision_model" else fallback), \
          patch("rag.settings") as mock_settings:
         mock_settings.llm_vision_model = ""
-        result = await _extract_search_terms_from_images([{"b64": "dGVzdA==", "mime": "image/jpeg"}])
+        legibility, terms = await _extract_search_terms_from_images([{"b64": "dGVzdA==", "mime": "image/jpeg"}])
 
-    assert result == ""
+    assert legibility == "illegible"
+    assert terms == ""
 
 
 @pytest.mark.asyncio
 async def test_extract_search_terms_empty_string_result():
-    """_extract_search_terms_from_images returns "" when call_chat returns empty string."""
+    """_extract_search_terms_from_images returns ("illegible", "") when call_chat returns invalid JSON."""
     from rag import _extract_search_terms_from_images
 
     with patch("rag.call_chat", new=AsyncMock(return_value="   ")), \
          patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback), \
          patch("rag.settings") as mock_settings:
         mock_settings.llm_vision_model = "gemma4:31b"
-        result = await _extract_search_terms_from_images([{"b64": "dGVzdA==", "mime": "image/jpeg"}])
+        legibility, terms = await _extract_search_terms_from_images([{"b64": "dGVzdA==", "mime": "image/jpeg"}])
 
-    assert result == ""
+    assert legibility == "illegible"
+    assert terms == ""
 
 
 @pytest.mark.asyncio
@@ -2412,13 +2364,13 @@ async def test_extract_search_terms_multiple_images():
 
     async def mock_call_chat(messages, **kwargs):
         captured_messages.extend(messages)
-        return "Hemograma, Glucosa"
+        return '{"legibility": "legible", "terms": "Hemograma, Glucosa"}'
 
     with patch("rag.call_chat", side_effect=mock_call_chat), \
          patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback), \
          patch("rag.settings") as mock_settings:
         mock_settings.llm_vision_model = "gemma4:31b"
-        result = await _extract_search_terms_from_images([
+        legibility, terms = await _extract_search_terms_from_images([
             {"b64": "img1b64", "mime": "image/jpeg"},
             {"b64": "img2b64", "mime": "image/png"},
         ])
@@ -2429,7 +2381,8 @@ async def test_extract_search_terms_multiple_images():
     assert len(image_parts) == 2
     assert image_parts[0]["image_url"]["url"] == "data:image/jpeg;base64,img1b64"
     assert image_parts[1]["image_url"]["url"] == "data:image/png;base64,img2b64"
-    assert "Hemograma" in result
+    assert legibility == "legible"
+    assert "Hemograma" in terms
 
 
 @pytest.mark.asyncio
@@ -2445,11 +2398,10 @@ async def test_vision_augmented_empty_query_falls_through_to_image_only():
     with patch("rag.retrieve_context", new=AsyncMock(return_value=[])), \
          patch("rag.get_history", new=AsyncMock(return_value=[])), \
          patch("rag._reformulate_query", new=AsyncMock(side_effect=lambda q, h: q)), \
-         patch("rag._extract_search_terms_from_images", new=AsyncMock(return_value="")), \
+         patch("rag._extract_search_terms_from_images", new=AsyncMock(return_value=("legible", ""))), \
          patch("rag.generate_answer", new=AsyncMock(return_value="Veo un documento médico.")) as mock_generate, \
          patch("rag.validate_output", side_effect=lambda x, **kw: x), \
          patch("rag.save_turn", new=AsyncMock()), \
-         patch("rag._is_illegible_response", return_value=False), \
          patch("rag.settings") as mock_settings, \
          patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback), \
          patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
@@ -2488,11 +2440,10 @@ async def test_vision_augmented_same_query_skips_retrieval():
     with patch("rag.retrieve_context", side_effect=mock_retrieve), \
          patch("rag.get_history", new=AsyncMock(return_value=[])), \
          patch("rag._reformulate_query", new=AsyncMock(side_effect=lambda q, h: q)), \
-         patch("rag._extract_search_terms_from_images", new=AsyncMock(return_value=original_question)), \
+         patch("rag._extract_search_terms_from_images", new=AsyncMock(return_value=("legible", original_question))), \
          patch("rag.generate_answer", new=AsyncMock(return_value="Veo un documento.")) as mock_generate, \
          patch("rag.validate_output", side_effect=lambda x, **kw: x), \
          patch("rag.save_turn", new=AsyncMock()), \
-         patch("rag._is_illegible_response", return_value=False), \
          patch("rag.settings") as mock_settings, \
          patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else ("off" if k == "hyde_enabled" else fallback)), \
          patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
@@ -2534,7 +2485,7 @@ async def test_vision_augmented_low_confidence_fallback():
     with patch("rag.retrieve_context", side_effect=mock_retrieve), \
          patch("rag.get_history", new=AsyncMock(return_value=[])), \
          patch("rag._reformulate_query", new=AsyncMock(side_effect=lambda q, h: q)), \
-         patch("rag._extract_search_terms_from_images", new=AsyncMock(return_value="Biopsia de apéndice cecal")), \
+         patch("rag._extract_search_terms_from_images", new=AsyncMock(return_value=("legible", "Biopsia de apéndice cecal"))), \
          patch("rag.generate_answer", new=AsyncMock(return_value="Puede ser el estudio de Apéndice — $90 (aprox).")) as mock_gen, \
          patch("rag.validate_output", side_effect=lambda x, **kw: x), \
          patch("rag.save_turn", new=AsyncMock()), \
@@ -2555,3 +2506,81 @@ async def test_vision_augmented_low_confidence_fallback():
     call_kwargs = mock_gen.call_args
     low_conf = call_kwargs.kwargs.get("low_confidence") or call_kwargs[1].get("low_confidence")
     assert low_conf is True
+
+
+# ─── Commit 2: Vision JSON output tests ──────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_extract_search_terms_json_legible():
+    """_extract_search_terms_from_images returns ('legible', terms) for readable images."""
+    from rag import _extract_search_terms_from_images
+
+    with patch("rag.call_chat", new=AsyncMock(return_value='{"legibility": "legible", "terms": "Hemograma, Glucemia"}')), \
+         patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback), \
+         patch("rag.settings") as mock_settings:
+        mock_settings.llm_vision_model = "gemma4:31b"
+        legibility, terms = await _extract_search_terms_from_images([{"b64": "dGVzdA==", "mime": "image/jpeg"}])
+
+    assert legibility == "legible"
+    assert "Hemograma" in terms
+
+
+@pytest.mark.asyncio
+async def test_extract_search_terms_json_partial():
+    """_extract_search_terms_from_images returns ('partial', terms) for partially readable images."""
+    from rag import _extract_search_terms_from_images
+
+    with patch("rag.call_chat", new=AsyncMock(return_value='{"legibility": "partial", "terms": "Biopsia renal"}')), \
+         patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback), \
+         patch("rag.settings") as mock_settings:
+        mock_settings.llm_vision_model = "gemma4:31b"
+        legibility, terms = await _extract_search_terms_from_images([{"b64": "dGVzdA==", "mime": "image/jpeg"}])
+
+    assert legibility == "partial"
+    assert "Biopsia" in terms
+
+
+@pytest.mark.asyncio
+async def test_extract_search_terms_json_illegible():
+    """_extract_search_terms_from_images returns ('illegible', '') for unreadable images."""
+    from rag import _extract_search_terms_from_images
+
+    with patch("rag.call_chat", new=AsyncMock(return_value='{"legibility": "illegible", "terms": ""}')), \
+         patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback), \
+         patch("rag.settings") as mock_settings:
+        mock_settings.llm_vision_model = "gemma4:31b"
+        legibility, terms = await _extract_search_terms_from_images([{"b64": "dGVzdA==", "mime": "image/jpeg"}])
+
+    assert legibility == "illegible"
+    assert terms == ""
+
+
+@pytest.mark.asyncio
+async def test_extract_search_terms_json_parse_failure():
+    """_extract_search_terms_from_images returns ('illegible', '') when LLM returns invalid JSON."""
+    from rag import _extract_search_terms_from_images
+
+    with patch("rag.call_chat", new=AsyncMock(return_value="I can see a medical document with test results.")), \
+         patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback), \
+         patch("rag.settings") as mock_settings:
+        mock_settings.llm_vision_model = "gemma4:31b"
+        legibility, terms = await _extract_search_terms_from_images([{"b64": "dGVzdA==", "mime": "image/jpeg"}])
+
+    assert legibility == "illegible"
+    assert terms == ""
+
+
+@pytest.mark.asyncio
+async def test_extract_search_terms_json_invalid_legibility():
+    """_extract_search_terms_from_images defaults unknown legibility to 'legible'."""
+    from rag import _extract_search_terms_from_images
+
+    with patch("rag.call_chat", new=AsyncMock(return_value='{"legibility": "unknown", "terms": "Hemograma"}')), \
+         patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback), \
+         patch("rag.settings") as mock_settings:
+        mock_settings.llm_vision_model = "gemma4:31b"
+        legibility, terms = await _extract_search_terms_from_images([{"b64": "dGVzdA==", "mime": "image/jpeg"}])
+
+    assert legibility == "legible"
+    assert "Hemograma" in terms

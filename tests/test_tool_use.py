@@ -384,7 +384,6 @@ async def test_rag_query_tool_path_skipped_image():
         patch("rag.generate_answer", new_callable=AsyncMock, return_value="answer"),
         patch("rag.validate_output", side_effect=lambda x, **kw: x),
         patch("rag.save_turn", new_callable=AsyncMock),
-        patch("rag._is_illegible_response", return_value=False),
         patch("rag.get_setting", return_value=""),
         patch("rag._triage_response", new_callable=AsyncMock, return_value=("off_topic", "fallback")),
         patch("rag._log_unanswered", new_callable=AsyncMock),
