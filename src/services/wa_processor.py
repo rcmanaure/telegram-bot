@@ -9,7 +9,7 @@ from channels.protocol import ChannelButton, ChannelSendError
 from image_buffer import image_buffer
 from limiter import wa_rate_limiter
 from llm import is_tool_use_available
-from rag import rag_query, _log_unanswered
+from rag import rag_query, _log_unanswered, _build_source_footer
 from security import sanitize_user_input
 
 logger = logging.getLogger(__name__)
@@ -28,11 +28,7 @@ async def _send_wa_reply(
     Shared by _wa_process_flushed and handle_wa_message to avoid
     divergent reply formatting.
     """
-    source_footer = ""
-    if chunks:
-        sources = set(c["source"] for c in chunks if c.get("source"))
-        if sources:
-            source_footer = "\n\n📎 Fuentes: " + ", ".join(sources)
+    source_footer = _build_source_footer(chunks, channel="whatsapp")
 
     # Escalation: add "Contactar" button for off-topic or needs-human intents
     buttons = None
