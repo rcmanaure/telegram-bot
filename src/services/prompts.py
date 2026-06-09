@@ -64,6 +64,17 @@ def build_system_prompt(
 
 CONTEXTO WEB: Tu contexto proviene de resultados de búsqueda web pública, no de documentos verificados. Menciona la fuente al inicio de tu respuesta con "Según información pública:" o "Según datos públicos disponibles:". Si la información es parcial, aclara que no está verificada internamente. Si los resultados web no contienen suficiente información, di "No encontré información relevante." No inventes datos que no estén en los resultados."""
 
+    # E8: Policy inclusion rule — when context includes requirements, conditions,
+    # or policies for a procedure/service, ALWAYS include them in the response.
+    # This ensures the LLM doesn't omit critical requirements just because the
+    # user only asked about price or availability.
+    policy_clause = (
+        "\n- Cuando el contexto incluye requisitos, condiciones, políticas o instrucciones "
+        "especiales para un procedimiento o servicio, SIEMPRE inclúyelos en tu respuesta. "
+        "No omitas requisitos de preparación, formas de pago, instrucciones de transporte "
+        "de muestras, horarios, teléfonos de contacto, ni ninguna condición especial."
+    )
+
     # Example questions for triage context
     questions_clause = ""
     if example_questions:
@@ -113,7 +124,7 @@ DOCUMENTOS E IMÁGENES (REGLA CRÍTICA):
 - NO empieces cada respuesta con "¡Hola!" o "¡Hola! Con gusto te ayudo" ni saludos similares. Solo saluda en la PRIMERA interacción con el usuario. En respuestas siguientes, responde directo sin saludo.
   MAL: "¡Hola! Con gusto te ayudo. El precio es $90.00."
   BIEN: "🔬 Estudio solicitado — $90.00."
-- Responde en el idioma del usuario.{doc_summary_clause}{questions_clause}
+- Responde en el idioma del usuario.{policy_clause}{doc_summary_clause}{questions_clause}
 
 {fmt.format_instructions}
 

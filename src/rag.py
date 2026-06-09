@@ -1077,6 +1077,177 @@ async def _fetch_section_siblings(
     return siblings
 
 
+async def retrieve_policy_chunks(db: AsyncSession, namespace: str) -> list[dict]:
+    """Fetch ALL policy_statement and section_header chunks for a namespace.
+
+    These chunks are critical for complete answers — they contain requirements,
+    conditions, and structural context that semantic search often misses due to
+    low similarity to price/procedure queries. By always including them when
+    context exists, we ensure the LLM sees requirements like "pago anticipado",
+    "traer formulario", phone numbers, etc.
+
+    E7: Always-include policies in retrieval results.
+    """
+    # Try typed chunks first (E4 enrichment)
+    result = await db.execute(
+        text("""
+            SELECT content, source, page, chunk_type, metadata
+            FROM document_chunks
+            WHERE namespace = :namespace
+              AND chunk_type IN ('policy_statement', 'section_header')
+              AND embedding IS NOT NULL
+        """),
+        {"namespace": namespace},
+    )
+    rows = result.fetchall()
+
+    if not rows:
+        # NULL chunk_type fallback: pre-E4 data — use content patterns
+        result = await db.execute(
+            text("""
+                SELECT content, source, page, chunk_type, metadata
+                FROM document_chunks
+                WHERE namespace = :namespace
+                  AND embedding IS NOT NULL
+                  AND chunk_type IS NULL
+                  AND (
+                    content ~ '^## '
+                    OR content ILIKE '%requisito%'
+                    OR content ILIKE '%condición%'
+                    OR content ILIKE '%condiciones%'
+                    OR content ILIKE '%política%'
+                    OR content ILIKE '%instrucciones%'
+                    OR content ILIKE '%importante%'
+                    OR content ILIKE '%nota:%'
+                    OR content ILIKE '%aviso%'
+                  )
+            """),
+            {"namespace": namespace},
+        )
+        rows = result.fetchall()
+
+    return [
+        {
+            "content": row.content,
+            "source": row.source,
+            "page": row.page,
+            "similarity": 0.5,  # neutral similarity — included by policy, not relevance
+            "chunk_type": getattr(row, "chunk_type", None),
+            "metadata": getattr(row, "metadata", None) if hasattr(row, "metadata") else None,
+        }
+        for row in rows
+    ]
+
+
+async def retrieve_section_siblings(
+    db: AsyncSession,
+    namespace: str,
+    matched_chunks: list[dict],
+) -> list[dict]:
+    """Fetch ALL chunks from the same section as price_row chunks in context.
+
+    When a user asks about a specific procedure (e.g. "biopsia extemporánea"),
+    the price_row chunk has high similarity but the requirement/policy chunks
+    in the same section may not. This function pulls all chunks sharing the
+    same (source, section_name) as any price_row chunk, ensuring the LLM sees
+    ALL requirements for the procedure.
+
+    E9: Cross-section retrieval for procedure requirements.
+    """
+    # Collect unique (source, section_name) pairs from price_row chunks
+    sections = set()
+    for c in matched_chunks:
+        if c.get("chunk_type") != "price_row":
+            continue
+        src = c.get("source", "")
+        meta = c.get("metadata") or {}
+        section = meta.get("section_name", "")
+        if src and section:
+            sections.add((src, section))
+
+    if not sections:
+        # Fallback for NULL metadata: extract section from content header
+        for c in matched_chunks:
+            if c.get("chunk_type") == "price_row" or "\n" in c.get("content", ""):
+                src = c.get("source", "")
+                content = c.get("content", "")
+                # Find section header in content (first line starting with ##)
+                first_line = content.split("\n")[0] if "\n" in content else ""
+                if first_line.startswith("#"):
+                    section = first_line.lstrip("#").strip()
+                    if src and section:
+                        sections.add((src, section))
+
+    if not sections:
+        return []
+
+    # Build query for all chunks in those sections
+    # Using metadata->>'section_name' for typed chunks
+    conditions = []
+    params: dict = {"namespace": namespace}
+    for i, (src, section) in enumerate(sections):
+        params[f"src_{i}"] = src
+        params[f"sec_{i}"] = section
+        conditions.append(f"(source = :src_{i} AND metadata->>'section_name' = :sec_{i})")
+
+    where_clause = " OR ".join(conditions)
+
+    result = await db.execute(
+        text(f"""
+            SELECT content, source, page, chunk_type, metadata
+            FROM document_chunks
+            WHERE namespace = :namespace
+              AND ({where_clause})
+              AND embedding IS NOT NULL
+        """),
+        params,
+    )
+    rows = result.fetchall()
+
+    if not rows and sections:
+        # Fallback for NULL metadata: use content-based section matching
+        # Fetch all chunks from the same source and filter in Python
+        sources = {src for src, _ in sections}
+        source_conditions = []
+        params2: dict = {"namespace": namespace}
+        for i, src in enumerate(sources):
+            params2[f"src_{i}"] = src
+            source_conditions.append(f"source = :src_{i}")
+        source_where = " OR ".join(source_conditions)
+
+        result = await db.execute(
+            text(f"""
+                SELECT content, source, page, chunk_type, metadata
+                FROM document_chunks
+                WHERE namespace = :namespace
+                  AND ({source_where})
+                  AND embedding IS NOT NULL
+            """),
+            params2,
+        )
+        all_rows = result.fetchall()
+
+        # Filter to chunks whose content starts with the same section header
+        section_names = {sec for _, sec in sections}
+        rows = [
+            r for r in all_rows
+            if any(r.content.startswith(f"## {sec}") or r.content.startswith(f"# {sec}") for sec in section_names)
+            or any(sec in r.content[:100] for sec in section_names)
+        ]
+
+    return [
+        {
+            "content": row.content,
+            "source": row.source,
+            "page": row.page,
+            "similarity": 0.5,  # neutral similarity — included by section association
+            "chunk_type": getattr(row, "chunk_type", None),
+            "metadata": getattr(row, "metadata", None) if hasattr(row, "metadata") else None,
+        }
+        for row in rows
+    ]
+
+
 async def _extract_search_terms_from_images(images: list[dict]) -> tuple[str, str]:
     """Use the vision model to extract key search terms from images.
 
@@ -2170,6 +2341,40 @@ async def rag_query(
                 "catalog_sections_merged ns=%s added=%d total=%d",
                 namespace, len(catalog_new), len(context),
             )
+
+    # E7: Always-include policy chunks — policy_statement and section_header chunks
+    # contain requirements, conditions, and structural context that semantic search
+    # often misses because they score low on similarity to price/procedure queries.
+    # Only merged when context is non-empty — off-topic queries should still triage.
+    if context:
+        policy_chunks = await retrieve_policy_chunks(db, namespace)
+        if policy_chunks:
+            seen = {c["content"] for c in context}
+            policy_new = [c for c in policy_chunks if c["content"] not in seen]
+            if policy_new:
+                context = context + policy_new
+                logger.info(
+                    "policy_chunks_merged ns=%s q=%r added=%d total=%d",
+                    namespace, question[:60], len(policy_new), len(context),
+                )
+
+    # E9: Cross-section retrieval — when price_row chunks are in context, fetch ALL
+    # chunks from the same section. This catches procedure-specific requirements
+    # (e.g. "Biopsia Extemporánea: traer cita, pago anticipado, sin formol...") that
+    # are in the same section but have low semantic similarity to the price query.
+    if context:
+        price_rows = [c for c in context if c.get("chunk_type") == "price_row"]
+        if price_rows:
+            section_siblings = await retrieve_section_siblings(db, namespace, price_rows)
+            if section_siblings:
+                seen = {c["content"] for c in context}
+                sibling_new = [c for c in section_siblings if c["content"] not in seen]
+                if sibling_new:
+                    context = context + sibling_new
+                    logger.info(
+                        "section_siblings_e9 ns=%s q=%r price_rows=%d added=%d total=%d",
+                        namespace, question[:60], len(price_rows), len(sibling_new), len(context),
+                    )
 
     # If vision-augmented retrieval found context, fall through to the main
     # generate_answer path below. Otherwise, handle the no-context cases.
