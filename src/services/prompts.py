@@ -99,10 +99,9 @@ _GREETING_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-ESCALATION_PATTERN = re.compile(
-    r'\b(operador|humano|persona real|hablar con alguien|quiero hablar|agente|contactar|representante)\b',
-    re.IGNORECASE,
-)
+# NOTE: ESCALATION_PATTERN regex removed — replaced by LLM-based _classify_intent()
+# in rag.py. The intent router now classifies needs_human, price_catalog, search_docs
+# via the LLM, not regex. See commit 5602664.
 
 # ─── Spanish-language injection patterns ──────────────────────────────────────────
 
