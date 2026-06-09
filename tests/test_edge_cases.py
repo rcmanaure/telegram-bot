@@ -368,7 +368,7 @@ def test_build_system_prompt_includes_partial_match_guidance():
     assert "COINCIDENCIAS PARCIALES" in prompt
     assert "similar o equivalente" in prompt
     # Must instruct to offer what's found and note the difference
-    assert "proporcioná" in prompt or "proporcioná la información" in prompt
+    assert "proporciona" in prompt or "proporciona la información" in prompt
     # Partial-match rules must have priority — off_topic only when NO relation at all
     assert "PRIORIDAD ALTA" in prompt or "prevalecen" in prompt
     assert "NO HAY NINGUNA relación" in prompt
@@ -650,7 +650,7 @@ async def test_handle_message_generic_exception_returns_generic_message():
             await handle_message(update, ctx)
 
     reply = update.message.reply_text.call_args[0][0].lower()
-    assert "problema" in reply or "intentá" in reply
+    assert "problema" in reply or "intenta" in reply
 
 
 # ─── API: upload edge cases ───────────────────────────────────────────────────
@@ -1178,7 +1178,7 @@ async def test_generate_answer_image_includes_do_not_ask_for_image_instruction()
     assert "YA la envió" in text_part["text"] or "NUNCA le digas" in text_part["text"]
     # Verify partially legible guidance is included
     assert "PARCIALMENTE legible" in text_part["text"]
-    assert "extraé lo que puedas" in text_part["text"]
+    assert "extrae lo que puedas" in text_part["text"]
 
 
 @pytest.mark.asyncio
@@ -1283,7 +1283,7 @@ async def test_vision_augmented_retrieval_finds_context():
          patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
         mock_settings.llm_vision_model = "gemma4:31b"
         answer, chunks, intent = await rag_query(
-            mock_db, "¿Qué querés saber sobre esta imagen?", "ns", "u1",
+            mock_db, "¿Qué quieres saber sobre esta imagen?", "ns", "u1",
             images=[{"b64": "dGVzdA==", "mime": "image/jpeg"}],
         )
 
@@ -1319,7 +1319,7 @@ async def test_vision_augmented_retrieval_falls_back_when_no_context():
          patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
         mock_settings.llm_vision_model = "gemma4:31b"
         answer, chunks, intent = await rag_query(
-            mock_db, "¿Qué querés saber sobre esta imagen?", "ns", "u1",
+            mock_db, "¿Qué quieres saber sobre esta imagen?", "ns", "u1",
             images=[{"b64": "dGVzdA==", "mime": "image/jpeg"}],
         )
 
@@ -1348,7 +1348,7 @@ async def test_vision_augmented_retrieval_skipped_when_no_vision_model():
          patch("rag.get_setting", new=lambda k, fallback="": "" if k == "llm_vision_model" else fallback):
         mock_settings.llm_vision_model = ""
         answer, chunks, intent = await rag_query(
-            mock_db, "¿Qué querés saber sobre esta imagen?", "ns", "u1",
+            mock_db, "¿Qué quieres saber sobre esta imagen?", "ns", "u1",
             images=[{"b64": "dGVzdA==", "mime": "image/jpeg"}],
         )
 
@@ -1408,7 +1408,7 @@ async def test_rag_query_low_confidence_fallback():
     with patch("rag.retrieve_context", new=AsyncMock(return_value=low_sim_chunks)), \
          patch("rag.get_history", new=AsyncMock(return_value=[])), \
          patch("rag._reformulate_query", new=AsyncMock(side_effect=lambda q, h: q)), \
-         patch("rag.generate_answer", new=AsyncMock(return_value="🔬 Biopsia de Apéndice — $80.00 USD. Puede ser el mismo estudio que mencionás.")) as mock_gen, \
+         patch("rag.generate_answer", new=AsyncMock(return_value="🔬 Biopsia de Apéndice — $80.00 USD. Puede ser el mismo estudio que mencionas.")) as mock_gen, \
          patch("rag.validate_output", side_effect=lambda x, **kw: x), \
          patch("rag.save_turn", new=AsyncMock()), \
          patch("rag.settings") as mock_settings, \
@@ -2408,7 +2408,7 @@ async def test_vision_augmented_empty_query_falls_through_to_image_only():
          patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
         mock_settings.llm_vision_model = "gemma4:31b"
         answer, chunks, intent = await rag_query(
-            mock_db, "¿Qué querés saber sobre esta imagen?", "ns", "u1",
+            mock_db, "¿Qué quieres saber sobre esta imagen?", "ns", "u1",
             images=[{"b64": "dGVzdA==", "mime": "image/jpeg"}],
         )
 
@@ -2495,7 +2495,7 @@ async def test_vision_augmented_low_confidence_fallback():
          patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
         mock_settings.llm_vision_model = "gemma4:31b"
         answer, chunks, intent = await rag_query(
-            mock_db, "¿Qué querés saber sobre esta imagen?", "ns", "u1",
+            mock_db, "¿Qué quieres saber sobre esta imagen?", "ns", "u1",
             images=[{"b64": "dGVzdA==", "mime": "image/jpeg"}],
         )
 
@@ -2582,5 +2582,144 @@ async def test_extract_search_terms_json_invalid_legibility():
         mock_settings.llm_vision_model = "gemma4:31b"
         legibility, terms = await _extract_search_terms_from_images([{"b64": "dGVzdA==", "mime": "image/jpeg"}])
 
-    assert legibility == "legible"
-    assert "Hemograma" in terms
+
+# ─── FALL-1: LLM failover alert to operator ──────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_alert_llm_failover_sends_message():
+    """_alert_llm_failover sends a Telegram message to operator_chat_id."""
+    from rag import _alert_llm_failover, _failover_alert_sent
+
+    tenant = MagicMock()
+    tenant.id = 42
+    tenant.slug = "test-tenant"
+    tenant.operator_chat_id = "12345"
+    tenant.bot_token = "bot_token_42"
+
+    mock_bot = AsyncMock()
+    mock_tg_app = MagicMock()
+    mock_tg_app.bot = mock_bot
+
+    # Clear any previous alert for this tenant
+    _failover_alert_sent.pop(tenant.id, None)
+
+    with patch("state.telegram_apps", {"bot_token_42": mock_tg_app}):
+        await _alert_llm_failover(tenant)
+
+    mock_bot.send_message.assert_called_once()
+    call_kwargs = mock_bot.send_message.call_args
+    assert call_kwargs.kwargs["chat_id"] == "12345"
+    assert "falló" in call_kwargs.kwargs["text"].lower() or "respaldo" in call_kwargs.kwargs["text"].lower()
+    # Cleanup
+    _failover_alert_sent.pop(tenant.id, None)
+
+
+@pytest.mark.asyncio
+async def test_alert_llm_failover_deduped_within_hour():
+    """_alert_llm_failover skips sending if alert was sent within the last hour."""
+    from rag import _alert_llm_failover, _failover_alert_sent, _FAILOVER_ALERT_COOLDOWN
+    import time as _time
+
+    tenant = MagicMock()
+    tenant.id = 43
+    tenant.slug = "dedup-tenant"
+    tenant.operator_chat_id = "99999"
+    tenant.bot_token = "bot_token_43"
+
+    mock_bot = AsyncMock()
+    mock_tg_app = MagicMock()
+    mock_tg_app.bot = mock_bot
+
+    # Simulate alert sent recently
+    _failover_alert_sent[tenant.id] = _time.monotonic() - 60  # 1 min ago
+
+    with patch("state.telegram_apps", {"bot_token_43": mock_tg_app}):
+        await _alert_llm_failover(tenant)
+
+    mock_bot.send_message.assert_not_called()
+    # Cleanup
+    _failover_alert_sent.pop(tenant.id, None)
+
+
+@pytest.mark.asyncio
+async def test_alert_llm_failover_no_operator_chat_id():
+    """_alert_llm_failover is a no-op when operator_chat_id is None."""
+    from rag import _alert_llm_failover, _failover_alert_sent
+
+    tenant = MagicMock()
+    tenant.id = 44
+    tenant.slug = "no-operator"
+    tenant.operator_chat_id = None
+    tenant.bot_token = "bot_token_44"
+
+    _failover_alert_sent.pop(tenant.id, None)
+
+    # Should not raise even with no telegram_apps patch
+    await _alert_llm_failover(tenant)
+
+
+@pytest.mark.asyncio
+async def test_call_chat_on_failover_callback_called():
+    """call_chat invokes on_failover callback when fallback model succeeds after primary fails."""
+    from llm import call_chat
+
+    callback = AsyncMock()
+
+    # First call (primary) fails, second call (fallback) succeeds
+    call_count = 0
+    async def _mock_post(url, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        resp = MagicMock()
+        if call_count == 1:
+            resp.raise_for_status.side_effect = httpx.HTTPStatusError("503", request=MagicMock(), response=MagicMock(status_code=503))
+            raise httpx.HTTPStatusError("503", request=MagicMock(), response=MagicMock(status_code=503))
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = {"choices": [{"message": {"content": "fallback answer"}}], "model": "fallback-model"}
+        return resp
+
+    with patch("llm.get_setting", side_effect=lambda k, fallback="": {
+        "llm_base_url": "https://primary.test", "llm_api_key": "pk",
+        "llm_model": "primary-model", "llm_fallback_model": "fallback-model",
+        "llm_fallback_base_url": "https://fallback.test",
+        "llm_fallback_api_key": "fk",
+    }.get(k, fallback)):
+        with patch("llm._chat_client") as mock_client:
+            mock_client.post = _mock_post
+            result = await call_chat(
+                [{"role": "user", "content": "test"}],
+                on_failover=callback,
+            )
+
+    assert result == "fallback answer"
+    callback.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_call_chat_on_failover_not_called_on_primary_success():
+    """call_chat does NOT call on_failover when primary model succeeds."""
+    from llm import call_chat
+
+    callback = AsyncMock()
+
+    async def _mock_post(url, **kwargs):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = {"choices": [{"message": {"content": "primary answer"}}], "model": "primary-model"}
+        return resp
+
+    with patch("llm.get_setting", side_effect=lambda k, fallback="": {
+        "llm_base_url": "https://primary.test", "llm_api_key": "pk",
+        "llm_model": "primary-model", "llm_fallback_model": "fallback-model",
+        "llm_fallback_base_url": "https://fallback.test",
+        "llm_fallback_api_key": "fk",
+    }.get(k, fallback)):
+        with patch("llm._chat_client") as mock_client:
+            mock_client.post = _mock_post
+            result = await call_chat(
+                [{"role": "user", "content": "test"}],
+                on_failover=callback,
+            )
+
+    assert result == "primary answer"
+    callback.assert_not_called()

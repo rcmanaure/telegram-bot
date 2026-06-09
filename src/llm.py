@@ -16,6 +16,7 @@ import json
 import logging
 import re
 import time
+from typing import Awaitable, Callable
 
 import httpx
 from openai import AsyncOpenAI, APIError, APITimeoutError, RateLimitError
@@ -113,6 +114,7 @@ async def call_chat(
     temperature: float = 0.1,
     channel: str = "telegram",
     model: str | None = None,
+    on_failover: Callable[[], Awaitable[None]] | None = None,
 ) -> str:
     """
     Call chat/completions with primary model, then fallback on failure.
@@ -121,6 +123,9 @@ async def call_chat(
 
     When model= is set (e.g. for vision), only that model is tried — no fallback.
     Text-only fallback models must not receive image payloads.
+
+    When on_failover is provided, it is awaited when the primary model fails
+    but a fallback model succeeds. Use this to alert operators of degraded service.
     """
     PRIMARY_TIMEOUT = 60.0
     FALLBACK_TIMEOUT = 15.0
@@ -196,6 +201,11 @@ async def call_chat(
                     primary_model, m, actual_model, base_url,
                     type(last_error).__name__ if last_error else "unknown", elapsed_ms,
                 )
+                if on_failover:
+                    try:
+                        await on_failover()
+                    except Exception:
+                        logger.warning("on_failover callback error", exc_info=True)
             return content
         except (httpx.HTTPError, KeyError, IndexError, json.JSONDecodeError) as e:
             elapsed_ms = (time.monotonic() - t0) * 1000
