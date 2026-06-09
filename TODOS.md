@@ -2,9 +2,9 @@
 
 ## LLM Fallback Chain
 
-- [ ] **FALL-1 (P2, fallback alert to operator)** — When `llm_failover` fires in `llm.py:call_chat()`, send a real-time Telegram message to `operator_chat_id` via the tenant's bot: `"⚠️ LLM fallback activated: {model} at {time}. Primary error: {error}"`. Deduped per hour per tenant to prevent alert spam. Piggybacks on the existing `daily_digest_job` pattern in `src/services/jobs.py`. Trigger: first time Ollama Cloud goes down in production and the operator misses it for >1h. Effort: CC ~20min / human ~1 day. Depends on: N-model chain implementation.
+- [x] **FALL-1 (P2, fallback alert to operator)** — Shipped: `on_failover` callback in `call_chat()` → `_alert_llm_failover()` in `rag.py` sends Telegram message to `operator_chat_id`, deduped per hour per tenant. 5 tests.
 
-- [ ] **FALL-3 (P3, admin UI fallback format hint)** — After T1 ships, the `llm_fallback_model` field in the admin UI accepts comma-separated model names but shows no hint. Add `<small>Separate multiple models with commas: model1,model2</small>` under the input in `src/templates/admin/index.html`. Trigger: first operator reports confusion seeing the comma-separated value. Effort: CC ~5min / human ~10min.
+- [x] **FALL-3 (P3, admin UI fallback format hint)** — Shipped: `<small>Separar múltiples modelos con comas: modelo1,modelo2</small>` added under fallback model input in admin UI.
 
 - [ ] **FALL-2 (P3, add paid model to fallback chain when revenue allows)** — Add one paid model (e.g., `anthropic/claude-haiku-4-5` via OpenRouter ~$0.25/MTok) as a 4th fallback after `xiaomi/mimo-v2.5`. Currently both fallbacks (openrouter/free + mimo-v2.5) share OpenRouter as provider — a single OpenRouter outage takes out all fallbacks. A paid model on a separate provider (Anthropic-backed) breaks the concentration. The N-model chain already supports this as a zero-code `.env` addition. Trigger: first paying client complains about downtime from an OpenRouter outage, or monthly LLM budget allows ~$15-20/month. Effort: CC ~5min (env var) / human ~30min (verify + test). Context: accepted as deferred during /plan-ceo-review 2026-06-04.
 
@@ -14,13 +14,13 @@
 
 - [ ] **DIAL-1 (P2, per-tenant dialect config)** — Add `dialect` nullable column to `Tenant` model (enum: `neutral_latam` default, `rioplatense`, `usted_formal`). Alembic migration. Admin UI select per tenant. `build_system_prompt()` takes `dialect=` param, branches the dialect instruction accordingly. Trigger: first client from Argentina/Uruguay requests voseo, or first Colombian client requests formal usted. Effort: CC ~1h / human ~2 days. Context: Approach B from design doc `~/.gstack/projects/rcmanaure-telegram-bot/root-main-design-20260604-142108.md`. Current neutral LATAM platform default ships as DIAL-0 (this PR). Alembic migration pattern follows existing nullable Tenant columns.
 
-- [ ] **DIAL-2 (P3, align triage strings to neutral LATAM)** — Hardcoded voseo strings in `src/rag.py` bypass LLM and reach users directly: `"Entiendo que querés hablar con alguien"` (line 1435), `"No encontré información de precios"` (line 504), off_topic_reply in `prompts.py` line 22. Change these to neutral LATAM tú forms for voice consistency. Trigger: after DIAL-0 ships and a client notices the inconsistency. Effort: CC ~10min / human ~30min. Context: these strings are not LLM-generated — they bypass the dialect instruction entirely.
+- [x] **DIAL-2 (P3, align triage strings to neutral LATAM)** — Shipped: 68 voseo→tú replacements across 6 files (rag.py, bot.py, image_buffer.py, prompts.py, wa_processor.py, channels/protocol.py). 388 tests pass.
 
 - [ ] **DIAL-3 (P3, eval test for LATAM dialect compliance)** — Add an integration eval test that sends real LLM calls to the deployed bot and asserts responses don't contain Spain Spanish markers (vosotros, ordenador, vale as filler). Unit tests (T2, T3) verify the instruction is present in prompts; this eval proves the LLM obeys it. Requires LLM eval infrastructure (e.g., `pytest -m integration` with a mock LLM fixture or live test tenant). Trigger: when an eval harness exists or a dialect regression is reported. Effort: CC ~30min / human ~2h. Context: T2 tests prompts.py, T3 tests rag.py — but neither proves the LLM actually produces LATAM Spanish output.
 
 ## Tool Use Agent — Feature Backlog (post-v1)
 
-- [ ] **TOOL-E1 (P2, source citations)** — After tool dispatch, extract chunk sources (`source` field) and web URLs from tool results; include in answer or append as footnotes. Trigger: first client asks "where did you get this?" or feedback shows distrust. Effort: CC ~30min / human ~2h. Context: tool results already carry chunk dicts — parsing is 10 lines. See CEO plan `~/.gstack/projects/rcmanaure-telegram-bot/ceo-plans/2026-06-03-tool-use-agent.md`.
+- [x] **TOOL-E1 (P2, source citations)** — Shipped: `_build_source_footer()` utility shows doc sources with page numbers + web URLs. Removed `similarity>0.75` gate — all valid chunks get attribution. Tool-path now collects chunks from ALL search_documents + search_web calls. 7 tests.
 
 - [ ] **TOOL-E3 (P3, admin tool telemetry)** — Log which tools were called per conversation turn (new column or JSON field on `Conversation`). Admin `/admin?tab=tools` showing search_docs vs search_web call counts, hit rate, top queries triggering each. Trigger: after 4+ weeks of prod data. Effort: CC ~1h / human ~1 day. Context: build from real data to know what metrics matter.
 
@@ -72,7 +72,7 @@
 - [x] `APP_DOMAIN=` (ej: `mybotplatform.fly.dev`, o `xxxx.ngrok.io` para dev)
 - [x] `SENTRY_DSN=` (vacío en dev)
 - [x] `ENVIRONMENT=dev`
-- [ ] Eliminar de `.env`: `TELEGRAM_BOT_TOKEN=`, `DATABASE_URL_SYNC=`, `DEFAULT_NAMESPACE=` (removidos del modelo — no se usan)
+- [x] Eliminar de `.env`: `TELEGRAM_BOT_TOKEN=`, `DATABASE_URL_SYNC=`, `DEFAULT_NAMESPACE=` — removed, confirmed unused in src/
 
 ## Smart Chatbot v2 — Completado ✅
 
