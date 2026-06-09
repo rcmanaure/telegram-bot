@@ -125,6 +125,10 @@
 - [x] **V8** Admin UI — toggle web_search_enabled; image accept en file inputs; `.env.example` Ollama block **Completed:** v0.3.0.0 (2026-06-01)
 - [x] **V10** Tests — handle_photo, vision generate_answer, image upload, web search triage **Completed:** v0.4.0.0 (2026-06-02)
 
+## LLM-First Intent Router
+
+- [ ] **INTENT-3 (P2, post-ship validation)** — 1 week after Commit 1 ships, check `classify_intent` warning log rate (grep `"classify_intent failed"`); if >5% of messages hit the except clause, investigate LLM provider reliability. Also sample `UnansweredQuery` WHERE `intent = 'ambiguous'` to verify the `price_catalog` router hasn't introduced false negatives on specific-price queries (e.g., "cuánto cuesta la biopsia" should stay `search_docs`, not `price_catalog`). If regressions found, tighten the `_classify_intent` prompt counter-examples. Effort: CC ~5min (log grep + query) / human ~30min (review + prompt tweak if needed). Context: `_PRICE_INTENT_RE` removed in Commit 1 and replaced by LLM classification; DB migration for `UnansweredQuery.source` was reverted — use log grep `"unanswered_escalation.*source=intent_router"` to distinguish intent_router vs triage_response escalations.
+
 ## Deferred (cuando haya > 10 clientes)
 
 - [x] Dynamic tenant reload sin restart — `POST /admin/tenant/{id}/toggle-active`

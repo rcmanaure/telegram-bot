@@ -336,14 +336,13 @@ async def test_rag_query_tool_path_direct_content():
         patch("rag.get_history", new_callable=AsyncMock, return_value=[]),
         patch("rag._reformulate_query", new_callable=AsyncMock, return_value="hola"),
         patch("rag._GREETING_PATTERN") as mock_greeting,
-        patch("rag.ESCALATION_PATTERN") as mock_esc,
+        patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"),
         patch("rag.call_chat_with_tools", new_callable=AsyncMock, return_value=("¡Hola! ¿En qué te ayudo?", [])),
         patch("rag.validate_output", side_effect=lambda x, **kw: x),
         patch("rag.save_turn", new_callable=AsyncMock),
         patch("rag.CANARY_TOKEN", "CANARY"),
     ):
         mock_greeting.match.return_value = None
-        mock_esc.search.return_value = None
 
         tenant = MagicMock()
         tenant.web_search_enabled = True
@@ -378,7 +377,8 @@ async def test_rag_query_tool_path_skipped_image():
         patch("rag.get_history", new_callable=AsyncMock, return_value=[]),
         patch("rag._reformulate_query", new_callable=AsyncMock, return_value="q"),
         patch("rag._GREETING_PATTERN") as mock_greeting,
-        patch("rag.ESCALATION_PATTERN") as mock_esc,
+        patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"),
+        patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]),
         patch("rag.call_chat_with_tools", new_callable=AsyncMock) as mock_tools,
         patch("rag.retrieve_context", new_callable=AsyncMock, return_value=[]),
         patch("rag.generate_answer", new_callable=AsyncMock, return_value="answer"),
@@ -391,7 +391,6 @@ async def test_rag_query_tool_path_skipped_image():
         patch("rag.CANARY_TOKEN", "CANARY"),
     ):
         mock_greeting.match.return_value = None
-        mock_esc.search.return_value = None
         mock_tools.assert_not_called  # tool path should not be entered
 
         tenant = MagicMock()
@@ -426,7 +425,8 @@ async def test_rag_query_tool_path_skipped_one_tool():
         patch("rag.get_history", new_callable=AsyncMock, return_value=[]),
         patch("rag._reformulate_query", new_callable=AsyncMock, return_value="q"),
         patch("rag._GREETING_PATTERN") as mock_greeting,
-        patch("rag.ESCALATION_PATTERN") as mock_esc,
+        patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"),
+        patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]),
         patch("rag.call_chat_with_tools", new_callable=AsyncMock) as mock_tools,
         patch("rag.retrieve_context", new_callable=AsyncMock, return_value=[]),
         patch("rag._triage_response", new_callable=AsyncMock, return_value=("off_topic", "fallback")),
@@ -436,7 +436,6 @@ async def test_rag_query_tool_path_skipped_one_tool():
         patch("rag.CANARY_TOKEN", "CANARY"),
     ):
         mock_greeting.match.return_value = None
-        mock_esc.search.return_value = None
 
         tenant = MagicMock()
         tenant.web_search_enabled = True
@@ -463,7 +462,8 @@ async def test_rag_query_tool_path_skipped_backoff():
         patch("rag.get_history", new_callable=AsyncMock, return_value=[]),
         patch("rag._reformulate_query", new_callable=AsyncMock, return_value="q"),
         patch("rag._GREETING_PATTERN") as mock_greeting,
-        patch("rag.ESCALATION_PATTERN") as mock_esc,
+        patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"),
+        patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]),
         patch("rag.call_chat_with_tools", new_callable=AsyncMock) as mock_tools,
         patch("rag.retrieve_context", new_callable=AsyncMock, return_value=[]),
         patch("rag._triage_response", new_callable=AsyncMock, return_value=("off_topic", "fallback")),
@@ -473,7 +473,6 @@ async def test_rag_query_tool_path_skipped_backoff():
         patch("rag.CANARY_TOKEN", "CANARY"),
     ):
         mock_greeting.match.return_value = None
-        mock_esc.search.return_value = None
 
         tenant = MagicMock()
         tenant.web_search_enabled = True
@@ -514,7 +513,7 @@ async def test_rag_query_partial_tool_failure():
         patch("rag.get_history", new_callable=AsyncMock, return_value=[]),
         patch("rag._reformulate_query", new_callable=AsyncMock, return_value="q"),
         patch("rag._GREETING_PATTERN") as mock_greeting,
-        patch("rag.ESCALATION_PATTERN") as mock_esc,
+        patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"),
         patch("rag.call_chat_with_tools", new_callable=AsyncMock, return_value=(None, [tc_docs, tc_web])),
         patch("rag._dispatch_tool", new=fake_dispatch),
         patch("rag._tool_search_documents", new_callable=AsyncMock, return_value=("[Doc 1]: some result", [{"content": "some result", "source": "doc.pdf", "page": 1, "similarity": 0.9}])),
@@ -524,7 +523,6 @@ async def test_rag_query_partial_tool_failure():
         patch("rag.CANARY_TOKEN", "CANARY"),
     ):
         mock_greeting.match.return_value = None
-        mock_esc.search.return_value = None
 
         tenant = MagicMock()
         tenant.web_search_enabled = True
@@ -559,11 +557,12 @@ async def test_rag_query_tool_all_empty_falls_back():
         patch("rag.get_history", new_callable=AsyncMock, return_value=[]),
         patch("rag._reformulate_query", new_callable=AsyncMock, return_value="q"),
         patch("rag._GREETING_PATTERN") as mock_greeting,
-        patch("rag.ESCALATION_PATTERN") as mock_esc,
+        patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"),
         patch("rag.call_chat_with_tools", new_callable=AsyncMock, return_value=(None, [tc])),
         patch("rag._dispatch_tool", new_callable=AsyncMock, return_value=""),
         # Sequential pipeline mock
         patch("rag.retrieve_context", new_callable=AsyncMock, return_value=[]),
+        patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]),
         patch("rag._triage_response", new_callable=AsyncMock, return_value=("ambiguous", "No info found")),
         patch("rag._log_unanswered", new_callable=AsyncMock),
         patch("rag.save_turn", new_callable=AsyncMock),
@@ -571,7 +570,6 @@ async def test_rag_query_tool_all_empty_falls_back():
         patch("rag.CANARY_TOKEN", "CANARY"),
     ):
         mock_greeting.match.return_value = None
-        mock_esc.search.return_value = None
 
         tenant = MagicMock()
         tenant.web_search_enabled = True
@@ -606,7 +604,7 @@ async def test_rag_query_tool_path_canary_redacted():
         patch("rag.get_history", new_callable=AsyncMock, return_value=[]),
         patch("rag._reformulate_query", new_callable=AsyncMock, return_value="q"),
         patch("rag._GREETING_PATTERN") as mock_greeting,
-        patch("rag.ESCALATION_PATTERN") as mock_esc,
+        patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"),
         patch("rag.call_chat_with_tools", new_callable=AsyncMock, return_value=(None, [tc])),
         patch("rag._dispatch_tool", new_callable=AsyncMock, return_value="some docs"),
         patch("rag._tool_search_documents", new_callable=AsyncMock, return_value=("some docs", [])),
@@ -616,7 +614,6 @@ async def test_rag_query_tool_path_canary_redacted():
         patch("rag.CANARY_TOKEN", "CANARY_TOKEN_HERE"),
     ):
         mock_greeting.match.return_value = None
-        mock_esc.search.return_value = None
 
         tenant = MagicMock()
         tenant.web_search_enabled = True

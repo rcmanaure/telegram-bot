@@ -29,22 +29,37 @@ async def daily_digest_job():
                 continue
             async with AsyncSessionLocal() as db:
                 result = await db.execute(
-                    select(UnansweredQuery.question, func.count().label("cnt"))
+                    select(
+                        UnansweredQuery.question,
+                        UnansweredQuery.intent_category,
+                        func.count().label("cnt"),
+                    )
                     .where(
                         UnansweredQuery.tenant_id == tenant.id,
                         UnansweredQuery.created_at >= cutoff,
+                        UnansweredQuery.intent_category != "greeting",
                     )
-                    .group_by(UnansweredQuery.question)
-                    .order_by(text("cnt DESC"))
-                    .limit(5)
+                    .group_by(UnansweredQuery.question, UnansweredQuery.intent_category)
+                    .order_by(
+                        # needs_human first, then by frequency
+                        text("CASE WHEN intent_category = 'needs_human' THEN 0 ELSE 1 END"),
+                        text("cnt DESC"),
+                    )
+                    .limit(10)
                 )
                 rows = result.fetchall()
             if not rows:
                 continue
             bot_name = tenant.name or tenant.slug
             lines = [f"📊 *Consultas sin respuesta — {bot_name}* (últimas 24h):\n"]
+            intent_labels = {
+                "needs_human":  "🚨 quiere humano",
+                "off_topic":    "↩️ fuera de tema",
+                "ambiguous":    "❓ sin info",
+            }
             for i, row in enumerate(rows, 1):
-                lines.append(f"{i}. {row.question} ({row.cnt}×)")
+                label = intent_labels.get(row.intent_category, row.intent_category)
+                lines.append(f"{i}. {row.question} ({row.cnt}×) — _{label}_")
             await tg_app.bot.send_message(
                 chat_id=tenant.operator_chat_id,
                 text="\n".join(lines),

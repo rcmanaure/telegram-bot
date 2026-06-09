@@ -15,7 +15,7 @@ import time
 from collections import OrderedDict
 
 import httpx
-from services.prompts import build_system_prompt, ESCALATION_PATTERN, _GREETING_PATTERN
+from services.prompts import build_system_prompt, _GREETING_PATTERN
 from services.stt import transcribe_voice
 from security import CANARY_TOKEN, scan_chunk_for_injection, sanitize_user_input, validate_output
 
@@ -630,16 +630,6 @@ async def _reformulate_query(question: str, history: list[dict]) -> str:
 
 
 # ─── HyDE (Hypothetical Document Embeddings) ──────────────────────────────────
-
-# Detects explicit "all prices" intent — triggers code-generated full catalog.
-# Intentionally narrow: only matches queries asking for ALL prices, not a specific item's price.
-# (The bare `precio[s]?` term was removed to avoid matching "precio de la biopsia X".)
-_PRICE_INTENT_RE = re.compile(
-    r'\b(de\s+cada\s+uno|de\s+todos(\s+los)?|todos\s+los\s+precios?|'
-    r'lista\s+(completa\s+)?de\s+precios?|precio[s]?\s+de\s+(cada|todos)|'
-    r'cu[aá]nto\s+cuesta\s+cada|dame\s+(todos?|todos?\s+los)\s+precios?)\b',
-    re.IGNORECASE,
-)
 
 
 async def _hyde_query(question: str, expertise_area: str) -> str:
@@ -1416,6 +1406,50 @@ async def _log_unanswered(
         logger.warning("Failed to log UnansweredQuery: %s", e)
 
 
+async def _classify_intent(question: str, last_bot_turn: str | None = None) -> str:
+    """
+    Lightweight pre-RAG intent classification. Called after the tool-use block in rag_query().
+    Returns one of: search_docs | needs_human | price_catalog
+    Falls back to "search_docs" on any LLM or parse failure (safe default).
+    """
+    context_hint = (
+        f"\nPrevious bot reply (context only): {last_bot_turn[:120]}"
+        if last_bot_turn else ""
+    )
+    messages = [
+        {"role": "system", "content": (
+            "Classify the user's intent. Reply ONLY with JSON: "
+            '{"intent": "<search_docs|needs_human|price_catalog>"}\n'
+            "Definitions:\n"
+            "- search_docs: user wants information from documents (DEFAULT — when in doubt)\n"
+            "- needs_human: user EXPLICITLY wants to speak with a real person right now\n"
+            "- price_catalog: user wants the COMPLETE price list for all services\n"
+            "Counter-examples for price_catalog:\n"
+            "  'cuánto cuesta la biopsia' → search_docs\n"
+            "  'precio del estudio X' → search_docs\n"
+            "  'dame todos los precios' → price_catalog\n"
+            "Counter-examples for needs_human:\n"
+            "  '¿cómo puedo contactar el laboratorio?' → search_docs\n"
+            "  'necesito contactar para saber mis resultados' → search_docs\n"
+            "  'quiero hablar con un humano' → needs_human\n"
+            "  'necesito hablar con una persona' → needs_human"
+            f"{context_hint}"
+        )},
+        {"role": "user", "content": question},
+    ]
+    intent_model = get_setting("llm_intent_model", settings.llm_intent_model) or None
+    try:
+        raw = await call_chat(messages, max_tokens=80, temperature=0.0, model=intent_model)
+        parsed = extract_json_from_llm_response(raw)
+        intent = parsed.get("intent", "search_docs")
+        if intent not in {"search_docs", "needs_human", "price_catalog"}:
+            return "search_docs"
+        return intent
+    except Exception as e:
+        logger.warning("classify_intent failed: %s — fallback search_docs", e)
+        return "search_docs"
+
+
 async def rag_query(
     db: AsyncSession,
     question: str,
@@ -1441,14 +1475,6 @@ async def rag_query(
         answer = f"¡Hola! ¿En qué puedo ayudarte?{(' ' + expertise_area) if expertise_area else ''}"
         await save_turn(db, user_id, namespace, question, answer, channel=channel, tenant_id=tenant_id)
         return answer, [], "greeting"
-
-    # Pre-RAG: explicit escalation shortcut — skip vector search
-    if ESCALATION_PATTERN.search(question):
-        area_clause = f" Mi área de expertise: {expertise_area}." if expertise_area else ""
-        answer = f"Entiendo que querés hablar con alguien.{area_clause} Contactamos directamente."
-        await save_turn(db, user_id, namespace, question, answer, channel=channel)
-        await _log_unanswered(db, namespace, question, user_id, "needs_human", tenant_id)
-        return answer, [], "needs_human"
 
     # Vision guard: if user sent an image but no vision model is configured,
     # skip the LLM call entirely — sending image payloads to text-only models
@@ -1554,14 +1580,24 @@ async def rag_query(
             logger.warning("tool_path_error ns=%s error=%s — falling back to sequential", namespace, e)
     # ── END TOOL PATH ─────────────────────────────────────────────────────────
 
-    # ── PRICE CODEGEN PATH ────────────────────────────────────────────────────
-    # Full price list queries: code-generated from all catalog chunks, bypassing the LLM.
-    # Only Telegram (WhatsApp doesn't support the Markdown table format).
-    # Check both original question AND reformulated search_query (follow-ups match after reformulation).
-    _is_price_list = (
-        _PRICE_INTENT_RE.search(question) or _PRICE_INTENT_RE.search(search_query)
-    ) and channel == "telegram"
-    if _is_price_list:
+    # ── INTENT ROUTER ─────────────────────────────────────────────────────────
+    # LLM-based classifier replaces ESCALATION_PATTERN + _PRICE_INTENT_RE regex gates.
+    # Runs only when tool-use falls through (tool-use success returns early above).
+    last_bot_turn = next(
+        (m["content"] for m in reversed(history) if m.get("role") == "assistant"), None
+    )
+    intent = await _classify_intent(question, last_bot_turn=last_bot_turn)
+    logger.info("classify_intent ns=%s intent=%s q=%r", namespace, intent, question[:60])
+
+    if intent == "needs_human":
+        area_clause = f" Mi área de expertise: {expertise_area}." if expertise_area else ""
+        answer = f"Entiendo que querés hablar con alguien.{area_clause} Contactamos directamente."
+        await save_turn(db, user_id, namespace, question, answer, channel=channel, tenant_id=tenant_id)
+        await _log_unanswered(db, namespace, question, user_id, "needs_human", tenant_id)
+        logger.info("unanswered_escalation ns=%s source=intent_router q=%r", namespace, question[:60])
+        return answer, [], "needs_human"
+
+    if intent == "price_catalog" and channel == "telegram":
         full_chunks = await retrieve_full_catalog(db, namespace)
         if full_chunks:
             logger.info("catalog_codegen ns=%s q=%r items=%d", namespace, question[:60], len(full_chunks))
@@ -1569,7 +1605,7 @@ async def rag_query(
             await save_turn(db, user_id, namespace, question, answer, channel=channel, tenant_id=tenant_id)
             return answer, full_chunks, None
         logger.info("catalog_codegen ns=%s — no section chunks, falling through", namespace)
-    # ── END PRICE CODEGEN PATH ────────────────────────────────────────────────
+    # ── END INTENT ROUTER ─────────────────────────────────────────────────────
 
     # HyDE: embed a hypothetical answer instead of the question to bridge vocabulary gap
     broad_query = search_query  # pre-HyDE query: broader, used as retrieval supplement

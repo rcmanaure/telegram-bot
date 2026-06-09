@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     # Fast/cheap model for generating chunk context summaries. Empty = disabled.
     llm_context_model: str = ""
 
+    # ─── Intent classification ──────────────────────────────────────────────────
+    # Optional cheaper model for _classify_intent(). Empty = uses LLM_MODEL + fallback chain.
+    llm_intent_model: str = ""
+
     # ─── Web search (E3) ─────────────────────────────────────────────────────────
     # Provider-neutral. Validate Ollama endpoint before use (see TODOS PREREQ-WS).
     web_search_url: str = ""

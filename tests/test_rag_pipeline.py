@@ -686,7 +686,9 @@ async def test_hyde_disabled_skips_hyde():
          patch("rag.retrieve_context", new_callable=AsyncMock, return_value=[]), \
          patch("rag._triage_response", new_callable=AsyncMock, return_value=("off_topic", "lo siento")), \
          patch("rag.save_turn", new_callable=AsyncMock), \
-         patch("rag.get_setting", return_value="off"):  # hyde_enabled=off
+         patch("rag.get_setting", return_value="off"), \
+         patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
+         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
         await rag_query(MagicMock(), "pregunta", "ns", "user1", expertise_area="médico", tenant=mock_tenant)
 
     mock_hyde.assert_not_called()
@@ -712,7 +714,9 @@ async def test_hyde_enabled_uses_hypothetical_for_search():
          patch("rag.retrieve_context", side_effect=mock_retrieve), \
          patch("rag._triage_response", new_callable=AsyncMock, return_value=("off_topic", "lo siento")), \
          patch("rag.save_turn", new_callable=AsyncMock), \
-         patch("rag.get_setting", return_value="on"):
+         patch("rag.get_setting", return_value="on"), \
+         patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
+         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
         await rag_query(MagicMock(), "pregunta original", "ns", "user1", expertise_area="médico", tenant=mock_tenant)
 
     # Primary search uses HyDE hypothetical; dual retrieval also runs the broad (pre-HyDE) query
@@ -841,3 +845,127 @@ def test_process_uploaded_file_returns_full_doc_text():
     assert pages == 1
     assert "Primera parte" in full_text
     assert "Segunda parte" in full_text
+
+
+# ─── Unit: _classify_intent ───────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_classify_intent_contactar_not_escalation():
+    """ROOT BUG REGRESSION: 'contactar' in an info-seeking question must NOT escalate."""
+    import json
+    from rag import _classify_intent
+    with patch("rag.call_chat", new_callable=AsyncMock,
+               return_value=json.dumps({"intent": "search_docs"})):
+        result = await _classify_intent("¿cómo puedo contactar el laboratorio?")
+    assert result == "search_docs"
+
+
+@pytest.mark.asyncio
+async def test_classify_intent_needs_human():
+    """Explicit human-handoff phrasing must classify as needs_human."""
+    import json
+    from rag import _classify_intent
+    with patch("rag.call_chat", new_callable=AsyncMock,
+               return_value=json.dumps({"intent": "needs_human"})):
+        result = await _classify_intent("quiero hablar con un humano")
+    assert result == "needs_human"
+
+
+@pytest.mark.asyncio
+async def test_classify_intent_price_catalog():
+    """'All prices' query must classify as price_catalog."""
+    import json
+    from rag import _classify_intent
+    with patch("rag.call_chat", new_callable=AsyncMock,
+               return_value=json.dumps({"intent": "price_catalog"})):
+        result = await _classify_intent("dame todos los precios")
+    assert result == "price_catalog"
+
+
+@pytest.mark.asyncio
+async def test_classify_intent_llm_failure():
+    """LLM failure must fall back to 'search_docs' and log a warning."""
+    import logging
+    from rag import _classify_intent
+    with patch("rag.call_chat", new_callable=AsyncMock,
+               side_effect=RuntimeError("provider down")), \
+         patch("rag.logger") as mock_log:
+        result = await _classify_intent("cuánto cuesta la consulta")
+    assert result == "search_docs"
+    mock_log.warning.assert_called_once()
+    assert "classify_intent failed" in mock_log.warning.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_classify_intent_invalid_intent():
+    """Unknown intent string must fall back to 'search_docs'."""
+    import json
+    from rag import _classify_intent
+    with patch("rag.call_chat", new_callable=AsyncMock,
+               return_value=json.dumps({"intent": "foobar"})):
+        result = await _classify_intent("algo raro")
+    assert result == "search_docs"
+
+
+@pytest.mark.asyncio
+async def test_classify_intent_price_catalog_whatsapp():
+    """price_catalog intent on WhatsApp falls through to search_docs in rag_query (intent itself is correct)."""
+    import json
+    from rag import _classify_intent
+    # _classify_intent itself returns price_catalog regardless of channel;
+    # the channel gate is applied in rag_query. Verify the function is channel-agnostic.
+    with patch("rag.call_chat", new_callable=AsyncMock,
+               return_value=json.dumps({"intent": "price_catalog"})):
+        result = await _classify_intent("dame todos los precios")
+    assert result == "price_catalog"
+
+
+@pytest.mark.asyncio
+async def test_classify_intent_last_bot_turn():
+    """last_bot_turn must appear in the system prompt as context_hint."""
+    import json
+    from rag import _classify_intent
+    captured = []
+
+    async def mock_chat(messages, **kw):
+        captured.append(messages)
+        return json.dumps({"intent": "search_docs"})
+
+    with patch("rag.call_chat", mock_chat):
+        await _classify_intent("y los descuentos?",
+                               last_bot_turn="Los precios de los estudios son los siguientes...")
+
+    system_content = captured[0][0]["content"]
+    assert "Previous bot reply" in system_content
+    assert "Los precios de los estudios" in system_content
+
+
+@pytest.mark.asyncio
+async def test_rag_query_contactar_not_escalation():
+    """Integration: rag_query must NOT escalate 'contactar el laboratorio' — root bug wiring test."""
+    import json
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from rag import rag_query
+
+    mock_db = AsyncMock()
+
+    with patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
+         patch("rag.get_history", new_callable=AsyncMock, return_value=[]), \
+         patch("rag._reformulate_query", new_callable=AsyncMock,
+               return_value="¿cómo puedo contactar el laboratorio?"), \
+         patch("rag.is_tool_use_available", return_value=False), \
+         patch("rag.retrieve_context", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.save_turn", new_callable=AsyncMock), \
+         patch("rag._triage_response", new_callable=AsyncMock,
+               return_value=("Puede encontrar info en nuestro sitio.", "off_topic")):
+        answer, sources, source_type = await rag_query(
+            db=mock_db,
+            question="¿cómo puedo contactar el laboratorio?",
+            namespace="test_ns",
+            user_id="user1",
+        )
+
+    assert source_type != "needs_human", (
+        "contactar el laboratorio should NOT escalate — this is the root bug regression"
+    )

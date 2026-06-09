@@ -981,8 +981,11 @@ async def test_rag_query_escalation_pattern_skips_vector_search():
     mock_db.commit = AsyncMock()
 
     with patch("rag.retrieve_context", new=AsyncMock()) as mock_retrieve, \
+         patch("rag.get_history", new=AsyncMock(return_value=[])), \
+         patch("rag._reformulate_query", new=AsyncMock(side_effect=lambda q, h: q)), \
          patch("rag.save_turn", new=AsyncMock()), \
-         patch("rag._log_unanswered", new=AsyncMock()):
+         patch("rag._log_unanswered", new=AsyncMock()), \
+         patch("rag._classify_intent", new_callable=AsyncMock, return_value="needs_human"):
         answer, chunks, intent = await rag_query(
             mock_db, "quiero hablar con un operador", "ns", "u1"
         )
@@ -1006,7 +1009,9 @@ async def test_rag_query_no_context_calls_triage():
          patch("rag.save_turn", new=AsyncMock()), \
          patch("rag._log_unanswered", new=AsyncMock()), \
          patch("rag.validate_output", side_effect=lambda x, **kw: x), \
-         patch("rag._triage_response", new=AsyncMock(return_value=("off_topic", "Fuera de área"))) as mock_triage:
+         patch("rag._triage_response", new=AsyncMock(return_value=("off_topic", "Fuera de área"))) as mock_triage, \
+         patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
+         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
         answer, chunks, intent = await rag_query(
             mock_db, "¿Cuánto es 2+2?", "ns", "u1", expertise_area="finanzas"
         )
@@ -1029,7 +1034,9 @@ async def test_rag_query_with_context_returns_none_intent():
          patch("rag._reformulate_query", new=AsyncMock(side_effect=lambda q, h: q)), \
          patch("rag.generate_answer", new=AsyncMock(return_value="Buena respuesta")), \
          patch("rag.validate_output", side_effect=lambda x, **kw: x), \
-         patch("rag.save_turn", new=AsyncMock()):
+         patch("rag.save_turn", new=AsyncMock()), \
+         patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
+         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
         answer, chunks, intent = await rag_query(mock_db, "¿Horarios?", "ns", "u1")
 
     assert intent is None
@@ -1050,7 +1057,9 @@ async def test_rag_query_logs_unanswered_on_off_topic():
          patch("rag.save_turn", new=AsyncMock()), \
          patch("rag.validate_output", side_effect=lambda x, **kw: x), \
          patch("rag._log_unanswered", mock_log), \
-         patch("rag._triage_response", new=AsyncMock(return_value=("off_topic", "Sin info"))):
+         patch("rag._triage_response", new=AsyncMock(return_value=("off_topic", "Sin info"))), \
+         patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
+         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
         await rag_query(mock_db, "¿Cómo cocino pasta?", "ns", "u1", tenant_id=42)
 
     mock_log.assert_called_once()
@@ -1125,7 +1134,9 @@ async def test_rag_query_image_with_vision_model_proceeds():
          patch("rag.validate_output", side_effect=lambda x, **kw: x), \
          patch("rag.save_turn", new=AsyncMock()), \
          patch("rag.settings") as mock_settings, \
-         patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback):
+         patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback), \
+         patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
+         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
         mock_settings.llm_vision_model = "gemma4:31b"
         answer, chunks, intent = await rag_query(
             mock_db, "¿Qué es esto?", "ns", "u1",
@@ -1188,7 +1199,9 @@ async def test_rag_query_image_no_text_context_goes_to_vision():
          patch("rag.save_turn", new=AsyncMock()), \
          patch("rag._is_illegible_response", return_value=False), \
          patch("rag.settings") as mock_settings, \
-         patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback):
+         patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback), \
+         patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
+         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
         mock_settings.llm_vision_model = "gemma4:31b"
         answer, chunks, intent = await rag_query(
             mock_db, "¿Qué significa este resultado?", "ns", "u1",
@@ -1224,7 +1237,9 @@ async def test_rag_query_illegible_image_returns_clear_message():
          patch("rag.save_turn", new=AsyncMock()), \
          patch("rag._is_illegible_response", return_value=True), \
          patch("rag.settings") as mock_settings, \
-         patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback):
+         patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback), \
+         patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
+         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
         mock_settings.llm_vision_model = "gemma4:31b"
         answer, chunks, intent = await rag_query(
             mock_db, "¿Qué es esto?", "ns", "u1",
@@ -1273,7 +1288,9 @@ async def test_vision_augmented_retrieval_finds_context():
          patch("rag.save_turn", new=AsyncMock()), \
          patch("rag._is_illegible_response", return_value=False), \
          patch("rag.settings") as mock_settings, \
-         patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback):
+         patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback), \
+         patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
+         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
         mock_settings.llm_vision_model = "gemma4:31b"
         answer, chunks, intent = await rag_query(
             mock_db, "¿Qué querés saber sobre esta imagen?", "ns", "u1",
@@ -1308,7 +1325,9 @@ async def test_vision_augmented_retrieval_falls_back_when_no_context():
          patch("rag.save_turn", new=AsyncMock()), \
          patch("rag._is_illegible_response", return_value=False), \
          patch("rag.settings") as mock_settings, \
-         patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback):
+         patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback), \
+         patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
+         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
         mock_settings.llm_vision_model = "gemma4:31b"
         answer, chunks, intent = await rag_query(
             mock_db, "¿Qué querés saber sobre esta imagen?", "ns", "u1",
@@ -1443,7 +1462,9 @@ async def test_rag_query_low_confidence_fallback():
          patch("rag.validate_output", side_effect=lambda x, **kw: x), \
          patch("rag.save_turn", new=AsyncMock()), \
          patch("rag.settings") as mock_settings, \
-         patch("rag.get_setting", new=lambda k, fallback="": fallback):
+         patch("rag.get_setting", new=lambda k, fallback="": fallback), \
+         patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
+         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
         mock_settings.llm_vision_model = ""
         answer, chunks, intent = await rag_query(
             mock_db, "¿cuánto cuesta la biopsia de apéndice cecal?", "ns", "u1",
@@ -1478,7 +1499,9 @@ async def test_rag_query_no_low_confidence_when_normal_threshold_met():
          patch("rag.validate_output", side_effect=lambda x, **kw: x), \
          patch("rag.save_turn", new=AsyncMock()), \
          patch("rag.settings") as mock_settings, \
-         patch("rag.get_setting", new=lambda k, fallback="": fallback):
+         patch("rag.get_setting", new=lambda k, fallback="": fallback), \
+         patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
+         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
         mock_settings.llm_vision_model = ""
         answer, chunks, intent = await rag_query(
             mock_db, "¿cuánto cuesta la biopsia de apéndice?", "ns", "u1",
@@ -2428,7 +2451,9 @@ async def test_vision_augmented_empty_query_falls_through_to_image_only():
          patch("rag.save_turn", new=AsyncMock()), \
          patch("rag._is_illegible_response", return_value=False), \
          patch("rag.settings") as mock_settings, \
-         patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback):
+         patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback), \
+         patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
+         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
         mock_settings.llm_vision_model = "gemma4:31b"
         answer, chunks, intent = await rag_query(
             mock_db, "¿Qué querés saber sobre esta imagen?", "ns", "u1",
@@ -2469,7 +2494,9 @@ async def test_vision_augmented_same_query_skips_retrieval():
          patch("rag.save_turn", new=AsyncMock()), \
          patch("rag._is_illegible_response", return_value=False), \
          patch("rag.settings") as mock_settings, \
-         patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else ("off" if k == "hyde_enabled" else fallback)):
+         patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else ("off" if k == "hyde_enabled" else fallback)), \
+         patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
+         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
         mock_settings.llm_vision_model = "gemma4:31b"
         answer, chunks, intent = await rag_query(
             mock_db, original_question, "ns", "u1",
@@ -2512,7 +2539,9 @@ async def test_vision_augmented_low_confidence_fallback():
          patch("rag.validate_output", side_effect=lambda x, **kw: x), \
          patch("rag.save_turn", new=AsyncMock()), \
          patch("rag.settings") as mock_settings, \
-         patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback):
+         patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback), \
+         patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
+         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
         mock_settings.llm_vision_model = "gemma4:31b"
         answer, chunks, intent = await rag_query(
             mock_db, "¿Qué querés saber sobre esta imagen?", "ns", "u1",
