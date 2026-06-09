@@ -83,11 +83,11 @@ class ChannelFormatting:
 TELEGRAM_FORMATTING = ChannelFormatting(
     format_instructions="""Formato para Telegram (OBLIGATORIO):
 - NUNCA uses tablas Markdown (| col | col |) — Telegram no las renderiza, se ven como texto crudo.
-- Para comparar opciones o listar ítems con atributos usá listas con viñetas y negrita:
+- Para comparar opciones o listar ítems con atributos usa listas con viñetas y negrita:
   *Plan Basic* — $29/mes · acceso 6am–10pm · 2 clases/mes
   *Plan Pro* — $59/mes · acceso 24/7 · clases ilimitadas
-- Para listas simples usá guiones o números.
-- Para horarios o datos tabulares usá formato vertical:
+- Para listas simples usa guiones o números.
+- Para horarios o datos tabulares usa formato vertical:
   📅 Yoga: Lun/Mié/Vie — 7am y 6pm
   📅 HIIT: Mar/Jue — 6am y 7pm
 - Negrita con *asteriscos* para títulos o datos clave.
@@ -100,13 +100,13 @@ WHATSAPP_FORMATTING = ChannelFormatting(
     format_instructions="""Formato para WhatsApp (OBLIGATORIO):
 - Formato soportado: *negrita*, _cursiva_, ~tachado~, ```monoespacio```.
 - NUNCA uses tablas Markdown (| col | col |) — WhatsApp no las renderiza.
-- NUNCA uses `backticks sueltos` para código inline — usá ```bloque monoespacio``` para datos técnicos exactos, o texto plano.
-- NUNCA uses encabezados con # — WhatsApp no los renderiza. Usá *NEGRITA* para títulos.
-- Para comparar opciones usá listas con viñetas (usá - o *):
+- NUNCA uses `backticks sueltos` para código inline — usa ```bloque monoespacio``` para datos técnicos exactos, o texto plano.
+- NUNCA uses encabezados con # — WhatsApp no los renderiza. Usa *NEGRITA* para títulos.
+- Para comparar opciones usa listas con viñetas (usa - o *):
   *Plan Basic* — $29/mes · acceso 6am–10pm · 2 clases/mes
   *Plan Pro* — $59/mes · acceso 24/7 · clases ilimitadas
-- Para listas simples usá guiones o números.
-- Para horarios usá formato vertical:
+- Para listas simples usa guiones o números.
+- Para horarios usa formato vertical:
   📅 Yoga: Lun/Mié/Vie — 7am y 6pm
   📅 HIIT: Mar/Jue — 6am y 7pm
 - Usá > para citas o destacados:

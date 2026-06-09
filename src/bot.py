@@ -100,7 +100,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         questions = [q for q in tenant.example_questions if q][:5]
         if questions:
             numbered = "\n".join(f"{i + 1}. {q}" for i, q in enumerate(questions))
-            msg += f"\n\nAlgunas preguntas que podés hacerme:\n{numbered}"
+            msg += f"\n\nAlgunas preguntas que puedes hacerme:\n{numbered}"
 
     await update.message.reply_text(msg)
 
@@ -120,12 +120,12 @@ async def cmd_contactar(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("Contactar", url=tenant.contact_url)
         ]])
         await update.message.reply_text(
-            "¿Querés hablar con alguien de nuestro equipo?",
+            "¿Quieres hablar con alguien de nuestro equipo?",
             reply_markup=keyboard,
         )
     else:
         await update.message.reply_text(
-            "Para contactarnos escribinos directamente. ¿En qué te podemos ayudar?"
+            "Para contactarnos escríbenos directamente. ¿En qué te podemos ayudar?"
         )
 
 
@@ -144,7 +144,7 @@ async def cmd_sources(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         if not rows:
             await update.message.reply_text(
-                "📭 No hay documentos indexados aún. Cargá un PDF vía la API para comenzar."
+                "📭 No hay documentos indexados aún. Carga un PDF vía la API para comenzar."
             )
             return
 
@@ -192,7 +192,7 @@ async def _process_question(
     rate_key = f"{tenant.slug}:{uid}"
 
     if tg_rate_limiter.check(rate_key):
-        await update.message.reply_text("Demasiados mensajes, esperá un minuto.")
+        await update.message.reply_text("Demasiados mensajes, espera un minuto.")
         return
     language_code = update.effective_user.language_code
 
@@ -248,14 +248,14 @@ async def _process_question(
         if "LLM service error" in msg or "llm" in msg.lower() or "model" in msg.lower():
             logger.warning("llm_runtime_error uid=%s tenant=%s: %s", uid, tenant.slug, msg)
             await update.message.reply_text(
-                "Disculpá, hubo un problema técnico momentáneo. Intentá de nuevo en unos segundos."
+                "Disculpa, hubo un problema técnico momentáneo. Intenta de nuevo en unos segundos."
             )
         else:
             await update.message.reply_text(msg)
     except Exception:
         logger.exception("handle_message error for tenant %s uid %s", tenant.slug, uid)
         await update.message.reply_text(
-            "Lo siento, tuve un problema procesando tu pregunta. Por favor intentá de nuevo."
+            "Lo siento, tuve un problema procesando tu pregunta. Por favor intenta de nuevo."
         )
 
 
@@ -333,7 +333,7 @@ async def handle_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "handle_voice error file_id=%s",
             update.message.voice.file_id if update.message.voice else "unknown",
         )
-        await update.message.reply_text("Lo siento, tuve un problema. Intentá de nuevo.")
+        await update.message.reply_text("Lo siento, tuve un problema. Intenta de nuevo.")
 
 
 # ─── Photo handler (with multi-image buffer) ────────────────────────────────
@@ -357,7 +357,7 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         tg_file = await ctx.bot.get_file(photo.file_id)
         image_bytes: bytes = bytes(await tg_file.download_as_bytearray())
     except TelegramError:
-        await update.message.reply_text("No pude descargar la imagen. Intentá de nuevo.")
+        await update.message.reply_text("No pude descargar la imagen. Intenta de nuevo.")
         return
 
     image_b64 = base64.b64encode(image_bytes).decode("utf-8")
