@@ -1020,7 +1020,9 @@ async def test_rag_query_no_context_calls_triage():
          patch("rag.validate_output", side_effect=lambda x, **kw: x), \
          patch("rag._triage_response", new=AsyncMock(return_value=("off_topic", "Fuera de área"))) as mock_triage, \
          patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
-         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
+         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.retrieve_policy_chunks", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.retrieve_section_siblings", new_callable=AsyncMock, return_value=[]):
         answer, chunks, intent = await rag_query(
             mock_db, "¿Cuánto es 2+2?", "ns", "u1", expertise_area="finanzas"
         )
@@ -1045,7 +1047,9 @@ async def test_rag_query_with_context_returns_none_intent():
          patch("rag.validate_output", side_effect=lambda x, **kw: x), \
          patch("rag.save_turn", new=AsyncMock()), \
          patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
-         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
+         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.retrieve_policy_chunks", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.retrieve_section_siblings", new_callable=AsyncMock, return_value=[]):
         answer, chunks, intent = await rag_query(mock_db, "¿Horarios?", "ns", "u1")
 
     assert intent is None
@@ -1068,7 +1072,9 @@ async def test_rag_query_logs_unanswered_on_off_topic():
          patch("rag._log_unanswered", mock_log), \
          patch("rag._triage_response", new=AsyncMock(return_value=("off_topic", "Sin info"))), \
          patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
-         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
+         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.retrieve_policy_chunks", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.retrieve_section_siblings", new_callable=AsyncMock, return_value=[]):
         await rag_query(mock_db, "¿Cómo cocino pasta?", "ns", "u1", tenant_id=42)
 
     mock_log.assert_called_once()
@@ -1145,7 +1151,9 @@ async def test_rag_query_image_with_vision_model_proceeds():
          patch("rag.settings") as mock_settings, \
          patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback), \
          patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
-         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
+         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.retrieve_policy_chunks", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.retrieve_section_siblings", new_callable=AsyncMock, return_value=[]):
         mock_settings.llm_vision_model = "gemma4:31b"
         answer, chunks, intent = await rag_query(
             mock_db, "¿Qué es esto?", "ns", "u1",
@@ -1210,7 +1218,9 @@ async def test_rag_query_image_no_text_context_goes_to_vision():
          patch("rag.settings") as mock_settings, \
          patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback), \
          patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
-         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
+         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.retrieve_policy_chunks", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.retrieve_section_siblings", new_callable=AsyncMock, return_value=[]):
         mock_settings.llm_vision_model = "gemma4:31b"
         answer, chunks, intent = await rag_query(
             mock_db, "¿Qué significa este resultado?", "ns", "u1",
@@ -1246,7 +1256,9 @@ async def test_rag_query_illegible_image_returns_clear_message():
          patch("rag.settings") as mock_settings, \
          patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback), \
          patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
-         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
+         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.retrieve_policy_chunks", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.retrieve_section_siblings", new_callable=AsyncMock, return_value=[]):
         mock_settings.llm_vision_model = "gemma4:31b"
         answer, chunks, intent = await rag_query(
             mock_db, "¿Qué es esto?", "ns", "u1",
@@ -1289,7 +1301,9 @@ async def test_vision_augmented_retrieval_finds_context():
          patch("rag.settings") as mock_settings, \
          patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback), \
          patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
-         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
+         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.retrieve_policy_chunks", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.retrieve_section_siblings", new_callable=AsyncMock, return_value=[]):
         mock_settings.llm_vision_model = "gemma4:31b"
         answer, chunks, intent = await rag_query(
             mock_db, "¿Qué quieres saber sobre esta imagen?", "ns", "u1",
@@ -1325,7 +1339,9 @@ async def test_vision_augmented_retrieval_falls_back_when_no_context():
          patch("rag.settings") as mock_settings, \
          patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback), \
          patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
-         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
+         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.retrieve_policy_chunks", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.retrieve_section_siblings", new_callable=AsyncMock, return_value=[]):
         mock_settings.llm_vision_model = "gemma4:31b"
         answer, chunks, intent = await rag_query(
             mock_db, "¿Qué quieres saber sobre esta imagen?", "ns", "u1",
@@ -1423,7 +1439,9 @@ async def test_rag_query_low_confidence_fallback():
          patch("rag.settings") as mock_settings, \
          patch("rag.get_setting", new=lambda k, fallback="": fallback), \
          patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
-         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
+         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.retrieve_policy_chunks", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.retrieve_section_siblings", new_callable=AsyncMock, return_value=[]):
         mock_settings.llm_vision_model = ""
         answer, chunks, intent = await rag_query(
             mock_db, "¿cuánto cuesta la biopsia de apéndice cecal?", "ns", "u1",
@@ -1460,7 +1478,9 @@ async def test_rag_query_no_low_confidence_when_normal_threshold_met():
          patch("rag.settings") as mock_settings, \
          patch("rag.get_setting", new=lambda k, fallback="": fallback), \
          patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
-         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
+         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.retrieve_policy_chunks", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.retrieve_section_siblings", new_callable=AsyncMock, return_value=[]):
         mock_settings.llm_vision_model = ""
         answer, chunks, intent = await rag_query(
             mock_db, "¿cuánto cuesta la biopsia de apéndice?", "ns", "u1",
@@ -2414,7 +2434,9 @@ async def test_vision_augmented_empty_query_falls_through_to_image_only():
          patch("rag.settings") as mock_settings, \
          patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback), \
          patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
-         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
+         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.retrieve_policy_chunks", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.retrieve_section_siblings", new_callable=AsyncMock, return_value=[]):
         mock_settings.llm_vision_model = "gemma4:31b"
         answer, chunks, intent = await rag_query(
             mock_db, "¿Qué quieres saber sobre esta imagen?", "ns", "u1",
@@ -2456,7 +2478,9 @@ async def test_vision_augmented_same_query_skips_retrieval():
          patch("rag.settings") as mock_settings, \
          patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else ("off" if k == "hyde_enabled" else fallback)), \
          patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
-         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
+         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.retrieve_policy_chunks", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.retrieve_section_siblings", new_callable=AsyncMock, return_value=[]):
         mock_settings.llm_vision_model = "gemma4:31b"
         answer, chunks, intent = await rag_query(
             mock_db, original_question, "ns", "u1",
@@ -2501,7 +2525,9 @@ async def test_vision_augmented_low_confidence_fallback():
          patch("rag.settings") as mock_settings, \
          patch("rag.get_setting", new=lambda k, fallback="": "gemma4:31b" if k == "llm_vision_model" else fallback), \
          patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
-         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
+         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.retrieve_policy_chunks", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.retrieve_section_siblings", new_callable=AsyncMock, return_value=[]):
         mock_settings.llm_vision_model = "gemma4:31b"
         answer, chunks, intent = await rag_query(
             mock_db, "¿Qué quieres saber sobre esta imagen?", "ns", "u1",
@@ -2822,3 +2848,249 @@ def test_build_source_footer_deduplicates_pages():
     ]
     result = _build_source_footer(chunks, channel="telegram")
     assert "doc.pdf p.3,7" in result
+
+
+# ─── E7: retrieve_policy_chunks ────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_retrieve_policy_chunks_returns_typed_chunks():
+    """retrieve_policy_chunks fetches policy_statement and section_header chunks."""
+    from rag import retrieve_policy_chunks
+
+    mock_result = MagicMock()
+    mock_result.fetchall.return_value = [
+        MagicMock(content="## Requisitos para biopsia", source="lab.pdf", page=2, chunk_type="section_header", metadata={"section_name": "Requisitos"}),
+        MagicMock(content="Pago anticipado requerido", source="lab.pdf", page=2, chunk_type="policy_statement", metadata={"section_name": "Requisitos"}),
+    ]
+
+    mock_db = AsyncMock()
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    result = await retrieve_policy_chunks(mock_db, "lab-ns")
+
+    assert len(result) == 2
+    assert result[0]["chunk_type"] == "section_header"
+    assert result[1]["chunk_type"] == "policy_statement"
+    assert all(c["similarity"] == 0.5 for c in result)
+
+
+@pytest.mark.asyncio
+async def test_retrieve_policy_chunks_null_fallback():
+    """When no typed chunks exist, falls back to content patterns for pre-E4 data."""
+    from rag import retrieve_policy_chunks
+
+    # First query (typed) returns empty
+    mock_empty = MagicMock()
+    mock_empty.fetchall.return_value = []
+    # Second query (fallback) returns results
+    mock_fallback = MagicMock()
+    mock_fallback.fetchall.return_value = [
+        MagicMock(content="## Requisitos importantes", source="doc.pdf", page=1, chunk_type=None, metadata=None),
+        MagicMock(content="Nota: traer cita el día del examen", source="doc.pdf", page=1, chunk_type=None, metadata=None),
+    ]
+
+    mock_db = AsyncMock()
+    mock_db.execute = AsyncMock(side_effect=[mock_empty, mock_fallback])
+
+    result = await retrieve_policy_chunks(mock_db, "legacy-ns")
+
+    assert len(result) == 2
+    assert result[0]["chunk_type"] is None  # pre-E4 data
+
+
+@pytest.mark.asyncio
+async def test_retrieve_policy_chunks_empty_namespace():
+    """No policy chunks for a namespace that has none."""
+    from rag import retrieve_policy_chunks
+
+    mock_empty = MagicMock()
+    mock_empty.fetchall.return_value = []
+    mock_fallback = MagicMock()
+    mock_fallback.fetchall.return_value = []
+
+    mock_db = AsyncMock()
+    mock_db.execute = AsyncMock(side_effect=[mock_empty, mock_fallback])
+
+    result = await retrieve_policy_chunks(mock_db, "empty-ns")
+
+    assert result == []
+
+
+# ─── E8: build_system_prompt policy clause ────────────────────────────────────
+
+def test_build_system_prompt_includes_policy_clause():
+    """Policy clause is always present in the system prompt."""
+    from services.prompts import build_system_prompt
+
+    prompt = build_system_prompt("laboratorio de patología")
+    assert "requisitos" in prompt.lower()
+    assert "condiciones" in prompt.lower()
+    assert "políticas" in prompt.lower()
+    assert "SIEMPRE inclúyelos" in prompt
+
+
+def test_build_system_prompt_policy_clause_with_example_questions():
+    """Policy clause is present alongside example questions."""
+    from services.prompts import build_system_prompt
+
+    prompt = build_system_prompt(
+        "laboratorio",
+        example_questions=["¿Cuánto cuesta una biopsia?", "¿Qué requisitos hay?"],
+    )
+    assert "SIEMPRE inclúyelos" in prompt
+    assert "PREGUNTAS DE EJEMPLO" in prompt
+
+
+# ─── E9: retrieve_section_siblings ────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_retrieve_section_siblings_fetches_by_section_name():
+    """Fetches all chunks from same section as price_row chunks."""
+    from rag import retrieve_section_siblings
+
+    mock_result = MagicMock()
+    mock_result.fetchall.return_value = [
+        MagicMock(content="Biopsia Extemporánea $490", source="lab.pdf", page=1, chunk_type="price_row", metadata={"section_name": "Biopsia Extemporánea"}),
+        MagicMock(content="Traer cita el día del examen", source="lab.pdf", page=1, chunk_type="policy_statement", metadata={"section_name": "Biopsia Extemporánea"}),
+        MagicMock(content="Sin formol, en frasco limpio", source="lab.pdf", page=1, chunk_type="general_info", metadata={"section_name": "Biopsia Extemporánea"}),
+    ]
+
+    mock_db = AsyncMock()
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    matched = [
+        {"content": "Biopsia Extemporánea $490", "source": "lab.pdf", "page": 1, "similarity": 0.9, "chunk_type": "price_row", "metadata": {"section_name": "Biopsia Extemporánea"}},
+    ]
+    result = await retrieve_section_siblings(mock_db, "lab-ns", matched)
+
+    assert len(result) == 3
+    sections = {r["metadata"]["section_name"] for r in result}
+    assert "Biopsia Extemporánea" in sections
+
+
+@pytest.mark.asyncio
+async def test_retrieve_section_siblings_no_price_rows():
+    """Returns empty when no price_row chunks in context."""
+    from rag import retrieve_section_siblings
+
+    mock_db = AsyncMock()
+
+    matched = [
+        {"content": "Some general info", "source": "doc.pdf", "page": 1, "similarity": 0.7, "chunk_type": "general_info", "metadata": {}},
+    ]
+    result = await retrieve_section_siblings(mock_db, "ns", matched)
+
+    assert result == []
+    mock_db.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_retrieve_section_siblings_no_section_name_fallback():
+    """When metadata.section_name is missing, falls back to content-based section detection."""
+    from rag import retrieve_section_siblings
+
+    # First query (typed) returns empty → triggers fallback
+    mock_empty = MagicMock()
+    mock_empty.fetchall.return_value = []
+    # Fallback query returns all chunks from source
+    mock_all_source = MagicMock()
+    mock_all_source.fetchall.return_value = [
+        MagicMock(content="## Biopsia Extemporánea\nBiopsia Extemporánea $490\nTraer cita", source="lab.pdf", page=1, chunk_type=None, metadata=None),
+        MagicMock(content="## Otro Estudio\nOtro $100", source="lab.pdf", page=2, chunk_type=None, metadata=None),
+    ]
+
+    mock_db = AsyncMock()
+    mock_db.execute = AsyncMock(side_effect=[mock_empty, mock_all_source])
+
+    # price_row chunk without section_name in metadata, but with section header in content
+    matched = [
+        {"content": "## Biopsia Extemporánea\nBiopsia Extemporánea $490", "source": "lab.pdf", "page": 1, "similarity": 0.9, "chunk_type": None, "metadata": None},
+    ]
+    result = await retrieve_section_siblings(mock_db, "lab-ns", matched)
+
+    # Should find the matching section chunk
+    assert len(result) >= 1
+
+
+@pytest.mark.asyncio
+async def test_rag_query_merges_policy_chunks_when_context_exists():
+    """E7: policy chunks are merged into context when retrieval finds results."""
+    from rag import rag_query
+
+    mock_tenant = MagicMock()
+    mock_tenant.id = 1
+    mock_tenant.slug = "test-ns"
+    mock_tenant.web_search_enabled = False
+    mock_tenant.example_questions = None
+    mock_tenant.doc_structure_summary = None
+
+    # Simulate context found (above MIN_SIMILARITY)
+    kb_chunks = [{"content": "Biopsia $90", "source": "lab.pdf", "page": 1, "similarity": 0.85}]
+    policy_chunks = [
+        {"content": "## Requisitos", "source": "lab.pdf", "page": 1, "similarity": 0.5, "chunk_type": "section_header", "metadata": None},
+        {"content": "Pago anticipado requerido", "source": "lab.pdf", "page": 1, "similarity": 0.5, "chunk_type": "policy_statement", "metadata": None},
+    ]
+
+    mock_db = AsyncMock()
+
+    with patch("rag.retrieve_context", AsyncMock(return_value=kb_chunks)), \
+         patch("rag.retrieve_catalog_overview", AsyncMock(return_value=[])), \
+         patch("rag.retrieve_policy_chunks", AsyncMock(return_value=policy_chunks)), \
+         patch("rag.retrieve_section_siblings", AsyncMock(return_value=[])), \
+         patch("rag.generate_answer", AsyncMock(return_value="Biopsia $90. Requisitos: pago anticipado.")), \
+         patch("rag.validate_output", side_effect=lambda x, **kw: x), \
+         patch("rag.save_turn", AsyncMock()), \
+         patch("rag.get_history", AsyncMock(return_value=[])), \
+         patch("rag._reformulate_query", AsyncMock(side_effect=lambda q, h: q)), \
+         patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
+         patch("rag._fetch_section_siblings", AsyncMock(return_value=[])), \
+         patch("rag.is_tool_use_available", return_value=False):
+
+        answer, chunks, intent = await rag_query(
+            db=mock_db,
+            question="cuánto cuesta la biopsia",
+            namespace="test-ns",
+            user_id="u1",
+            tenant=mock_tenant,
+        )
+
+    # Policy chunks should be in the context passed to generate_answer
+    # (they get merged into the context list)
+    source_names = [c["source"] for c in chunks]
+    assert "lab.pdf" in source_names
+
+
+@pytest.mark.asyncio
+async def test_rag_query_skips_policy_chunks_when_no_context():
+    """E7: policy chunks are NOT merged when no context found (off-topic query)."""
+    from rag import rag_query
+
+    mock_tenant = MagicMock()
+    mock_tenant.id = 1
+    mock_tenant.slug = "test-ns"
+    mock_tenant.web_search_enabled = False
+    mock_tenant.example_questions = None
+    mock_tenant.doc_structure_summary = None
+
+    mock_db = AsyncMock()
+
+    with patch("rag.retrieve_context", AsyncMock(return_value=[])), \
+         patch("rag._triage_response", AsyncMock(return_value=("off_topic", "Fuera de mi área."))), \
+         patch("rag.save_turn", AsyncMock()), \
+         patch("rag.get_history", AsyncMock(return_value=[])), \
+         patch("rag._reformulate_query", AsyncMock(side_effect=lambda q, h: q)), \
+         patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
+         patch("rag.retrieve_catalog_overview", AsyncMock(return_value=[])), \
+         patch("rag.is_tool_use_available", return_value=False):
+
+        answer, chunks, intent = await rag_query(
+            db=mock_db,
+            question="receta de pastel",
+            namespace="test-ns",
+            user_id="u1",
+            tenant=mock_tenant,
+        )
+
+    # No context found — policy chunks should NOT have been fetched
+    assert intent == "off_topic"
+    assert chunks == []

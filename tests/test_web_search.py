@@ -280,6 +280,8 @@ async def test_rag_query_web_search_not_invoked_when_context_found():
          patch("rag._reformulate_query", AsyncMock(side_effect=lambda q, h: q)), \
          patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
          patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.retrieve_policy_chunks", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.retrieve_section_siblings", new_callable=AsyncMock, return_value=[]), \
          patch("rag.is_tool_use_available", return_value=False):
 
         answer, chunks, intent = await rag_query(
