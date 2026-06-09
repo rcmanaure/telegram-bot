@@ -1188,6 +1188,55 @@ _OLLAMA_SEARCH_BODY = lambda q: json.dumps({"query": q, "num_results": 5}).encod
 _GENERIC_SEARCH_BODY = lambda q: json.dumps({"query": q}).encode()
 
 
+# ─── Source citation footer ──────────────────────────────────────────────────
+
+def _build_source_footer(chunks: list[dict] | None, channel: str = "telegram") -> str:
+    """Build a source citation footer from retrieved chunks.
+
+    Collects document sources (with page numbers) and web URLs from chunks,
+    deduplicates by source name, and formats per-channel conventions.
+
+    Returns empty string if no attribution info is available.
+    """
+    if not chunks:
+        return ""
+
+    doc_sources: dict[str, set[int]] = {}  # source_name → {pages}
+    web_urls: list[str] = []
+    seen_urls: set[str] = set()
+
+    for c in chunks:
+        src = c.get("source", "")
+        if not src or src == "__faq__":
+            continue
+        if src.startswith("http"):
+            if src not in seen_urls:
+                web_urls.append(src)
+                seen_urls.add(src)
+        else:
+            page = c.get("page")
+            pages = doc_sources.setdefault(src, set())
+            if page and int(page) > 0:
+                pages.add(int(page))
+
+    if not doc_sources and not web_urls:
+        return ""
+
+    parts: list[str] = []
+    for name, pages in doc_sources.items():
+        sorted_pages = sorted(pages)
+        if sorted_pages:
+            parts.append(f"{name} p.{','.join(str(p) for p in sorted_pages)}")
+        else:
+            parts.append(name)
+
+    parts.extend(web_urls)
+    joined = ", ".join(parts)
+    if channel == "whatsapp":
+        return f"\n\n📎 Fuentes: {joined}"
+    return f"\n\n📎 _Fuentes: {joined}_"
+
+
 async def _web_search(question: str) -> list[dict]:
     """
     Call the configured web search endpoint and return context chunks.
@@ -1368,23 +1417,27 @@ async def _tool_search_documents(
     return formatted, chunks
 
 
-async def _tool_search_web(query: str, tenant: "Tenant") -> str:
-    """Search the web for a tool dispatch call. Returns formatted string or ''."""
+async def _tool_search_web(query: str, tenant: "Tenant") -> tuple[str, list[dict]]:
+    """Search the web for a tool dispatch call.
+
+    Returns (formatted_string, web_chunks) where web_chunks are the
+    raw search results suitable for source attribution.
+    """
     if not get_setting("web_search_url", settings.web_search_url):
-        return ""
+        return "", []
 
     namespace = tenant.slug
     cached = _get_cached(namespace, "search_web", query)
     if cached is not None:
         logger.debug("tool_cache hit: %s:search_web", namespace)
-        result, _ = cached
-        return result
+        result, chunks = cached
+        return result, chunks
 
     web_chunks = await _web_search(query)
     result = "\n\n".join(f"[Web]: {c['content']}" for c in web_chunks) if web_chunks else ""
-    _set_cached(namespace, "search_web", query, result, [])
+    _set_cached(namespace, "search_web", query, result, web_chunks)
     logger.debug("tool_call: search_web → %d chars", len(result))
-    return result
+    return result, web_chunks
 
 
 async def _dispatch_tool(tool_call: dict, namespace: str, tenant: "Tenant") -> str:
@@ -1395,7 +1448,8 @@ async def _dispatch_tool(tool_call: dict, namespace: str, tenant: "Tenant") -> s
         result, _ = await _tool_search_documents(inp["query"], namespace, tenant.expertise_area or "")
         return result or "No relevant documents found."
     if name == "search_web":
-        return await _tool_search_web(inp["query"], tenant) or "No web results found."
+        result, _ = await _tool_search_web(inp["query"], tenant)
+        return result or "No web results found."
     logger.warning("_dispatch_tool: unknown tool=%s", name)
     return "Unknown tool."
 
@@ -1562,13 +1616,17 @@ async def rag_query(
                         tool_results.append(r)
 
                 if not all(r == "" for r in tool_results):
-                    # Collect doc_chunks for source attribution (cache hit — no extra DB call)
-                    _doc_chunks: list[dict] = []
+                    # Collect chunks for source attribution (cache hit — no extra DB call)
+                    _attribution_chunks: list[dict] = []
                     for tc in tool_calls:
-                        if tc["function"]["name"] == "search_documents":
-                            q = json.loads(tc["function"]["arguments"])["query"]
-                            _, _doc_chunks = await _tool_search_documents(q, namespace, expertise_area or "")
-                            break
+                        fname = tc["function"]["name"]
+                        q = json.loads(tc["function"]["arguments"])["query"]
+                        if fname == "search_documents":
+                            _, chunks = await _tool_search_documents(q, namespace, expertise_area or "")
+                            _attribution_chunks.extend(chunks)
+                        elif fname == "search_web":
+                            _, chunks = await _tool_search_web(q, tenant)
+                            _attribution_chunks.extend(chunks)
 
                     synthesis_messages = [
                         {"role": "system", "content": _system_prompt},
@@ -1586,7 +1644,7 @@ async def rag_query(
                         answer = answer.replace(CANARY_TOKEN, "[REDACTED]")
                         logger.warning("canary_redacted user_id=%s tool_path", user_id)
                     await save_turn(db, user_id, namespace, question, answer, channel=channel, tenant_id=tenant_id)
-                    return answer, _doc_chunks, "tool_use"
+                    return answer, _attribution_chunks, "tool_use"
 
                 # All tool results empty — fall through to sequential pipeline
                 logger.warning(

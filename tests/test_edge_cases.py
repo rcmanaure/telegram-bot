@@ -579,7 +579,8 @@ async def test_handle_message_high_similarity_appends_sources_footer():
 
 
 @pytest.mark.asyncio
-async def test_handle_message_low_similarity_no_sources_footer():
+async def test_handle_message_low_similarity_still_shows_sources():
+    """Source footer now shows for ALL chunks, not just high-similarity ones."""
     from bot import handle_message
 
     update = _make_update(text="test")
@@ -595,7 +596,9 @@ async def test_handle_message_low_similarity_no_sources_footer():
         with patch("bot.rag_query", new=AsyncMock(return_value=("respuesta", chunks, None))):
             await handle_message(update, ctx)
 
-    assert "📎" not in update.message.reply_text.call_args[0][0]
+    reply = update.message.reply_text.call_args[0][0]
+    assert "📎" in reply
+    assert "doc.pdf" in reply
 
 
 @pytest.mark.asyncio
@@ -2723,3 +2726,93 @@ async def test_call_chat_on_failover_not_called_on_primary_success():
 
     assert result == "primary answer"
     callback.assert_not_called()
+
+
+# ─── TOOL-E1: Source citation footer ─────────────────────────────────────────
+
+def test_build_source_footer_doc_chunks_with_pages():
+    """Doc chunks with page numbers show source and page."""
+    from rag import _build_source_footer
+
+    chunks = [
+        {"content": "text1", "source": "lab-prices.pdf", "page": 3, "similarity": 0.85},
+        {"content": "text2", "source": "lab-prices.pdf", "page": 5, "similarity": 0.80},
+        {"content": "text3", "source": "policy.md", "page": 1, "similarity": 0.70},
+    ]
+    result = _build_source_footer(chunks, channel="telegram")
+    assert "lab-prices.pdf p.3,5" in result
+    assert "policy.md p.1" in result
+    assert "_Fuentes:" in result and result.strip().endswith("_")
+
+
+def test_build_source_footer_doc_chunks_no_pages():
+    """Doc chunks without valid page numbers show just the source name."""
+    from rag import _build_source_footer
+
+    chunks = [
+        {"content": "text1", "source": "faq.md", "page": 0, "similarity": 0.90},
+        {"content": "text2", "source": "faq.md", "page": None, "similarity": 0.85},
+    ]
+    result = _build_source_footer(chunks, channel="telegram")
+    assert "faq.md" in result
+    assert "p." not in result
+
+
+def test_build_source_footer_web_urls():
+    """Web chunks with URLs include them in the footer."""
+    from rag import _build_source_footer
+
+    chunks = [
+        {"content": "web text", "source": "https://example.com/article", "page": 0, "similarity": 0.4},
+    ]
+    result = _build_source_footer(chunks, channel="telegram")
+    assert "https://example.com/article" in result
+
+
+def test_build_source_footer_mixed_doc_and_web():
+    """Mixed doc and web chunks both appear."""
+    from rag import _build_source_footer
+
+    chunks = [
+        {"content": "doc text", "source": "catalog.pdf", "page": 2, "similarity": 0.88},
+        {"content": "web text", "source": "https://example.com/faq", "page": 0, "similarity": 0.4},
+    ]
+    result = _build_source_footer(chunks, channel="whatsapp")
+    assert "catalog.pdf p.2" in result
+    assert "https://example.com/faq" in result
+    assert "📎 Fuentes:" in result
+    assert "_" not in result  # WhatsApp: no italic markers
+
+
+def test_build_source_footer_excludes_faq():
+    """Chunks with __faq__ source are excluded from footer."""
+    from rag import _build_source_footer
+
+    chunks = [
+        {"content": "faq text", "source": "__faq__", "page": 0, "similarity": 0.95},
+        {"content": "doc text", "source": "manual.pdf", "page": 1, "similarity": 0.85},
+    ]
+    result = _build_source_footer(chunks, channel="telegram")
+    assert "__faq__" not in result
+    assert "manual.pdf p.1" in result
+
+
+def test_build_source_footer_empty_and_none():
+    """Empty list and None return empty string."""
+    from rag import _build_source_footer
+
+    assert _build_source_footer([], channel="telegram") == ""
+    assert _build_source_footer(None, channel="telegram") == ""
+
+
+def test_build_source_footer_deduplicates_pages():
+    """Same page appearing in multiple chunks is shown only once."""
+    from rag import _build_source_footer
+
+    chunks = [
+        {"content": "a", "source": "doc.pdf", "page": 3, "similarity": 0.9},
+        {"content": "b", "source": "doc.pdf", "page": 3, "similarity": 0.85},
+        {"content": "c", "source": "doc.pdf", "page": 7, "similarity": 0.80},
+    ]
+    result = _build_source_footer(chunks, channel="telegram")
+    assert "doc.pdf p.3,7" in result

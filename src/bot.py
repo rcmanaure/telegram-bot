@@ -16,7 +16,7 @@ from db import AsyncSessionLocal, Conversation, DocumentChunk, Tenant
 from image_buffer import image_buffer
 from limiter import tg_rate_limiter
 from llm import is_tool_use_available
-from rag import rag_query
+from rag import rag_query, _build_source_footer
 from services.stt import transcribe_voice
 from security import sanitize_user_input
 
@@ -226,11 +226,8 @@ async def _process_question(
                 tenant=tenant,
             )
 
-        if chunks and chunks[0]["similarity"] > 0.75:
-            sources = list({c["source"] for c in chunks[:2]})
-            full_reply = answer + f"\n\n📎 _Fuentes: {', '.join(sources)}_"
-        else:
-            full_reply = answer
+        source_footer = _build_source_footer(chunks, channel="telegram")
+        full_reply = answer + source_footer
 
         full_reply += reply_suffix
 
