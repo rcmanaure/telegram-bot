@@ -13,6 +13,7 @@ import logging
 import re
 import time
 from collections import OrderedDict
+from typing import Awaitable, Callable
 
 import httpx
 from services.prompts import build_system_prompt, _GREETING_PATTERN
@@ -35,6 +36,44 @@ from llm import (
 )
 
 http_client = httpx.AsyncClient(timeout=60)
+
+
+# ─── LLM failover alert to operator ──────────────────────────────────────────
+
+_FAILOVER_ALERT_COOLDOWN = 3600  # seconds (1 hour)
+_failover_alert_sent: dict[int, float] = {}  # tenant_id → last alert timestamp
+
+
+async def _alert_llm_failover(tenant: Tenant) -> None:
+    """Send a Telegram alert to the operator when the primary LLM fails over.
+
+    Deduped: at most one alert per tenant per hour. Uses the same
+    tg_app.bot.send_message pattern as daily_digest_job.
+    """
+    if not tenant.operator_chat_id:
+        return
+    now = time.monotonic()
+    last = _failover_alert_sent.get(tenant.id, 0)
+    if now - last < _FAILOVER_ALERT_COOLDOWN:
+        return
+    _failover_alert_sent[tenant.id] = now
+    try:
+        from state import telegram_apps
+        tg_app = telegram_apps.get(tenant.bot_token)
+        if not tg_app:
+            return
+        await tg_app.bot.send_message(
+            chat_id=tenant.operator_chat_id,
+            text=(
+                "⚠️ *Alerta LLM*: el modelo principal falló y se activó el modelo de respaldo.\n"
+                "Las respuestas pueden ser más lentas o de menor calidad. "
+                "Revisa la configuración del LLM primario cuando puedas."
+            ),
+            parse_mode="Markdown",
+        )
+        logger.info("failover_alert_sent tenant=%s chat_id=%s", tenant.slug, tenant.operator_chat_id)
+    except Exception:
+        logger.warning("failover_alert_failed tenant=%s", tenant.slug, exc_info=True)
 
 
 # ─── Chunking ────────────────────────────────────────────────────────────────
@@ -859,6 +898,7 @@ async def generate_answer(
     low_confidence: bool = False,
     max_tokens: int = 800,
     no_length_limit: bool = False,
+    on_failover: Callable[[], Awaitable[None]] | None = None,
 ) -> str:
     """
     Generate an answer using retrieved context + conversation history.
@@ -942,6 +982,7 @@ async def generate_answer(
             temperature=0.1,
             channel=channel,
             model=vision_model if images else None,
+            on_failover=on_failover if not images else None,
         )
     except RuntimeError:
         if not images:
@@ -1468,6 +1509,11 @@ async def rag_query(
         logger.info("reformulate ns=%s original=%r → reformulated=%r",
                      namespace, question[:60], search_query[:60])
 
+    # Build failover alert callback (one per rag_query call, shared by all generate_answer calls)
+    _on_failover: Callable[[], Awaitable[None]] | None = None
+    if tenant:
+        _on_failover = lambda: _alert_llm_failover(tenant)  # type: ignore[misc]
+
     # ── TOOL PATH ────────────────────────────────────────────────────────────────
     # When 2+ tools are available and the LLM provider supports tool_use, let the
     # LLM choose which tools to call (Round 1), dispatch them in parallel, then
@@ -1719,6 +1765,7 @@ async def rag_query(
             answer = await generate_answer(
                 [], question, history, expertise_area,
                 channel=channel, images=images,
+                on_failover=_on_failover,
             )
             answer = validate_output(answer, user_id=user_id)
             if CANARY_TOKEN in answer:
@@ -1738,6 +1785,7 @@ async def rag_query(
                     web_results, question, history, expertise_area,
                     channel=channel, images=images,
                     from_web=True,
+                    on_failover=_on_failover,
                 )
                 answer = validate_output(answer, user_id=user_id)
                 # Redact canary token at write time
@@ -1763,6 +1811,7 @@ async def rag_query(
         context, question, history, expertise_area,
         channel=channel, images=images,
         low_confidence=is_low_confidence,
+        on_failover=_on_failover,
     )
     answer = validate_output(answer, user_id=user_id)
     # Redact canary token at write time — prevents exfiltration via history
