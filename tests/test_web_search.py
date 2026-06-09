@@ -173,7 +173,8 @@ async def test_rag_query_web_search_fallback_when_enabled():
          patch("rag.get_setting", side_effect=lambda k, f="": "https://example.com/ws" if k == "web_search_url" else f), \
          patch("rag.settings") as mock_settings, \
          patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
-         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
+         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.is_tool_use_available", return_value=False):
         mock_settings.web_search_url = "https://example.com/ws"
 
         answer, chunks, intent = await rag_query(
@@ -240,7 +241,8 @@ async def test_rag_query_web_search_silent_fallback_on_error():
          patch("rag.get_setting", side_effect=lambda k, f="": "https://example.com/ws" if k == "web_search_url" else f), \
          patch("rag.settings") as mock_settings, \
          patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
-         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
+         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.is_tool_use_available", return_value=False):
         mock_settings.web_search_url = "https://example.com/ws"
 
         answer, chunks, intent = await rag_query(
@@ -277,7 +279,8 @@ async def test_rag_query_web_search_not_invoked_when_context_found():
          patch("rag.get_history", AsyncMock(return_value=[])), \
          patch("rag._reformulate_query", AsyncMock(side_effect=lambda q, h: q)), \
          patch("rag._classify_intent", new_callable=AsyncMock, return_value="search_docs"), \
-         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]):
+         patch("rag.retrieve_catalog_overview", new_callable=AsyncMock, return_value=[]), \
+         patch("rag.is_tool_use_available", return_value=False):
 
         answer, chunks, intent = await rag_query(
             db=mock_db,

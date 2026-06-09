@@ -38,6 +38,9 @@ class Tenant(Base):
     # Vision / web search
     web_search_enabled = Column(Boolean, default=False, server_default="false")
 
+    # E4/E5: Document structure summary (generated at index time)
+    doc_structure_summary = Column(Text, nullable=True)
+
     # WhatsApp / multi-channel
     wa_phone_number_id = Column(String(100), nullable=True)
     _wa_access_token = Column("wa_access_token", String(500), nullable=True)
@@ -82,6 +85,10 @@ class DocumentChunk(Base):
     content = Column(Text, nullable=False)
     embedding = Column(Vector(settings.embedding_dim))
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    # E4: Chunk metadata for multi-tenant RAG generalization
+    chunk_type = Column(String(20), nullable=True)  # price_row, faq_answer, policy_statement, section_header, general_info
+    metadata_ = Column("metadata", JSON, nullable=True, server_default="{}")  # section_name, section_emoji, etc.
 
     __table_args__ = (
         Index(
