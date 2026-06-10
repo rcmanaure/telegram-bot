@@ -1938,10 +1938,10 @@ def test_per_user_rate_limit_burst():
     from limiter import RateLimiter
     limiter = RateLimiter(max_messages=20, window_seconds=60)
     uid = "rl_test_user_burst"
-    # First 19 calls must NOT be rate limited
-    for _ in range(19):
+    # First 20 calls are allowed (blocked requests don't consume slots)
+    for _ in range(20):
         assert limiter.check(uid) is False
-    # 20th call triggers the limit (>= MAX)
+    # 21st call triggers the limit (20 >= 20)
     assert limiter.check(uid) is True
 
 

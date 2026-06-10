@@ -225,7 +225,9 @@ class TestPortalDeleteSource:
 
         override, mock_tenant, mock_db = _auth_override()
 
-        with patch("routes.portal.delete_source", new_callable=AsyncMock) as mock_delete, \
+        with patch("routes.portal.list_sources", new_callable=AsyncMock,
+                    return_value=[{"source": "test.pdf", "chunks": 5}]), \
+             patch("routes.portal.delete_source", new_callable=AsyncMock) as mock_delete, \
              patch("routes.portal.write_audit_log", new_callable=AsyncMock):
             main_module.app.dependency_overrides[require_portal_auth] = override
             try:
@@ -481,16 +483,20 @@ class TestPortalLoginLimiter:
         assert isinstance(portal_login_limiter, RateLimiter)
 
     def test_portal_login_limiter_blocks_after_5_attempts(self):
-        """portal_login_limiter uses >= check: 4 allowed, 5th is blocked."""
+        """portal_login_limiter allows 5 requests, blocks the 6th.
+
+        Blocked requests do NOT consume slots (P1-5 fix), so 5 allowed
+        requests each add a timestamp, and the 6th check finds 5 >= 5.
+        """
         from limiter import portal_login_limiter
         portal_login_limiter._timestamps.clear()
 
         key = "login:127.0.0.1"
-        # RateLimiter uses >= MAX (off-by-one fixed): 4 allowed, 5th triggers limit
-        for i in range(4):
+        # 5 allowed (deque fills to 5), 6th blocked
+        for i in range(5):
             assert not portal_login_limiter.check(key), f"Should not be limited at attempt {i+1}"
-        # 5th should be limited (>= MAX_MESSAGES_PER_WINDOW)
-        assert portal_login_limiter.check(key), "Should be limited at attempt 5"
+        # 6th should be limited (5 >= 5)
+        assert portal_login_limiter.check(key), "Should be limited at attempt 6"
 
         portal_login_limiter._timestamps.clear()
 
@@ -499,9 +505,9 @@ class TestPortalLoginLimiter:
         from limiter import portal_login_limiter
         portal_login_limiter._timestamps.clear()
 
-        # 5 attempts from IP 1
+        # 5 allowed from IP 1 (fills deque), 6th blocked
         for i in range(5):
-            portal_login_limiter.check("login:1.1.1.1")
+            assert not portal_login_limiter.check("login:1.1.1.1")
         assert portal_login_limiter.check("login:1.1.1.1")
 
         # IP 2 should not be limited
