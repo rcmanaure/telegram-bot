@@ -132,7 +132,7 @@ async def portal_login_form(
             response = RedirectResponse(url="/portal/dashboard", status_code=303)
             response.set_cookie(
                 "portal_token", token,
-                httponly=True, samesite="strict", max_age=3600, path="/portal",
+                httponly=True, samesite="strict", secure=True, max_age=3600, path="/portal",
             )
             return response
 

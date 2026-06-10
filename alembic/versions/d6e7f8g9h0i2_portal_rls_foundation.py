@@ -74,6 +74,8 @@ def upgrade() -> None:
     # Namespace-based tables: policy filters on namespace column.
     # current_setting('app.current_tenant', true) returns '' when GUC not set,
     # which matches no namespace → unscoped sessions see zero rows.
+    # Note: FOR ALL includes UPDATE/DELETE. For document_chunks, conversations,
+    # and unanswered_queries this is intentional — tenants manage their own content.
     for table in _TENANT_TABLES_NAMESPACE:
         op.execute(
             f"CREATE POLICY tenant_isolation ON {table} "
