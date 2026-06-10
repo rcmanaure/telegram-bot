@@ -10,6 +10,7 @@ from sqlalchemy import (
     Boolean, Column, DateTime, ForeignKey, Index,
     Integer, JSON, String, Text, UniqueConstraint, func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.ext.hybrid import hybrid_property
@@ -93,7 +94,7 @@ class DocumentChunk(Base):
 
     # E4: Chunk metadata for multi-tenant RAG generalization
     chunk_type = Column(String(20), nullable=True)  # price_row, faq_answer, policy_statement, section_header, general_info
-    metadata_ = Column("metadata", JSON, nullable=True, server_default="{}")  # section_name, section_emoji, etc.
+    metadata_ = Column("metadata", JSONB, nullable=True, server_default="{}")  # section_name, section_emoji, etc.
     # Note: migration c5d6e7f8g901 converts this column to JSONB at the DB level.
     # SQLAlchemy JSON type works with both; the actual column type is JSONB in production.
 
@@ -213,7 +214,7 @@ class TenantUsage(Base):
     period_year = Column(Integer, nullable=False)
     period_month = Column(Integer, nullable=False)   # 1-12
     metric = Column(String(64), nullable=False)       # "queries", "uploads", "tokens"
-    value = Column(Integer, nullable=False, default=0)
+    value = Column(Integer, nullable=False, default=0, server_default="0")
 
     __table_args__ = (
         UniqueConstraint("tenant_id", "period_year", "period_month", "metric",
@@ -277,16 +278,25 @@ TenantSessionLocal = sessionmaker(
 async def tenant_session(slug: str):
     """Open a tenant-scoped DB session with RLS GUC set.
 
-    Uses the restricted DB role (subject to RLS policies when configured).
-    SET LOCAL app.current_tenant is txn-scoped — resets on commit/rollback.
-    Composes with existing SET LOCAL hnsw.* in retrieve_context().
+    Uses SET (not SET LOCAL) so the GUC persists across commits within the
+    same session — portal routes that do multiple writes (upload, audit,
+    metering) need the tenant scope to survive past the first commit.
+    The GUC is explicitly reset on exit to prevent leaking to the pool.
     """
     async with TenantSessionLocal() as session:
         await session.execute(
-            text("SELECT set_config('app.current_tenant', :slug, true)"),
+            text("SELECT set_config('app.current_tenant', :slug, false)"),
             {"slug": slug},
         )
-        yield session
+        try:
+            yield session
+        finally:
+            # Explicitly reset the GUC to prevent leaking to the session pool.
+            # If the session is broken, this is a no-op — the pool discards it.
+            try:
+                await session.execute(text("RESET app.current_tenant"))
+            except Exception:
+                pass  # Session may be broken; pool will discard it
 
 
 async def get_db():

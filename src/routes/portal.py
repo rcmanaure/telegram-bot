@@ -21,8 +21,9 @@ from config import settings, PLAN_LIMITS
 from db import Tenant, UnansweredQuery, TenantAuditLog, get_db, tenant_session
 from dependencies import require_portal_auth
 from limiter import limiter, portal_login_limiter
-from rag import rag_query as _rag_query, _index_status
+from rag import rag_query as _rag_query, get_index_status
 from services.knowledge import list_sources, upsert_source, delete_source, process_upload
+from services.upload import normalize_source_name
 from services.usage import get_usage, increment_usage, write_audit_log
 from services.upload import MAX_UPLOAD_BYTES
 
@@ -162,7 +163,7 @@ async def portal_dashboard(
     sources = await list_sources(db, tenant.slug)
 
     # Index status for each source
-    source_status = {s["source"]: "procesando" if s["source"] in _index_status else "activo"
+    source_status = {s["source"]: get_index_status(tenant.slug, s["source"]) or "activo"
                      for s in sources}
 
     # Usage counts
@@ -228,7 +229,8 @@ async def portal_upload(
     # Enforce doc limit (allow re-upload of existing source)
     sources = await list_sources(db, tenant.slug)
     existing_names = {s["source"] for s in sources}
-    if len(sources) >= plan_limits["docs"] and file.filename not in existing_names:
+    source_name = normalize_source_name(file.filename)
+    if len(sources) >= plan_limits["docs"] and source_name not in existing_names:
         return RedirectResponse(url="/portal/dashboard?error=Límite+de+documentos+alcanzado+("+str(plan_limits["docs"])+")", status_code=303)
 
     # Process upload
@@ -240,9 +242,9 @@ async def portal_upload(
 
     # Enforce chunk limit
     current_chunks = sum(s["chunks"] for s in sources)
-    if file.filename in existing_names:
+    if source_name in existing_names:
         # Re-upload: subtract old chunks, add new
-        old_chunks = next(s["chunks"] for s in sources if s["source"] == file.filename)
+        old_chunks = next(s["chunks"] for s in sources if s["source"] == source_name)
         total_after = current_chunks - old_chunks + len(all_chunks)
     else:
         total_after = current_chunks + len(all_chunks)
@@ -250,16 +252,19 @@ async def portal_upload(
     if total_after > plan_limits["chunks"]:
         return RedirectResponse(url="/portal/dashboard?error=Límite+de+fragmentos+alcanzado+("+str(plan_limits["chunks"])+")", status_code=303)
 
-    # Upsert source
-    source_name = file.filename
-    stored = await upsert_source(db, tenant.slug, source_name, all_chunks, full_doc_text=full_doc_text)
+    # Upsert source — use auto_commit=False to preserve RLS GUC across the session
+    stored = await upsert_source(db, tenant.slug, source_name, all_chunks, full_doc_text=full_doc_text,
+                                  auto_commit=False)
 
     # E2: meter upload
     await increment_usage(db, tenant.id, "uploads", auto_commit=False)
 
     # E6: audit log
     await write_audit_log(db, tenant.id, tenant.slug, f"tenant:{tenant.slug}", "document.upload",
-                         detail={"source": source_name, "chunks": stored}, auto_commit=True)
+                         detail={"source": source_name, "chunks": stored}, auto_commit=False)
+
+    # Single commit for all writes — preserves RLS GUC across the entire request
+    await db.commit()
 
     return RedirectResponse(url="/portal/dashboard?message=Documento+subido+correctamente", status_code=303)
 
@@ -274,11 +279,14 @@ async def portal_delete_source(
 ):
     """Delete a single source from the tenant's knowledge base."""
     tenant, db = tenant_data
-    await delete_source(db, tenant.slug, source)
+    await delete_source(db, tenant.slug, source, auto_commit=False)
 
     # E6: audit log
     await write_audit_log(db, tenant.id, tenant.slug, f"tenant:{tenant.slug}", "document.delete",
-                         detail={"source": source}, auto_commit=True)
+                         detail={"source": source}, auto_commit=False)
+
+    # Single commit for all writes — preserves RLS GUC across the entire request
+    await db.commit()
 
     return RedirectResponse(url="/portal/dashboard?message=Documento+eliminado", status_code=303)
 
@@ -321,7 +329,10 @@ async def portal_query(
 
     # E6: audit log
     await write_audit_log(db, tenant.id, tenant.slug, f"tenant:{tenant.slug}", "portal.query",
-                         detail={"question": question[:200]}, auto_commit=True)
+                         detail={"question": question[:200]}, auto_commit=False)
+
+    # Single commit for all writes — preserves RLS GUC across the entire request
+    await db.commit()
 
     # Build sources list
     sources = []
@@ -356,7 +367,7 @@ async def portal_resolve_question(
             if query:
                 await db.delete(query)
                 await db.commit()
-        except (ValueError, Exception):
+        except ValueError:
             await db.rollback()
 
     return RedirectResponse(url="/portal/dashboard?message=Pregunta+resuelta", status_code=303)

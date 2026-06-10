@@ -43,9 +43,13 @@ def upgrade() -> None:
     # that must be changed before the app starts.
     import os
     tenant_db_password = os.environ.get("TENANT_DB_PASSWORD", "changeme_tenant")
+    # Escape single quotes in password to prevent SQL injection during migration.
+    # The password comes from an env var set by the operator, not user input,
+    # but defense-in-depth applies here since this runs as a superuser.
+    _safe_pw = tenant_db_password.replace("'", "''")
     op.execute(
         f"DO $$ BEGIN "
-        f"CREATE ROLE {_TENANT_ROLE} NOBYPASSRLS LOGIN PASSWORD '{tenant_db_password}'; "
+        f"CREATE ROLE {_TENANT_ROLE} NOBYPASSRLS LOGIN PASSWORD '{_safe_pw}'; "
         f"EXCEPTION WHEN duplicate_object THEN NULL; "
         f"END $$"
     )
