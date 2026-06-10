@@ -82,3 +82,6 @@ tg_rate_limiter = RateLimiter()
 
 # WhatsApp rate limiter (separate keys: namespace:user_id)
 wa_rate_limiter = RateLimiter()
+
+# Portal login rate limiter — 5 attempts per 60s per IP (brute force protection)
+portal_login_limiter = RateLimiter(max_messages=5, window_seconds=60)

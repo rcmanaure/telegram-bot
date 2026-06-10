@@ -23,7 +23,11 @@ def _patch_lifespan_db():
     mock_db.execute = AsyncMock(return_value=mock_result)
     mock_db.__aenter__ = AsyncMock(return_value=mock_db)
     mock_db.__aexit__ = AsyncMock(return_value=False)
-    return patch("db.AsyncSessionLocal", MagicMock(return_value=mock_db))
+    mock_session_factory = MagicMock(return_value=mock_db)
+    return (
+        patch("db.AsyncSessionLocal", mock_session_factory),
+        patch("db.TenantSessionLocal", mock_session_factory),
+    )
 
 
 def _make_db_mock(fetchall=None, scalars_all=None, scalar_one_or_none=None):
@@ -54,8 +58,9 @@ def _app_client():
     # Base mock DB for all requests via dependency override
     _db_override, _mock_db = _make_db_mock()
 
+    p_async, p_tenant = _patch_lifespan_db()
     with patch("lifespan.init_db", new_callable=AsyncMock), \
-         _patch_lifespan_db(), \
+         p_async, p_tenant, \
          patch("services.ngrok.get_ngrok_domain", new_callable=AsyncMock, return_value="localhost"), \
          patch("config_overlay.reload_from_db", new_callable=AsyncMock):
         main_module.app.dependency_overrides[get_db] = _db_override

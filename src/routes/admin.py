@@ -14,10 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import settings
 from db import get_db, AsyncSessionLocal, DocumentChunk, Tenant, UnansweredQuery, SystemConfig
 from limiter import limiter
-from rag import chunk_text, flush_tool_cache, index_chunks, sync_faq_chunks
+from rag import sync_faq_chunks
+from services import knowledge
 from services.ngrok import get_ngrok_domain
 from services.tenant_bot import init_tenant_bot
-from services.upload import MAX_UPLOAD_BYTES, _IMAGE_EXTS, describe_image_for_upload, normalize_source_name, process_uploaded_file
+from services.upload import MAX_UPLOAD_BYTES, normalize_source_name
 from state import get_app
 
 logger = logging.getLogger(__name__)
@@ -329,16 +330,9 @@ async def admin_upload_document(
         tenants, doc_stats = await _admin_context(db)
         return _render_admin(tenants, doc_stats=doc_stats, error="Archivo demasiado grande. Máximo 10MB.")
 
+    source_name = normalize_source_name(file.filename)
     try:
-        source_name = normalize_source_name(file.filename)
-        fname_lower = file.filename.lower()
-        full_doc_text: str | None = None
-        if any(fname_lower.endswith(ext) for ext in _IMAGE_EXTS):
-            description = await describe_image_for_upload(content, fname_lower)
-            all_chunks = chunk_text(description, source=source_name, page=1)
-            pages_processed = 1
-        else:
-            all_chunks, pages_processed, full_doc_text = process_uploaded_file(content, fname_lower, source_name)
+        all_chunks, _pages, full_doc_text = await knowledge.process_upload(content, file.filename)
     except HTTPException as e:
         tenants, doc_stats = await _admin_context(db)
         return _render_admin(tenants, doc_stats=doc_stats, error=e.detail)
@@ -347,14 +341,9 @@ async def admin_upload_document(
         tenants, doc_stats = await _admin_context(db)
         return _render_admin(tenants, doc_stats=doc_stats, error="No se pudo extraer texto del archivo.")
 
-    # Upsert: delete old chunks for this source, then insert new ones atomically
-    await db.execute(
-        text("DELETE FROM document_chunks WHERE namespace = :ns AND source = :src"),
-        {"ns": tenant.slug, "src": source_name},
+    stored = await knowledge.upsert_source(
+        db, tenant.slug, source_name, all_chunks, full_doc_text=full_doc_text
     )
-    stored = await index_chunks(db, all_chunks, tenant.slug, auto_commit=False, full_doc_text=full_doc_text)
-    await db.commit()
-    flush_tool_cache(tenant.slug)
     logger.info("Admin uploaded %s for tenant %s (%d chunks)", file.filename, tenant.slug, stored)
 
     tenants, doc_stats = await _admin_context(db)
@@ -377,14 +366,7 @@ async def admin_delete_docs(
     if not tenant:
         raise HTTPException(404, "Tenant not found")
 
-    ns = tenant.slug
-    await db.execute(text("DELETE FROM document_chunks WHERE namespace = :ns"), {"ns": ns})
-    await db.execute(text("DELETE FROM conversations WHERE namespace = :ns"), {"ns": ns})
-    await db.execute(text("DELETE FROM unanswered_queries WHERE namespace = :ns"), {"ns": ns})
-    await db.execute(text("DELETE FROM feedback WHERE namespace = :ns"), {"ns": ns})
-    await db.execute(text("DELETE FROM wa_service_windows WHERE tenant_id = :tid"), {"tid": tenant_id})
-    await db.commit()
-
+    await knowledge.delete_all(db, tenant.slug, tenant_id)
     logger.info("Admin deleted all docs for tenant %s", tenant.slug)
     tenants, doc_stats = await _admin_context(db)
     return _render_admin(

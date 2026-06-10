@@ -1,7 +1,9 @@
 """File upload and vision processing — shared by API and admin routes."""
+import asyncio
 import io
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import HTTPException
 from pypdf import PdfReader
@@ -12,6 +14,10 @@ from rag import chunk_text
 logger = logging.getLogger(__name__)
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+
+# Thread pool for CPU-bound PDF parsing. Size 2 prevents saturating the
+# single uvicorn worker while allowing some parallelism for concurrent uploads.
+_upload_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="upload")
 
 _IMAGE_EXTS = (".jpg", ".jpeg", ".png")
 
@@ -130,3 +136,23 @@ def process_uploaded_file(content: bytes, filename: str, source_name: str) -> tu
         raise HTTPException(400, "No text could be extracted from this file")
 
     return all_chunks, pages_processed, full_doc_text
+
+
+async def process_upload_async(content: bytes, filename: str) -> tuple[list[dict], int, str | None]:
+    """Async wrapper: offload CPU-bound PDF/text parsing to thread pool.
+
+    Images are described by the vision model (network-bound, stays async).
+    PDFs and text files run in the executor to avoid blocking the event loop.
+    Returns (chunks, pages_processed, full_doc_text).
+    """
+    source_name = normalize_source_name(filename)
+    fname_lower = filename.lower()
+    if any(fname_lower.endswith(ext) for ext in _IMAGE_EXTS):
+        description = await describe_image_for_upload(content, fname_lower)
+        chunks = chunk_text(description, source=source_name, page=1)
+        return chunks, 1, None
+    loop = asyncio.get_running_loop()
+    chunks, pages, full_doc_text = await loop.run_in_executor(
+        _upload_executor, process_uploaded_file, content, fname_lower, source_name,
+    )
+    return chunks, pages, full_doc_text

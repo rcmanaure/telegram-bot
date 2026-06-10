@@ -23,7 +23,7 @@ from security import CANARY_TOKEN, scan_chunk_for_injection, sanitize_user_input
 logger = logging.getLogger(__name__)
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
-from db import AsyncSessionLocal, DocumentChunk, Conversation, UnansweredQuery, Tenant
+from db import AsyncSessionLocal, DocumentChunk, Conversation, UnansweredQuery, Tenant, tenant_session
 from sqlalchemy import update
 from config import settings
 from config_overlay import get_setting, get_setting_int
@@ -1761,6 +1761,32 @@ TOOLS = [
     },
 ]
 
+# ─── Index status tracking ────────────────────────────────────────────────────
+# (namespace, source) → "procesando" | "activo". Set before index_chunks, updated
+# after success. Entries auto-expire after 5 min (lazy TTL check on read).
+# PR2 portal UI reads this for the ◐ procesando badge.
+
+_index_status: dict[tuple[str, str], tuple[str, float]] = {}  # key → (status, monotonic_ts)
+_INDEX_STATUS_TTL = 300  # 5 minutes
+
+
+def set_index_status(namespace: str, source: str, status: str) -> None:
+    """Set index status: 'procesando' or 'activo'."""
+    _index_status[(namespace, source)] = (status, time.monotonic())
+
+
+def get_index_status(namespace: str, source: str) -> str | None:
+    """Return 'procesando' or 'activo', or None if not tracked / expired."""
+    entry = _index_status.get((namespace, source))
+    if entry is None:
+        return None
+    status, ts = entry
+    if time.monotonic() - ts > _INDEX_STATUS_TTL:
+        del _index_status[(namespace, source)]
+        return None
+    return status
+
+
 # ─── Tool result cache ────────────────────────────────────────────────────────
 # Keyed by "namespace:tool_name:sha256(query)[:16]". Value: (result_str, chunks, monotonic_ts).
 # LRU cap: 1000 entries (FIFO eviction on overflow). TTL: 300s (lazy eviction on read).
@@ -1818,7 +1844,7 @@ async def _tool_search_documents(
         logger.debug("tool_cache hit: %s:search_documents", namespace)
         return cached
 
-    async with AsyncSessionLocal() as db:
+    async with tenant_session(namespace) as db:
         hyde_q = await _hyde_query(query, expertise_area)
         search_q = hyde_q if hyde_q else query
         chunks = await retrieve_context(db, search_q, namespace)
