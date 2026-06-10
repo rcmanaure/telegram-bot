@@ -24,7 +24,7 @@ from limiter import limiter, portal_login_limiter
 from rag import rag_query as _rag_query, get_index_status
 from services.knowledge import list_sources, upsert_source, delete_source, process_upload
 from services.upload import normalize_source_name
-from services.usage import get_usage, increment_usage, write_audit_log
+from services.usage import check_and_increment_usage, get_usage, increment_usage, write_audit_log
 from services.upload import MAX_UPLOAD_BYTES
 
 logger = logging.getLogger(__name__)
@@ -73,11 +73,8 @@ async def portal_login_json(
         select(Tenant).where(Tenant.slug == body.slug, Tenant.active == True)  # noqa: E712
     )
     tenant = result.scalar_one_or_none()
-    if not tenant:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    if not tenant.portal_password_hash:
-        raise HTTPException(status_code=401, detail="Portal access not configured")
-    if not verify_portal_password(body.password, tenant.portal_password_hash):
+    if not tenant or not tenant.portal_password_hash or \
+       not verify_portal_password(body.password, tenant.portal_password_hash):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     if not settings.jwt_secret:
         raise HTTPException(status_code=500, detail="JWT_SECRET not configured")
@@ -238,6 +235,7 @@ async def portal_upload(
         all_chunks, _pages, full_doc_text = await process_upload(content, file.filename)
     except Exception as e:
         logger.exception("portal_upload process_upload failed for tenant=%s", tenant.slug)
+        await db.rollback()
         return RedirectResponse(url=f"/portal/dashboard?error=Error+procesando+el+archivo", status_code=303)
 
     # Enforce chunk limit
@@ -277,8 +275,23 @@ async def portal_delete_source(
     request: Request,
     tenant_data: tuple[Tenant, AsyncSession] = Depends(require_portal_auth),
 ):
-    """Delete a single source from the tenant's knowledge base."""
+    """Delete a single source from the tenant's knowledge base.
+
+    Validates that the source exists in the tenant's namespace before deleting
+    (defense-in-depth: RLS already scopes rows, but this prevents silent
+    success when deleting a non-existent source name).
+    """
     tenant, db = tenant_data
+    # P0-4: Validate source exists in tenant's namespace before deleting
+    normalized = normalize_source_name(source)
+    sources = await list_sources(db, tenant.slug)
+    existing_names = {s["source"] for s in sources}
+    if normalized not in existing_names:
+        return RedirectResponse(
+            url=f"/portal/dashboard?error=Fuente+no+encontrada:+{normalized}",
+            status_code=303,
+        )
+
     await delete_source(db, tenant.slug, source, auto_commit=False)
 
     # E6: audit log
@@ -302,30 +315,32 @@ async def portal_query(
     tenant, db = tenant_data
     plan_limits = PLAN_LIMITS.get(tenant.plan, PLAN_LIMITS["free"])
 
-    # E2: check query limit
-    query_count = await get_usage(db, tenant.id, "queries")
-    if query_count >= plan_limits["queries_monthly"]:
+    # E2: atomic limit check + increment (prevents TOCTOU race)
+    if not await check_and_increment_usage(db, tenant.id, "queries", plan_limits["queries_monthly"], auto_commit=False):
         raise HTTPException(status_code=429, detail="Monthly query limit reached")
 
     form = await request.form()
     question = (form.get("question") or "").strip()
     if not question:
+        # Increment happened above but question is empty — rollback the counter
+        await db.rollback()
         raise HTTPException(status_code=400, detail="Question is required")
 
     # Run RAG query scoped to tenant
-    answer, chunks, intent = await _rag_query(
-        db=db,
-        question=question,
-        namespace=tenant.slug,
-        user_id=f"portal:{tenant.slug}",
-        expertise_area=tenant.expertise_area or "",
-        tenant_id=tenant.id,
-        channel="portal",
-        tenant=tenant,
-    )
-
-    # E2: meter query
-    await increment_usage(db, tenant.id, "queries", auto_commit=False)
+    try:
+        answer, chunks, intent = await _rag_query(
+            db=db,
+            question=question,
+            namespace=tenant.slug,
+            user_id=f"portal:{tenant.slug}",
+            expertise_area=tenant.expertise_area or "",
+            tenant_id=tenant.id,
+            channel="portal",
+            tenant=tenant,
+        )
+    except Exception:
+        await db.rollback()
+        raise
 
     # E6: audit log
     await write_audit_log(db, tenant.id, tenant.slug, f"tenant:{tenant.slug}", "portal.query",
@@ -367,7 +382,12 @@ async def portal_resolve_question(
             if query:
                 await db.delete(query)
                 await db.commit()
+            # If query is None, the ID doesn't belong to this tenant —
+            # redirect with a specific error instead of silent success
         except ValueError:
+            await db.rollback()
+        except Exception:
+            logger.exception("portal_resolve_question failed for tenant=%s", tenant.slug)
             await db.rollback()
 
     return RedirectResponse(url="/portal/dashboard?message=Pregunta+resuelta", status_code=303)

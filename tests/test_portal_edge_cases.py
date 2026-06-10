@@ -75,11 +75,10 @@ class TestTOCTOULimitEnforcement:
     """Verify that plan limits are checked before expensive operations."""
 
     def test_query_limit_checked_before_rag_call(self):
-        """P0-1: get_usage is called before _rag_query in portal_query."""
+        """P0-1: check_and_increment_usage returns False (at limit) → 429, no RAG call."""
         import main as main_module
         from dependencies import require_portal_auth
         from db import Tenant
-        from config import PLAN_LIMITS
 
         mock_tenant = MagicMock(spec=Tenant)
         mock_tenant.id = 1
@@ -96,24 +95,19 @@ class TestTOCTOULimitEnforcement:
         async def _override():
             yield mock_tenant, mock_tenant_db
 
-        # Return a count AT the limit
-        free_limit = PLAN_LIMITS["free"]["queries_monthly"]
-
         call_order = []
 
-        async def mock_get_usage(*args, **kwargs):
-            call_order.append("get_usage")
-            return free_limit
+        async def mock_check_and_increment(*args, **kwargs):
+            call_order.append("check_and_increment")
+            return False  # At limit — reject
 
         async def mock_rag_query(*args, **kwargs):
             call_order.append("rag_query")
             return ("answer", [], None)
 
         main_module.app.dependency_overrides[require_portal_auth] = _override
-        with patch("routes.portal.get_usage", new_callable=AsyncMock, side_effect=mock_get_usage), \
-             patch("routes.portal._rag_query", new_callable=AsyncMock, side_effect=mock_rag_query), \
-             patch("routes.portal.increment_usage", new_callable=AsyncMock), \
-             patch("routes.portal.write_audit_log", new_callable=AsyncMock):
+        with patch("routes.portal.check_and_increment_usage", new_callable=AsyncMock, side_effect=mock_check_and_increment), \
+             patch("routes.portal._rag_query", new_callable=AsyncMock, side_effect=mock_rag_query):
             try:
                 client = TestClient(main_module.app)
                 resp = client.post("/portal/query", data={"question": "test"})
@@ -367,45 +361,47 @@ class TestJWTEdgeCases:
 class TestSourceDeletionEdgeCases:
     """Test source deletion edge cases."""
 
-    def test_delete_nonexistent_source_still_redirects(self):
-        """Deleting a non-existent source redirects successfully (idempotent)."""
+    def test_delete_nonexistent_source_returns_error(self):
+        """P0-4 fix: Deleting a non-existent source redirects with error message."""
         import main as main_module
         from dependencies import require_portal_auth
 
         override, mock_tenant, mock_db = _make_portal_auth_override()
 
-        with patch("routes.portal.delete_source", new_callable=AsyncMock) as mock_delete, \
+        with patch("routes.portal.list_sources", new_callable=AsyncMock, return_value=[]), \
+             patch("routes.portal.delete_source", new_callable=AsyncMock) as mock_delete, \
              patch("routes.portal.write_audit_log", new_callable=AsyncMock):
             main_module.app.dependency_overrides[require_portal_auth] = override
             try:
                 client = TestClient(main_module.app)
                 resp = client.post("/portal/delete/nonexistent.pdf", follow_redirects=False)
                 assert resp.status_code == 303
-                assert "/portal/dashboard" in resp.headers.get("location", "")
-                # delete_source was still called (defense-in-depth)
-                mock_delete.assert_called_once()
+                location = resp.headers.get("location", "")
+                assert "Fuente+no+encontrada" in location or "error" in location.lower()
+                # delete_source should NOT have been called
+                mock_delete.assert_not_called()
             finally:
                 main_module.app.dependency_overrides.pop(require_portal_auth, None)
 
     def test_delete_source_with_special_chars_in_path(self):
-        """Source path with special chars is passed through (SQL injection safe via params)."""
+        """Source path with special chars is normalized and validated before deletion."""
         import main as main_module
         from dependencies import require_portal_auth
 
         override, mock_tenant, mock_db = _make_portal_auth_override()
 
-        with patch("routes.portal.delete_source", new_callable=AsyncMock) as mock_delete, \
+        # Source exists in the list → deletion proceeds
+        with patch("routes.portal.list_sources", new_callable=AsyncMock,
+                    return_value=[{"source": "my doc-v2.pdf", "chunks": 5}]), \
+             patch("routes.portal.delete_source", new_callable=AsyncMock) as mock_delete, \
              patch("routes.portal.write_audit_log", new_callable=AsyncMock):
             main_module.app.dependency_overrides[require_portal_auth] = override
             try:
                 client = TestClient(main_module.app)
-                # Path with spaces, dashes, dots — should be handled
                 resp = client.post("/portal/delete/my%20doc-v2.pdf", follow_redirects=False)
                 assert resp.status_code == 303
-                # The source parameter should be URL-decoded by FastAPI
-                call_args = mock_delete.call_args
-                # FastAPI decodes the path parameter
-                assert call_args is not None
+                assert "/portal/dashboard" in resp.headers.get("location", "")
+                mock_delete.assert_called_once()
             finally:
                 main_module.app.dependency_overrides.pop(require_portal_auth, None)
 
@@ -417,21 +413,25 @@ class TestSourceDeletionEdgeCases:
 class TestRateLimiterEdgeCases:
     """Test portal_login_limiter edge cases."""
 
-    def test_blocked_requests_consume_slots(self):
-        """P1-20: Blocked requests DO consume deque slots in current implementation.
-        This is a documentation test — the current behavior means the lockout
-        window is longer than intended (5 blocked + original 4 = 9 timestamps
-        in the deque before sweep clears them)."""
+    def test_blocked_requests_do_not_consume_slots(self):
+        """P1-5 fix: Blocked requests do NOT consume deque slots.
+
+        After the fix, only allowed requests append timestamps. This means:
+        5 allowed → deque has 5 entries → 6th check finds 5 >= 5 → blocked.
+        Blocked requests don't extend the lockout window.
+        """
         from limiter import portal_login_limiter
         portal_login_limiter._timestamps.clear()
 
         key = "login:192.168.1.1"
-        # Make 4 successful attempts (under limit)
-        for i in range(4):
+        # 5 allowed requests fill the deque
+        for i in range(5):
             assert not portal_login_limiter.check(key), f"Attempt {i+1} should not be limited"
-        # 5th attempt triggers limit AND appends its timestamp
-        assert portal_login_limiter.check(key), "5th should be limited"
-        # The deque now has 5 entries (4 allowed + 1 blocked)
+        # Deque now has exactly 5 entries
+        assert len(portal_login_limiter._timestamps[key]) == 5
+        # 6th is blocked and does NOT add a timestamp
+        assert portal_login_limiter.check(key), "6th should be limited"
+        # Deque still has exactly 5 entries (blocked request didn't add one)
         assert len(portal_login_limiter._timestamps[key]) == 5
 
         portal_login_limiter._timestamps.clear()
@@ -441,10 +441,10 @@ class TestRateLimiterEdgeCases:
         from limiter import portal_login_limiter
         portal_login_limiter._timestamps.clear()
 
-        # Exhaust limit for IP 1
+        # Exhaust limit for IP 1 (5 allowed, 6th blocked)
         for i in range(5):
-            portal_login_limiter.check("login:1.1.1.1")
-        assert portal_login_limiter.check("login:1.1.1.1")  # still limited
+            assert not portal_login_limiter.check("login:1.1.1.1")
+        assert portal_login_limiter.check("login:1.1.1.1")  # 6th is limited
 
         # IP 2 should be fresh
         assert not portal_login_limiter.check("login:2.2.2.2")
@@ -562,17 +562,17 @@ class TestLoginInfoLeakage:
             main_module.app.dependency_overrides.pop(get_db, None)
             portal_login_limiter._timestamps.clear()
 
-    def test_json_login_no_password_configured_returns_different_error(self):
-        """P1-18: JSON login reveals 'Portal access not configured' for existing
-        slug without password hash — different from wrong-password error.
-        This IS an info leak. Test documents the current behavior."""
+    def test_json_login_no_password_configured_returns_same_error(self):
+        """P0-3 fix: JSON login for existing slug with no password returns
+        'Invalid credentials' — same error as wrong password and nonexistent slug.
+        No info leakage about slug existence or password configuration."""
         import main as main_module
         from db import Tenant, get_db
 
         mock_tenant = MagicMock(spec=Tenant)
         mock_tenant.slug = "test-tenant"
         mock_tenant.active = True
-        mock_tenant.portal_password_hash = None  # No password set — different error
+        mock_tenant.portal_password_hash = None  # No password set
 
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = mock_tenant
@@ -589,10 +589,11 @@ class TestLoginInfoLeakage:
             client = TestClient(main_module.app)
             resp = client.post("/portal/login", json={"slug": "test-tenant", "password": "test"})
             assert resp.status_code == 401
-            # BUG: This reveals that the slug EXISTS but has no password configured
-            # Different error from "Invalid credentials" for wrong password
+            # FIX: Now returns generic "Invalid credentials" for all failure cases
             detail = resp.json().get("detail", "")
-            assert "not configured" in detail.lower() or "inválido" in detail.lower()
+            assert "Invalid credentials" in detail
+            # Should NOT reveal "Portal access not configured"
+            assert "not configured" not in detail.lower()
         finally:
             main_module.app.dependency_overrides.pop(get_db, None)
             portal_login_limiter._timestamps.clear()
@@ -755,6 +756,40 @@ class TestUsageMeteringEdgeCases:
         call_sql = str(mock_db.execute.call_args[0][0])
         assert "ON CONFLICT" in call_sql
         assert "value = tenant_usage.value + :delta" in call_sql
+
+    @pytest.mark.asyncio
+    async def test_check_and_increment_under_limit_succeeds(self):
+        """P0-1 fix: check_and_increment_usage returns True when under limit."""
+        from services.usage import check_and_increment_usage
+
+        mock_db = AsyncMock()
+        # Simulate: row doesn't exist yet → INSERT succeeds, RETURNING returns 1
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = 1
+        mock_db.execute = AsyncMock(return_value=mock_result)
+        mock_db.commit = AsyncMock()
+
+        result = await check_and_increment_usage(mock_db, tenant_id=1, metric="queries", limit=500)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_check_and_increment_over_limit_returns_false(self):
+        """P0-1 fix: check_and_increment_usage returns False when at limit.
+
+        The SQL WHERE clause prevents the increment when value >= limit.
+        RETURNING returns None when the WHERE clause doesn't match.
+        """
+        from services.usage import check_and_increment_usage
+
+        mock_db = AsyncMock()
+        # Simulate: row exists at limit → ON CONFLICT WHERE value < limit fails → RETURNING None
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        mock_db.execute = AsyncMock(return_value=mock_result)
+        mock_db.commit = AsyncMock()
+
+        result = await check_and_increment_usage(mock_db, tenant_id=1, metric="queries", limit=500)
+        assert result is False
 
     @pytest.mark.asyncio
     async def test_get_usage_returns_zero_for_no_row(self):
@@ -1033,20 +1068,19 @@ class TestVerifyPortalPasswordEdgeCases:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestQueryMeteringOrder:
-    """Document that metering happens after RAG call (not before)."""
+    """Document the call order in portal_query: check_and_increment → RAG → commit."""
 
-    def test_portal_query_meters_after_rag(self):
-        """Verify that portal_query calls _rag_query before increment_usage.
-        This is a documentation test showing the current order: check limit → RAG → meter."""
+    def test_portal_query_calls_check_and_increment_before_rag(self):
+        """Verify that portal_query calls check_and_increment_usage before _rag_query.
+        After P0-1 fix, the atomic limit check happens before the RAG call."""
         import inspect
         from routes import portal
 
         source = inspect.getsource(portal.portal_query)
-        # Find positions
+        # check_and_increment_usage should appear before _rag_query
+        check_pos = source.find("check_and_increment_usage")
         rag_pos = source.find("_rag_query")
-        meter_pos = source.find("increment_usage")
-        # _rag_query should appear before increment_usage
-        assert rag_pos < meter_pos, "RAG query should be called before usage increment"
+        assert check_pos < rag_pos, "check_and_increment_usage should be called before _rag_query"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

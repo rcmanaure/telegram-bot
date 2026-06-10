@@ -421,11 +421,9 @@ class TestPortalQuery:
         async def _override():
             yield mock_tenant, mock_tenant_db
 
-        # Return a query count that exceeds the free plan limit
-        free_limit = PLAN_LIMITS["free"]["queries_monthly"]
-
+        # check_and_increment_usage returns False when limit is reached
         main_module.app.dependency_overrides[require_portal_auth] = _override
-        with patch("routes.portal.get_usage", new_callable=AsyncMock, return_value=free_limit):
+        with patch("routes.portal.check_and_increment_usage", new_callable=AsyncMock, return_value=False):
             try:
                 client = TestClient(main_module.app)
                 resp = client.post("/portal/query", data={"question": "test"})

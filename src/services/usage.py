@@ -1,6 +1,7 @@
 """Usage metering and audit log helpers for E2/E6.
 
 increment_usage / get_usage: per-tenant monthly counters (atomic upsert).
+check_and_increment_usage: atomic limit check + increment (prevents TOCTOU).
 write_audit_log: knowledge mutation audit trail for TenantAuditLog.
 """
 import logging
@@ -45,6 +46,48 @@ async def increment_usage(
     )
     if auto_commit:
         await db.commit()
+
+
+async def check_and_increment_usage(
+    db: AsyncSession,
+    tenant_id: int,
+    metric: str,
+    limit: int,
+    *,
+    auto_commit: bool = True,
+) -> bool:
+    """Atomically check the monthly limit and increment if under it.
+
+    Prevents TOCTOU races where concurrent requests both pass get_usage()
+    before either increments. Uses a single SQL statement that only
+    increments if the current value is below the limit.
+
+    Returns True if the increment succeeded (under limit), False if over limit.
+    """
+    now = datetime.now(timezone.utc)
+    # Upsert the row, but ONLY increment if current value < limit.
+    # The RETURNING clause gives us the new value so we can confirm.
+    result = await db.execute(
+        text("""
+            INSERT INTO tenant_usage (tenant_id, period_year, period_month, metric, value)
+            VALUES (:tid, :year, :month, :metric, 1)
+            ON CONFLICT (tenant_id, period_year, period_month, metric)
+            DO UPDATE SET value = tenant_usage.value + 1
+            WHERE tenant_usage.value < :limit
+            RETURNING value
+        """),
+        {
+            "tid": tenant_id,
+            "year": now.year,
+            "month": now.month,
+            "metric": metric,
+            "limit": limit,
+        },
+    )
+    row = result.scalar_one_or_none()
+    if auto_commit:
+        await db.commit()
+    return row is not None
 
 
 async def get_usage(
