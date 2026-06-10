@@ -11,7 +11,7 @@ from slowapi.errors import RateLimitExceeded
 
 from limiter import limiter, rate_limit_handler
 from lifespan import lifespan
-from routes import api, admin, webhook
+from routes import api, admin, portal, webhook
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,7 @@ app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 
 app.include_router(api.router)
 app.include_router(admin.router)
+app.include_router(portal.router)
 app.include_router(webhook.router)
 
 # ─── Exception handlers ──────────────────────────────────────────────────────

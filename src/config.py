@@ -77,6 +77,12 @@ class Settings(BaseSettings):
     # ─── Admin UI ────────────────────────────────────────────────────────────────
     admin_password: str = "changeme"
 
+    # ─── Portal (PR1) ────────────────────────────────────────────────────────────
+    # Password for the ragbot_tenant DB role (subject to RLS). Empty = RLS disabled (dev).
+    tenant_db_password: str = ""
+    # JWT signing secret for tenant portal sessions. MUST be set in production.
+    jwt_secret: str = ""
+
     # ─── WhatsApp (optional — per-tenant credentials stored in DB) ────────────────
     wa_phone_number_id: str = ""
     wa_access_token: str = ""
