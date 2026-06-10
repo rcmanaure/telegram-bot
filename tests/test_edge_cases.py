@@ -3122,6 +3122,67 @@ def test_max_context_chunks_constant():
     assert MAX_CONTEXT_CHUNKS == 30
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 4C: Query metering in TG/WA webhook paths
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_tg_handler_increments_usage_after_rag_query():
+    """Phase 4C: bot.py calls increment_usage after rag_query (inside tenant_session)."""
+    import inspect
+    from bot import _process_question
+    source = inspect.getsource(_process_question)
+    rag_pos = source.find("await rag_query(")
+    usage_pos = source.find("await increment_usage(")
+    assert rag_pos > 0, "rag_query call not found in _process_question"
+    assert usage_pos > 0, "increment_usage call not found in _process_question"
+    assert usage_pos > rag_pos, "increment_usage should be called after rag_query"
+
+
+def test_wa_text_handler_increments_usage_after_rag_query():
+    """Phase 4C: wa_processor text-only path calls increment_usage after rag_query."""
+    import inspect
+    from services.wa_processor import handle_wa_message
+    source = inspect.getsource(handle_wa_message)
+    # Find the LAST rag_query call (text-only path) and the increment_usage after it
+    rag_positions = []
+    pos = 0
+    while True:
+        pos = source.find("await rag_query(", pos)
+        if pos == -1:
+            break
+        rag_positions.append(pos)
+        pos += 1
+    usage_pos = source.find("await increment_usage(")
+    assert len(rag_positions) >= 1, "rag_query call not found in handle_wa_message"
+    assert usage_pos > 0, "increment_usage call not found in handle_wa_message"
+    # increment_usage should appear after the last rag_query
+    assert usage_pos > rag_positions[-1], "increment_usage should be after the last rag_query call"
+
+
+def test_wa_flushed_handler_increments_usage_after_rag_query():
+    """Phase 4C: wa_processor flushed-image path calls increment_usage after rag_query."""
+    import inspect
+    from services.wa_processor import _wa_process_flushed
+    source = inspect.getsource(_wa_process_flushed)
+    rag_pos = source.find("await rag_query(")
+    usage_pos = source.find("await increment_usage(")
+    assert rag_pos > 0, "rag_query call not found in _wa_process_flushed"
+    assert usage_pos > 0, "increment_usage call not found in _wa_process_flushed"
+    assert usage_pos > rag_pos, "increment_usage should be called after rag_query"
+
+
+def test_bot_imports_increment_usage():
+    """Phase 4C: bot.py imports increment_usage from services.usage."""
+    import bot
+    assert hasattr(bot, "increment_usage"), "bot module should import increment_usage"
+
+
+def test_wa_processor_imports_increment_usage():
+    """Phase 4C: wa_processor imports increment_usage from services.usage."""
+    import services.wa_processor
+    assert hasattr(services.wa_processor, "increment_usage"), "wa_processor module should import increment_usage"
+
+
 @pytest.mark.asyncio
 async def test_context_capped_after_merges():
     """When context exceeds MAX_CONTEXT_CHUNKS after all merges, it's truncated

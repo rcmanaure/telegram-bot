@@ -17,6 +17,7 @@ from image_buffer import image_buffer
 from limiter import tg_rate_limiter
 from llm import is_tool_use_available
 from rag import rag_query, _build_source_footer
+from services.usage import increment_usage
 from services.stt import transcribe_voice
 from security import sanitize_user_input
 
@@ -225,6 +226,7 @@ async def _process_question(
                 images=images,
                 tenant=tenant,
             )
+            await increment_usage(db, tenant.id, "queries")
 
         source_footer = _build_source_footer(chunks, channel="telegram")
         full_reply = answer + source_footer

@@ -10,6 +10,7 @@ from image_buffer import image_buffer
 from limiter import wa_rate_limiter
 from llm import is_tool_use_available
 from rag import rag_query, _log_unanswered, _build_source_footer
+from services.usage import increment_usage
 from security import sanitize_user_input
 
 logger = logging.getLogger(__name__)
@@ -98,6 +99,7 @@ async def _wa_process_flushed(
                     images=images,
                     tenant=tenant,
                 )
+                await increment_usage(db, tenant.id, "queries")
             except Exception as e:
                 logger.error("wa_rag_error user=%s: %s", user_id, e)
                 try:
@@ -270,6 +272,7 @@ async def handle_wa_message(
                     channel="whatsapp",
                     tenant=tenant,
                 )
+                await increment_usage(db, tenant.id, "queries")
             except Exception as e:
                 logger.error("wa_rag_error user=%s: %s", user_id, e)
                 try:
