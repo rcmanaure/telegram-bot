@@ -1,13 +1,15 @@
-"""Usage metering helpers for E2 (per-tenant monthly counters).
+"""Usage metering and audit log helpers for E2/E6.
 
-Uses INSERT ... ON CONFLICT DO UPDATE for atomic upsert.
-Monthly reset is implicit — each month gets a new row.
+increment_usage / get_usage: per-tenant monthly counters (atomic upsert).
+write_audit_log: knowledge mutation audit trail for TenantAuditLog.
 """
 import logging
 from datetime import datetime, timezone
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from db import TenantAuditLog
 
 logger = logging.getLogger(__name__)
 
@@ -64,3 +66,29 @@ async def get_usage(
     )
     row = result.scalar_one_or_none()
     return row if row is not None else 0
+
+
+async def write_audit_log(
+    db: AsyncSession,
+    tenant_id: int,
+    namespace: str,
+    actor: str,
+    action: str,
+    detail: dict | None = None,
+    *,
+    auto_commit: bool = True,
+) -> None:
+    """Write an audit log entry for a knowledge mutation (E6).
+
+    Actor format: "tenant:{slug}" for portal actions, "admin" for operator actions.
+    Actions: "document.upload", "document.delete", "portal.query", "portal.login", etc.
+    """
+    db.add(TenantAuditLog(
+        tenant_id=tenant_id,
+        namespace=namespace,
+        actor=actor,
+        action=action,
+        detail=detail,
+    ))
+    if auto_commit:
+        await db.commit()

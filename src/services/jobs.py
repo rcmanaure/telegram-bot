@@ -70,15 +70,26 @@ async def daily_digest_job():
 
 
 async def cleanup_job():
-    """Weekly: purge old UnansweredQuery rows and sweep stale rate-limit entries."""
+    """Weekly: purge old UnansweredQuery rows, stale TenantUsage rows, and sweep rate-limit entries."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=90)
     async with AsyncSessionLocal() as db:
         await db.execute(
             text("DELETE FROM unanswered_queries WHERE created_at < :cutoff"),
             {"cutoff": cutoff},
         )
+        # E2: purge usage rows older than 3 months (monthly rows age out naturally)
+        # Delete rows where (year, month) < (cutoff_year, cutoff_month)
+        three_months_ago = datetime.now(timezone.utc) - timedelta(days=90)
+        cutoff_year = three_months_ago.year
+        cutoff_month = three_months_ago.month
+        await db.execute(
+            text("DELETE FROM tenant_usage WHERE "
+                 "(period_year < :cy) OR "
+                 "(period_year = :cy AND period_month < :cm)"),
+            {"cy": cutoff_year, "cm": cutoff_month},
+        )
         await db.commit()
-    logger.info("cleanup_job: deleted UnansweredQuery rows older than 90 days")
+    logger.info("cleanup_job: purged UnansweredQuery and TenantUsage rows older than 90 days")
 
     tg_removed = tg_rate_limiter.sweep()
     wa_removed = wa_rate_limiter.sweep()

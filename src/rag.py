@@ -1977,6 +1977,52 @@ async def _classify_intent(question: str, last_bot_turn: str | None = None, expe
         return "search_docs"
 
 
+# ─── E1: Faithfulness self-check ──────────────────────────────────────────────
+# When low_confidence=True AND top similarity < 0.85, run a second LLM call
+# to verify the answer is grounded in the provided context. If not, append a caveat.
+
+_FAITHFULNESS_CEILING = 0.85
+
+
+async def _faithfulness_check(
+    question: str,
+    answer: str,
+    context: list[dict],
+    channel: str = "telegram",
+) -> str:
+    """Verify that the answer is grounded in the provided context.
+
+    Returns the original answer if faithful, or the answer with a caveat appended
+    if the LLM identifies unsupported claims.
+    """
+    context_text = "\n\n".join(
+        f"[Source: {c['source']}, Page {c.get('page', 0)}]\n{c['content']}"
+        for c in context[:5]  # Limit context for the check call
+    )
+    messages = [
+        {"role": "system", "content": (
+            "You are a fact-checker. Given a question, an answer, and source context, "
+            "verify that the answer is supported by the context. "
+            "If the answer contains claims NOT supported by the context, respond with a JSON object: "
+            '{"faithful": false, "unsupported_claims": "description of unsupported claims"}'
+            "\nIf the answer is fully supported, respond: "
+            '{"faithful": true}'
+            "\n\nRespond ONLY with the JSON object."
+        )},
+        {"role": "user", "content": f"Question: {question}\n\nAnswer: {answer}\n\nContext:\n{context_text}"},
+    ]
+    try:
+        result = await call_chat(messages, max_tokens=200, temperature=0.0)
+        parsed = extract_json_from_llm_response(result)
+        if parsed.get("faithful") is False:
+            unsupported = parsed.get("unsupported_claims", "")
+            caveat = f"\n\n⚠️ Aclaración: algunas afirmaciones pueden no estar completamente verificadas en los documentos disponibles. {unsupported}"
+            return answer + caveat
+    except Exception as e:
+        logger.warning("faithfulness_check failed: %s", e)
+    return answer
+
+
 async def rag_query(
     db: AsyncSession,
     question: str,
@@ -2385,6 +2431,11 @@ async def rag_query(
         on_failover=_on_failover,
         doc_structure_summary=_doc_summary,
     )
+
+    # E1: Faithfulness self-check — only when low confidence AND top similarity below ceiling
+    if is_low_confidence and context and context[0].get("similarity", 1.0) < _FAITHFULNESS_CEILING:
+        answer = await _faithfulness_check(question, answer, context, channel=channel)
+
     answer = validate_output(answer, user_id=user_id)
     # Redact canary token at write time — prevents exfiltration via history
     if CANARY_TOKEN in answer:

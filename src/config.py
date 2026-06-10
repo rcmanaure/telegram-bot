@@ -117,3 +117,11 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# ─── Plan limits (E2) ──────────────────────────────────────────────────────────
+# Product definition — not an env var. Maps Tenant.plan to resource limits.
+PLAN_LIMITS: dict[str, dict] = {
+    "free":  {"docs": 5,   "chunks": 500,  "queries_monthly": 500},
+    "basic": {"docs": 20,  "chunks": 2000, "queries_monthly": 2000},
+    "pro":   {"docs": 100, "chunks": 10000, "queries_monthly": 10000},
+}

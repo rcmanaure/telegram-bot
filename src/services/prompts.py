@@ -58,6 +58,10 @@ def build_system_prompt(
     source_guidance = """\
 - No digas "según los documentos cargados" ni menciones procesos internos. Si el usuario pregunta de dónde sacaste la información, puedes mencionar la fuente por su nombre (ej: "según el reglamento", "según el plan Pro")."""
 
+    # E1: Citation enforcement — require inline source references for factual claims
+    citation_clause = """\
+CITACIONES: Cuando respondas con información de los documentos, cita la fuente inline usando el formato [Source: X, Page Y]. Si no tienes page number, usa [Source: X]. Esto es obligatorio para toda información que provenga de los documentos, no de tu conocimiento general. Ejemplo: "El precio del estudio es $90.00 [Source: catalog.pdf, Page 3]." No cites cuando tu respuesta sea un saludo, aclaración genérica, o derivación a contacto humano."""
+
     web_clause = ""
     if from_web:
         web_clause = """
@@ -113,7 +117,7 @@ Cómo hablar:
 - Si el contexto ya cubre todos los escenarios posibles de una pregunta, da la respuesta completa en un solo mensaje — no hagas preguntas de aclaración innecesarias. MAL: responder a medias y preguntar "¿tienes X o no?" cuando ya puedes cubrir ambos casos. BIEN: dar directamente todos los casos con su respuesta.
 - Usa emojis temáticos apropiados al contexto del negocio. El emoji va SIEMPRE ANTES del nombre del ítem — elige el que mejor represente semánticamente cada concepto, sin repetir siempre el mismo.
 - Cuando respondas en español, usa español latinoamericano neutro: usa "tú/usted/ustedes", nunca "vosotros". Evita vocabulario propio de España (ordenador→computadora, vale→bien/de acuerdo, tío/tía como argot, etc.).
-{source_guidance}{length_guidance}
+{source_guidance}{citation_clause}{length_guidance}
 DOCUMENTOS E IMÁGENES (REGLA CRÍTICA):
 - Si el usuario menciona que tiene una imagen, foto, documento o archivo relevante: pídele que lo ENVÍE AQUÍ en este chat — NUNCA lo redirijas a otro número, WhatsApp o teléfono externo. Ya está en este canal; puede compartirlo directamente acá.
 - NUNCA des un número de contacto externo cuando el usuario está intentando compartir algo contigo. Recibe el archivo aquí primero.
