@@ -771,3 +771,174 @@ def _admin_auth(password="changeme"):
 
 
 import config
+
+
+# ─── Portal password in admin UI ────────────────────────────────────────────────
+
+class TestAdminPortalPassword:
+    """DX-T7: Admin can set and update tenant portal password."""
+
+    def test_create_tenant_with_portal_password(self, api_client):
+        """Creating a tenant with a portal password hashes and stores it."""
+        import main as main_module
+        from db import get_db, Tenant
+
+        mock_tenant = MagicMock(spec=Tenant)
+        mock_tenant.id = 99
+        mock_tenant.slug = "new-portal-tenant"
+        for attr in ("portal_password_hash", "wa_phone_number_id", "wa_access_token",
+                      "wa_app_secret", "wa_verify_token", "wa_reengagement_template",
+                      "channels", "bot_token", "expertise_area", "contact_url",
+                      "operator_chat_id", "example_questions", "active", "plan",
+                      "web_search_enabled"):
+            setattr(mock_tenant, attr, None)
+        mock_tenant.active = True
+        mock_tenant.channels = "telegram"
+
+        db_override, mock_db = _make_db_mock(scalars_all=[mock_tenant], scalar_one_or_none=None)
+        main_module.app.dependency_overrides[get_db] = db_override
+        try:
+            with patch.object(config.settings, "admin_password", "changeme"), \
+                 patch("routes.admin.init_tenant_bot", new_callable=AsyncMock, return_value=True), \
+                 patch("routes.admin.sync_faq_chunks", new_callable=AsyncMock, return_value=0), \
+                 patch("routes.admin.get_ngrok_domain", new_callable=AsyncMock, return_value="test.local"):
+                r = api_client.post(
+                    "/admin/tenants",
+                    data={
+                        "slug": "new-portal-tenant",
+                        "bot_token": "tok_portal",
+                        "portal_password": "secretpass123",
+                    },
+                    headers=_admin_auth("changeme"),
+                )
+            assert r.status_code == 200
+            # The tenant object passed to db.add should have portal_password_hash set
+            add_calls = mock_db.add.call_args_list
+            assert len(add_calls) >= 1
+            added_tenant = add_calls[0][0][0]
+            assert added_tenant.portal_password_hash is not None
+            assert added_tenant.portal_password_hash != "secretpass123"  # must be hashed, not plaintext
+            from auth import verify_portal_password
+            assert verify_portal_password("secretpass123", added_tenant.portal_password_hash)
+        finally:
+            main_module.app.dependency_overrides.pop(get_db, None)
+
+    def test_create_tenant_without_portal_password(self, api_client):
+        """Creating a tenant without a portal password leaves portal_password_hash as None."""
+        import main as main_module
+        from db import get_db, Tenant
+
+        mock_tenant = MagicMock(spec=Tenant)
+        mock_tenant.id = 100
+        mock_tenant.slug = "no-portal-tenant"
+        for attr in ("portal_password_hash", "wa_phone_number_id", "wa_access_token",
+                      "wa_app_secret", "wa_verify_token", "wa_reengagement_template",
+                      "channels", "bot_token", "expertise_area", "contact_url",
+                      "operator_chat_id", "example_questions", "active", "plan",
+                      "web_search_enabled"):
+            setattr(mock_tenant, attr, None)
+        mock_tenant.active = True
+        mock_tenant.channels = "telegram"
+
+        db_override, mock_db = _make_db_mock(scalars_all=[mock_tenant], scalar_one_or_none=None)
+        main_module.app.dependency_overrides[get_db] = db_override
+        try:
+            with patch.object(config.settings, "admin_password", "changeme"), \
+                 patch("routes.admin.init_tenant_bot", new_callable=AsyncMock, return_value=True), \
+                 patch("routes.admin.sync_faq_chunks", new_callable=AsyncMock, return_value=0), \
+                 patch("routes.admin.get_ngrok_domain", new_callable=AsyncMock, return_value="test.local"):
+                r = api_client.post(
+                    "/admin/tenants",
+                    data={
+                        "slug": "no-portal-tenant",
+                        "bot_token": "tok_no_portal",
+                    },
+                    headers=_admin_auth("changeme"),
+                )
+            assert r.status_code == 200
+            add_calls = mock_db.add.call_args_list
+            added_tenant = add_calls[0][0][0]
+            assert added_tenant.portal_password_hash is None
+        finally:
+            main_module.app.dependency_overrides.pop(get_db, None)
+
+    def test_update_tenant_portal_password(self, api_client):
+        """Updating a tenant with a new portal password hashes and stores it."""
+        import main as main_module
+        from db import get_db, Tenant
+
+        mock_tenant = MagicMock(spec=Tenant)
+        mock_tenant.id = 1
+        mock_tenant.slug = "update-pass"
+        mock_tenant.bot_token = "tok123"
+        mock_tenant.expertise_area = ""
+        mock_tenant.active = True
+        mock_tenant.wa_phone_number_id = None
+        mock_tenant.wa_access_token = None
+        mock_tenant.wa_app_secret = None
+        mock_tenant.wa_verify_token = None
+        mock_tenant.wa_reengagement_template = None
+        mock_tenant.channels = "telegram"
+        mock_tenant.portal_password_hash = None  # initially no password
+
+        db_override, mock_db = _make_db_mock(scalars_all=[mock_tenant], scalar_one_or_none=mock_tenant)
+        main_module.app.dependency_overrides[get_db] = db_override
+        try:
+            with patch.object(config.settings, "admin_password", "changeme"), \
+                 patch("routes.admin.sync_faq_chunks", new_callable=AsyncMock, return_value=0):
+                r = api_client.post(
+                    "/admin/tenant/1",
+                    data={
+                        "expertise_area": "fitness",
+                        "portal_password": "newpass456",
+                    },
+                    headers=_admin_auth("changeme"),
+                )
+            assert r.status_code == 200
+            # portal_password_hash should have been set on the mock tenant
+            assert mock_tenant.portal_password_hash is not None
+            from auth import verify_portal_password
+            assert verify_portal_password("newpass456", mock_tenant.portal_password_hash)
+        finally:
+            main_module.app.dependency_overrides.pop(get_db, None)
+
+    def test_update_tenant_empty_portal_password_keeps_existing(self, api_client):
+        """Updating a tenant with empty portal_password leaves existing hash unchanged."""
+        import main as main_module
+        from db import get_db, Tenant
+        from auth import hash_portal_password
+
+        existing_hash = hash_portal_password("original-pass")
+
+        mock_tenant = MagicMock(spec=Tenant)
+        mock_tenant.id = 1
+        mock_tenant.slug = "keep-pass"
+        mock_tenant.bot_token = "tok123"
+        mock_tenant.expertise_area = ""
+        mock_tenant.active = True
+        mock_tenant.wa_phone_number_id = None
+        mock_tenant.wa_access_token = None
+        mock_tenant.wa_app_secret = None
+        mock_tenant.wa_verify_token = None
+        mock_tenant.wa_reengagement_template = None
+        mock_tenant.channels = "telegram"
+        mock_tenant.portal_password_hash = existing_hash
+
+        db_override, mock_db = _make_db_mock(scalars_all=[mock_tenant], scalar_one_or_none=mock_tenant)
+        main_module.app.dependency_overrides[get_db] = db_override
+        try:
+            with patch.object(config.settings, "admin_password", "changeme"), \
+                 patch("routes.admin.sync_faq_chunks", new_callable=AsyncMock, return_value=0):
+                r = api_client.post(
+                    "/admin/tenant/1",
+                    data={
+                        "expertise_area": "fitness",
+                        "portal_password": "",  # empty = don't change
+                    },
+                    headers=_admin_auth("changeme"),
+                )
+            assert r.status_code == 200
+            # portal_password_hash should remain unchanged
+            assert mock_tenant.portal_password_hash == existing_hash
+        finally:
+            main_module.app.dependency_overrides.pop(get_db, None)

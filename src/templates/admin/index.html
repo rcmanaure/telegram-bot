@@ -75,6 +75,12 @@
                   placeholder="¿Cuáles son los horarios?&#10;¿Qué planes tienen?&#10;¿Cómo me registro?"></textarea>
       </div>
     </div>
+    <div class="row">
+      <div class="field">
+        <label for="portal_password">Contraseña del portal <small>(para login en /portal/login)</small></label>
+        <input type="password" id="portal_password" name="portal_password" placeholder="Opcional — dejar vacío para deshabilitar portal">
+      </div>
+    </div>
     <button type="submit" class="btn">Crear tenant</button>
   </form>
 </div>
@@ -113,6 +119,13 @@
       <input name="wa_app_secret" placeholder="App Secret (nuevo valor)" type="password">
       <input name="wa_verify_token" value="{{ t.wa_verify_token or '' }}" placeholder="Verify Token">
       <input name="wa_reengagement_template" value="{{ t.wa_reengagement_template or '' }}" placeholder="Re-engagement Template">
+    </div>
+    </details>
+
+    <details style="margin-top:6px"><summary style="cursor:pointer;font-size:0.85rem;color:#475569">Portal</summary>
+    <div style="display:grid;gap:4px;margin-top:4px">
+      <input name="portal_password" placeholder="Contraseña del portal (nuevo valor)" type="password">
+      <small style="color:#64748b">Dejar vacío para mantener la contraseña actual. Si nunca se configuró, el portal está deshabilitado.</small>
     </div>
     </details>
 

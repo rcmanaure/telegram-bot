@@ -1,0 +1,432 @@
+/* ─── Portal Styles (extends admin.css :root tokens) ───────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700&display=swap');
+
+:root {
+  /* Portal-specific tokens (extends admin :root) */
+  --font-portal: 'Source Sans 3', system-ui, sans-serif;
+  --color-portal-primary: #4f46e5;        /* Indigo-600 — distinct from admin blue */
+  --color-portal-primary-hover: #4338ca;
+  --color-portal-surface: #ffffff;
+  --color-portal-bg: #f1f5f9;             /* Slate-100 */
+  --color-portal-text: #0f172a;
+  --color-processing: #f59e0b;             /* Amber-500 */
+  --color-processing-bg: #fef3c7;          /* Amber-100 */
+  --color-processing-border: #fcd34d;       /* Amber-300 */
+  --color-processing-text: #92400e;         /* Amber-800 */
+  --color-portal-success: #10b981;
+  --color-portal-danger: #ef4444;
+  --shadow-card: 0 1px 3px rgba(0,0,0,0.1), 0 1px 2px rgba(0,0,0,0.06);
+  --shadow-elevated: 0 4px 6px rgba(0,0,0,0.1), 0 2px 4px rgba(0,0,0,0.06);
+}
+
+/* ─── Portal Layout ─────────────────────────────────────────────────────────── */
+.portal-layout {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 24px 20px;
+  font-family: var(--font-portal);
+  color: var(--color-portal-text);
+}
+
+.portal-layout h1 {
+  font-size: 1.4rem;
+  margin: 0 0 4px;
+}
+
+/* ─── Status Pill ────────────────────────────────────────────────────────────── */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: var(--radius-pill);
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: 16px;
+}
+
+.status-pill.active {
+  background: var(--color-success-bg);
+  color: var(--color-success-text);
+}
+
+.status-pill .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.status-pill.active .dot {
+  background: var(--color-success);
+}
+
+/* ─── Usage Strip ───────────────────────────────────────────────────────────── */
+.usage-strip {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.usage-bar {
+  flex: 1;
+  min-width: 140px;
+}
+
+.usage-bar label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+  margin-bottom: 4px;
+}
+
+.usage-bar progress {
+  width: 100%;
+  height: 8px;
+  border: none;
+  border-radius: 4px;
+  background: var(--color-border);
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.usage-bar progress::-webkit-progress-bar {
+  background: var(--color-border);
+  border-radius: 4px;
+}
+
+.usage-bar progress::-webkit-progress-value {
+  background: var(--color-portal-primary);
+  border-radius: 4px;
+}
+
+.usage-bar progress::-moz-progress-bar {
+  background: var(--color-portal-primary);
+  border-radius: 4px;
+}
+
+.usage-bar .usage-text {
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+  margin-top: 2px;
+}
+
+/* ─── Tab Bar ────────────────────────────────────────────────────────────────── */
+.tab-bar {
+  display: flex;
+  gap: 0;
+  border-bottom: 2px solid var(--color-border);
+  margin-bottom: 20px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.tab-bar [role="tab"] {
+  padding: 10px 20px;
+  color: var(--color-text-secondary);
+  font-weight: 500;
+  font-size: 0.95rem;
+  border: none;
+  background: none;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  transition: color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+  min-height: 44px; /* Touch target */
+}
+
+.tab-bar [role="tab"]:hover {
+  color: var(--color-portal-primary);
+}
+
+.tab-bar [role="tab"][aria-selected="true"] {
+  color: var(--color-portal-primary);
+  border-bottom-color: var(--color-portal-primary);
+}
+
+.tab-panel {
+  display: none;
+}
+
+.tab-panel.active {
+  display: block;
+}
+
+/* ─── Document List ──────────────────────────────────────────────────────────── */
+.doc-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.doc-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  margin-bottom: 8px;
+  background: var(--color-portal-surface);
+  box-shadow: var(--shadow-card);
+}
+
+.doc-item .doc-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.doc-item .doc-chunks {
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+}
+
+.doc-item .doc-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+/* ─── Badges ─────────────────────────────────────────────────────────────────── */
+.badge-processing {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  border-radius: var(--radius-pill);
+  font-size: 0.78rem;
+  font-weight: 500;
+  background: var(--color-processing-bg);
+  color: var(--color-processing-text);
+  border: 1px solid var(--color-processing-border);
+}
+
+.badge-processing .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-processing);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.badge-active {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  border-radius: var(--radius-pill);
+  font-size: 0.78rem;
+  font-weight: 500;
+  background: var(--color-success-bg);
+  color: var(--color-success-text);
+}
+
+.badge-active .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-success);
+}
+
+/* ─── Chat / Preview ────────────────────────────────────────────────────────── */
+.chat-bubble {
+  background: var(--color-portal-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 12px 12px 12px 4px;
+  padding: 14px 18px;
+  margin-bottom: 12px;
+  max-width: 90%;
+  line-height: 1.5;
+  font-size: 0.95rem;
+  box-shadow: var(--shadow-card);
+}
+
+.chat-sources {
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--color-border);
+}
+
+.chat-input-area {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.chat-input-area input[type="text"] {
+  flex: 1;
+  padding: 10px 14px;
+  border: 1px solid var(--color-border-input);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-portal);
+  font-size: 0.95rem;
+  min-height: 44px;
+  box-sizing: border-box;
+}
+
+.chat-loading {
+  color: var(--color-text-secondary);
+  font-style: italic;
+  padding: 10px 0;
+}
+
+.chat-error {
+  color: var(--color-danger);
+  font-size: 0.9rem;
+  padding: 10px 0;
+}
+
+/* ─── Unanswered Questions ──────────────────────────────────────────────────── */
+.unanswered-item {
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  margin-bottom: 8px;
+  background: var(--color-portal-surface);
+  box-shadow: var(--shadow-card);
+}
+
+.unanswered-item .question-text {
+  font-weight: 600;
+  font-size: 0.9rem;
+  margin-bottom: 4px;
+}
+
+.unanswered-item .question-meta {
+  font-size: 0.8rem;
+  color: var(--color-text-secondary);
+}
+
+.unanswered-item .question-actions {
+  margin-top: 8px;
+}
+
+/* ─── Audit Log ──────────────────────────────────────────────────────────────── */
+.audit-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.audit-table th {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 2px solid var(--color-border);
+  color: var(--color-text-secondary);
+  font-weight: 600;
+}
+
+.audit-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: top;
+  word-break: break-word;
+}
+
+/* ─── Empty States ───────────────────────────────────────────────────────────── */
+.empty-state {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--color-text-secondary);
+}
+
+.empty-state .empty-icon {
+  font-size: 2rem;
+  margin-bottom: 8px;
+}
+
+.empty-state p {
+  font-size: 0.95rem;
+  margin-bottom: 16px;
+}
+
+/* ─── Login Form ─────────────────────────────────────────────────────────────── */
+.login-container {
+  max-width: 360px;
+  margin: 80px auto;
+  padding: 32px 28px;
+  background: var(--color-portal-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-elevated);
+  font-family: var(--font-portal);
+}
+
+.login-container h1 {
+  text-align: center;
+  margin-bottom: 24px;
+  font-size: 1.3rem;
+}
+
+.login-container .field {
+  margin-bottom: 16px;
+}
+
+.login-container .btn {
+  width: 100%;
+  padding: 12px;
+  font-size: 1rem;
+  min-height: 44px;
+}
+
+/* ─── Upload Form ────────────────────────────────────────────────────────────── */
+.upload-area {
+  border: 2px dashed var(--color-border);
+  border-radius: var(--radius);
+  padding: 20px;
+  text-align: center;
+  margin-bottom: 16px;
+  transition: border-color 0.2s;
+}
+
+.upload-area:hover {
+  border-color: var(--color-portal-primary);
+}
+
+.upload-area input[type="file"] {
+  font-family: var(--font-portal);
+}
+
+/* ─── Mobile Responsive ──────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .portal-layout {
+    padding: 16px 12px;
+  }
+
+  .usage-strip {
+    flex-direction: column;
+  }
+
+  .doc-item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .doc-item .doc-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .chat-input-area {
+    flex-direction: column;
+  }
+
+  .audit-table {
+    font-size: 0.78rem;
+  }
+
+  .tab-bar [role="tab"] {
+    padding: 10px 14px;
+    font-size: 0.9rem;
+  }
+}

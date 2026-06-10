@@ -4,6 +4,8 @@ import logging
 import os
 import secrets as secrets_mod
 
+from auth import hash_portal_password
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
@@ -153,6 +155,7 @@ async def admin_create_tenant(
     operator_chat_id = (form.get("operator_chat_id") or "").strip() or None
     raw_questions = (form.get("example_questions") or "").strip()
     example_questions = [q.strip() for q in raw_questions.splitlines() if q.strip()][:5] or None
+    portal_password = (form.get("portal_password") or "").strip()
 
     if not slug or not bot_token:
         tenants, doc_stats = await _admin_context(db)
@@ -186,6 +189,7 @@ async def admin_create_tenant(
         operator_chat_id=operator_chat_id,
         plan=plan,
         active=True,
+        portal_password_hash=hash_portal_password(portal_password) if portal_password else None,
     )
     db.add(tenant)
     await db.commit()
@@ -241,6 +245,9 @@ async def admin_update_tenant(
     # Vision / web search
     web_search_enabled = form.get("web_search_enabled") == "on"
 
+    # Portal password (only update when a new value is submitted — password fields submit empty when unchanged)
+    portal_password = (form.get("portal_password") or "").strip()
+
     if contact_url and not contact_url.startswith(("http://", "https://")):
         tenants, doc_stats = await _admin_context(db)
         return _render_admin(tenants, doc_stats=doc_stats, error="URL de contacto debe empezar con http:// o https://")
@@ -265,6 +272,10 @@ async def admin_update_tenant(
         tenant.wa_access_token = wa_access_token
     if wa_app_secret:
         tenant.wa_app_secret = wa_app_secret
+
+    # Only overwrite portal password when the user explicitly entered a new value
+    if portal_password:
+        tenant.portal_password_hash = hash_portal_password(portal_password)
 
     # Enable WhatsApp channel if WA credentials are present (including existing ones)
     has_wa_creds = bool(tenant.wa_phone_number_id and tenant.wa_access_token)
