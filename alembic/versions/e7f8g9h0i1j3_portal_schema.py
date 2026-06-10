@@ -63,25 +63,42 @@ def upgrade() -> None:
     op.create_index('ix_tenant_usage_period', 'tenant_usage', ['tenant_id', 'period_year', 'period_month'])
 
     # ── 4. RLS on new tables ──────────────────────────────────────────────────
-    op.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON tenant_audit_log TO {_TENANT_ROLE}")
-    op.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON tenant_usage TO {_TENANT_ROLE}")
+    # Audit log: tenants can INSERT and SELECT their own rows, but cannot
+    # UPDATE or DELETE (prevents tampering with audit trail).
+    op.execute(f"GRANT SELECT, INSERT ON tenant_audit_log TO {_TENANT_ROLE}")
+    # Usage: tenants can INSERT and SELECT their own rows, but cannot UPDATE
+    # (prevents counter manipulation) or DELETE.
+    op.execute(f"GRANT SELECT, INSERT ON tenant_usage TO {_TENANT_ROLE}")
     op.execute(f"GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {_TENANT_ROLE}")
 
     op.execute("ALTER TABLE tenant_audit_log ENABLE ROW LEVEL SECURITY")
     op.execute("ALTER TABLE tenant_usage ENABLE ROW LEVEL SECURITY")
 
-    # Audit log: namespace-based (same as document_chunks, conversations, etc.)
+    # Audit log: SELECT and INSERT only (no UPDATE/DELETE — audit trail is immutable)
     op.execute(
-        f"CREATE POLICY tenant_isolation ON tenant_audit_log "
-        f"FOR ALL TO {_TENANT_ROLE} "
+        f"CREATE POLICY tenant_select ON tenant_audit_log "
+        f"FOR SELECT TO {_TENANT_ROLE} "
         f"USING (namespace = current_setting('app.current_tenant', true))"
     )
-
-    # Usage: tenant_id-based (same as wa_service_windows)
     op.execute(
-        f"CREATE POLICY tenant_isolation ON tenant_usage "
-        f"FOR ALL TO {_TENANT_ROLE} "
+        f"CREATE POLICY tenant_insert ON tenant_audit_log "
+        f"FOR INSERT TO {_TENANT_ROLE} "
+        f"WITH CHECK (namespace = current_setting('app.current_tenant', true))"
+    )
+
+    # Usage: SELECT and INSERT only (no UPDATE/DELETE — prevents counter manipulation)
+    op.execute(
+        f"CREATE POLICY tenant_select ON tenant_usage "
+        f"FOR SELECT TO {_TENANT_ROLE} "
         f"USING (tenant_id IN ("
+        f"  SELECT id FROM tenants "
+        f"  WHERE slug = current_setting('app.current_tenant', true)"
+        f"))"
+    )
+    op.execute(
+        f"CREATE POLICY tenant_insert ON tenant_usage "
+        f"FOR INSERT TO {_TENANT_ROLE} "
+        f"WITH CHECK (tenant_id IN ("
         f"  SELECT id FROM tenants "
         f"  WHERE slug = current_setting('app.current_tenant', true)"
         f"))"
@@ -90,14 +107,16 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     # Drop RLS policies + disable RLS
-    op.execute("DROP POLICY IF EXISTS tenant_isolation ON tenant_usage")
-    op.execute("DROP POLICY IF EXISTS tenant_isolation ON tenant_audit_log")
+    op.execute("DROP POLICY IF EXISTS tenant_select ON tenant_usage")
+    op.execute("DROP POLICY IF EXISTS tenant_insert ON tenant_usage")
+    op.execute("DROP POLICY IF EXISTS tenant_select ON tenant_audit_log")
+    op.execute("DROP POLICY IF EXISTS tenant_insert ON tenant_audit_log")
     op.execute("ALTER TABLE tenant_usage DISABLE ROW LEVEL SECURITY")
     op.execute("ALTER TABLE tenant_audit_log DISABLE ROW LEVEL SECURITY")
 
     # Revoke grants
-    op.execute(f"REVOKE ALL ON tenant_usage FROM {_TENANT_ROLE}")
-    op.execute(f"REVOKE ALL ON tenant_audit_log FROM {_TENANT_ROLE}")
+    op.execute(f"REVOKE SELECT, INSERT ON tenant_usage FROM {_TENANT_ROLE}")
+    op.execute(f"REVOKE SELECT, INSERT ON tenant_audit_log FROM {_TENANT_ROLE}")
 
     # Drop tables
     op.drop_index('ix_tenant_usage_period', table_name='tenant_usage')

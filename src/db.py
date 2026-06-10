@@ -248,18 +248,17 @@ def _build_tenant_engine():
         # No restricted role configured — reuse admin engine (RLS not enforced).
         # This is fine for local dev without RLS; production MUST set TENANT_DB_PASSWORD.
         return engine
-    # Replace user:password in the database URL.
-    # asyncpg URLs: postgresql+asyncpg://user:pass@host/db
-    url = settings.database_url
-    # Strip the scheme, replace user:pass, reassemble.
-    # Simple approach: replace between :// and @
-    prefix_end = url.index("://") + 3
-    at_idx = url.index("@", prefix_end)
-    prefix = url[:prefix_end]
-    suffix = url[at_idx:]  # @host/db
-    new_auth = f"ragbot_tenant:{settings.tenant_db_password}"
+    # Use SQLAlchemy's make_url to parse the connection URL safely.
+    # This handles passwords containing @, :, /, and other special characters
+    # that would break naive string manipulation.
+    from sqlalchemy.engine import make_url
+    parsed = make_url(settings.database_url)
+    tenant_url = parsed.set(
+        username="ragbot_tenant",
+        password=settings.tenant_db_password,
+    )
     return create_async_engine(
-        f"{prefix}{new_auth}{suffix}",
+        tenant_url,
         echo=False,
         pool_size=10,
         max_overflow=20,
