@@ -1577,11 +1577,33 @@ _GENERIC_SEARCH_BODY = lambda q: json.dumps({"query": q}).encode()
 
 # ─── Source citation footer ──────────────────────────────────────────────────
 
+_SOURCE_EXTENSIONS = ('.md', '.pdf', '.txt', '.docx', '.doc', '.csv', '.xlsx', '.xls', '.pptx', '.ppt')
+
+
+def _normalize_source_name(name: str) -> str:
+    """Strip file extension and replace hyphens/underscores with spaces.
+
+    Turns internal filenames like 'sp-diagnostico-histologico.md' into
+    human-readable labels like 'Sp Diagnostico Histologico'.
+    """
+    for ext in _SOURCE_EXTENSIONS:
+        if name.lower().endswith(ext):
+            name = name[:-len(ext)]
+            break
+    name = name.replace('-', ' ').replace('_', ' ')
+    name = name.strip()
+    # Title-case each word (preserves existing capitals)
+    name = ' '.join(word[0].upper() + word[1:] if word else '' for word in name.split())
+    return name
+
+
 def _build_source_footer(chunks: list[dict] | None, channel: str = "telegram") -> str:
     """Build a source citation footer from retrieved chunks.
 
     Collects document sources (with page numbers) and web URLs from chunks,
     deduplicates by source name, and formats per-channel conventions.
+    Source filenames are normalized to human-readable names (stripped of
+    extensions, hyphens replaced with spaces, title-cased).
 
     Returns empty string if no attribution info is available.
     """
@@ -1611,11 +1633,12 @@ def _build_source_footer(chunks: list[dict] | None, channel: str = "telegram") -
 
     parts: list[str] = []
     for name, pages in doc_sources.items():
+        display_name = _normalize_source_name(name)
         sorted_pages = sorted(pages)
         if sorted_pages:
-            parts.append(f"{name} p.{','.join(str(p) for p in sorted_pages)}")
+            parts.append(f"{display_name} p.{','.join(str(p) for p in sorted_pages)}")
         else:
-            parts.append(name)
+            parts.append(display_name)
 
     parts.extend(web_urls)
     joined = ", ".join(parts)

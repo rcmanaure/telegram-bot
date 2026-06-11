@@ -186,8 +186,7 @@ class TestCitationEnforcement:
         from services.prompts import build_system_prompt
         prompt = build_system_prompt(expertise_area="Veterinaria")
         assert "CITACIONES" in prompt
-        assert "[Source:" in prompt
-        assert "Page" in prompt
+        assert "No incluyas referencias internas" in prompt
 
     def test_citation_clause_present_for_all_channels(self):
         from services.prompts import build_system_prompt

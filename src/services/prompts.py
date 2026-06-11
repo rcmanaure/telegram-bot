@@ -58,9 +58,9 @@ def build_system_prompt(
     source_guidance = """\
 - No digas "según los documentos cargados" ni menciones procesos internos. Si el usuario pregunta de dónde sacaste la información, puedes mencionar la fuente por su nombre (ej: "según el reglamento", "según el plan Pro")."""
 
-    # E1: Citation enforcement — require inline source references for factual claims
+    # E1: Citation enforcement — no inline source references; attribution handled by footer
     citation_clause = """\
-CITACIONES: Cuando respondas con información de los documentos, cita la fuente inline usando el formato [Source: X, Page Y]. Si no tienes page number, usa [Source: X]. Esto es obligatorio para toda información que provenga de los documentos, no de tu conocimiento general. Ejemplo: "El precio del estudio es $90.00 [Source: catalog.pdf, Page 3]." No cites cuando tu respuesta sea un saludo, aclaración genérica, o derivación a contacto humano."""
+CITACIONES: No incluyas referencias internas como [Source: X, Page Y] en tu respuesta. Responde de forma natural y directa. Las fuentes se registran automáticamente al final de tu respuesta. Si el usuario pregunta de dónde viene la información, puedes mencionar el nombre del documento (ej: "según el catálogo de precios"). No cites cuando tu respuesta sea un saludo, aclaración genérica, o derivación a contacto humano."""
 
     web_clause = ""
     if from_web:

@@ -600,7 +600,7 @@ async def test_handle_message_high_similarity_appends_sources_footer():
 
     reply = update.message.reply_text.call_args[0][0]
     assert "📎" in reply
-    assert "horarios.pdf" in reply
+    assert "Horarios" in reply
 
 
 @pytest.mark.asyncio
@@ -623,7 +623,7 @@ async def test_handle_message_low_similarity_still_shows_sources():
 
     reply = update.message.reply_text.call_args[0][0]
     assert "📎" in reply
-    assert "doc.pdf" in reply
+    assert "Doc" in reply
 
 
 @pytest.mark.asyncio
@@ -2782,7 +2782,7 @@ async def test_call_chat_on_failover_not_called_on_primary_success():
 # ─── TOOL-E1: Source citation footer ─────────────────────────────────────────
 
 def test_build_source_footer_doc_chunks_with_pages():
-    """Doc chunks with page numbers show source and page."""
+    """Doc chunks with page numbers show normalized source name and page."""
     from rag import _build_source_footer
 
     chunks = [
@@ -2791,13 +2791,13 @@ def test_build_source_footer_doc_chunks_with_pages():
         {"content": "text3", "source": "policy.md", "page": 1, "similarity": 0.70},
     ]
     result = _build_source_footer(chunks, channel="telegram")
-    assert "lab-prices.pdf p.3,5" in result
-    assert "policy.md p.1" in result
+    assert "Lab Prices p.3,5" in result
+    assert "Policy p.1" in result
     assert "_Fuentes:" in result and result.strip().endswith("_")
 
 
 def test_build_source_footer_doc_chunks_no_pages():
-    """Doc chunks without valid page numbers show just the source name."""
+    """Doc chunks without valid page numbers show just the normalized source name."""
     from rag import _build_source_footer
 
     chunks = [
@@ -2805,7 +2805,8 @@ def test_build_source_footer_doc_chunks_no_pages():
         {"content": "text2", "source": "faq.md", "page": None, "similarity": 0.85},
     ]
     result = _build_source_footer(chunks, channel="telegram")
-    assert "faq.md" in result
+    assert "Faq" in result
+    assert "faq.md" not in result
     assert "p." not in result
 
 
@@ -2821,7 +2822,7 @@ def test_build_source_footer_web_urls():
 
 
 def test_build_source_footer_mixed_doc_and_web():
-    """Mixed doc and web chunks both appear."""
+    """Mixed doc and web chunks both appear, doc names normalized."""
     from rag import _build_source_footer
 
     chunks = [
@@ -2829,7 +2830,8 @@ def test_build_source_footer_mixed_doc_and_web():
         {"content": "web text", "source": "https://example.com/faq", "page": 0, "similarity": 0.4},
     ]
     result = _build_source_footer(chunks, channel="whatsapp")
-    assert "catalog.pdf p.2" in result
+    assert "Catalog p.2" in result
+    assert "catalog.pdf" not in result
     assert "https://example.com/faq" in result
     assert "📎 Fuentes:" in result
     assert "_" not in result  # WhatsApp: no italic markers
@@ -2845,7 +2847,8 @@ def test_build_source_footer_excludes_faq():
     ]
     result = _build_source_footer(chunks, channel="telegram")
     assert "__faq__" not in result
-    assert "manual.pdf p.1" in result
+    assert "Manual p.1" in result
+    assert "manual.pdf" not in result
 
 
 def test_build_source_footer_empty_and_none():
@@ -2857,7 +2860,7 @@ def test_build_source_footer_empty_and_none():
 
 
 def test_build_source_footer_deduplicates_pages():
-    """Same page appearing in multiple chunks is shown only once."""
+    """Same page appearing in multiple chunks is shown only once, name normalized."""
     from rag import _build_source_footer
 
     chunks = [
@@ -2866,7 +2869,40 @@ def test_build_source_footer_deduplicates_pages():
         {"content": "c", "source": "doc.pdf", "page": 7, "similarity": 0.80},
     ]
     result = _build_source_footer(chunks, channel="telegram")
-    assert "doc.pdf p.3,7" in result
+    assert "Doc p.3,7" in result
+    assert "doc.pdf" not in result
+
+
+# ─── _normalize_source_name ────────────────────────────────────────────────
+
+
+def test_normalize_source_name_strips_extensions():
+    """Common file extensions are stripped."""
+    from rag import _normalize_source_name
+    assert _normalize_source_name("catalog.pdf") == "Catalog"
+    assert _normalize_source_name("prices.md") == "Prices"
+    assert _normalize_source_name("data.xlsx") == "Data"
+    assert _normalize_source_name("notes.docx") == "Notes"
+
+
+def test_normalize_source_name_replaces_separators():
+    """Hyphens and underscores become spaces, words title-cased."""
+    from rag import _normalize_source_name
+    assert _normalize_source_name("sp-diagnostico-histologico.md") == "Sp Diagnostico Histologico"
+    assert _normalize_source_name("reglamento_interno.pdf") == "Reglamento Interno"
+    assert _normalize_source_name("Catalogo_de_Precios_2024.pdf") == "Catalogo De Precios 2024"
+
+
+def test_normalize_source_name_no_extension():
+    """Names without extensions pass through with separator normalization."""
+    from rag import _normalize_source_name
+    assert _normalize_source_name("manual-de-uso") == "Manual De Uso"
+
+
+def test_normalize_source_name_preserves_existing_caps():
+    """Existing capital letters in acronyms are preserved."""
+    from rag import _normalize_source_name
+    assert _normalize_source_name("FAQ-precios.md") == "FAQ Precios"
 
 
 # ─── E7: retrieve_policy_chunks ────────────────────────────────────────────────
