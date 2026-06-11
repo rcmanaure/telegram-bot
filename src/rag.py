@@ -23,7 +23,7 @@ from security import CANARY_TOKEN, scan_chunk_for_injection, sanitize_user_input
 logger = logging.getLogger(__name__)
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
-from db import AsyncSessionLocal, DocumentChunk, Conversation, UnansweredQuery, Tenant
+from db import AsyncSessionLocal, DocumentChunk, Conversation, UnansweredQuery, Tenant, tenant_session
 from sqlalchemy import update
 from config import settings
 from config_overlay import get_setting, get_setting_int
@@ -405,15 +405,7 @@ async def retrieve_context(
     )
 
     rows = result.fetchall()
-    return [
-        {
-            "content": row.content,
-            "source": row.source,
-            "page": row.page,
-            "similarity": round(float(row.similarity), 3),
-        }
-        for row in rows
-    ]
+    return [_row_to_chunk_dict(row, similarity=round(float(row.similarity), 3)) for row in rows]
 
 
 async def retrieve_catalog_overview(
@@ -454,17 +446,7 @@ async def retrieve_catalog_overview(
         )
         rows = result.fetchall()
 
-    return [
-        {
-            "content": row.content,
-            "source": row.source,
-            "page": row.page,
-            "similarity": 0.5,
-            "chunk_type": getattr(row, "chunk_type", None),
-            "metadata": getattr(row, "metadata", None) if hasattr(row, "metadata") else None,
-        }
-        for row in rows
-    ]
+    return [_row_to_chunk_dict(row) for row in rows]
 
 
 async def retrieve_full_catalog(
@@ -507,17 +489,7 @@ async def retrieve_full_catalog(
         )
         rows = result.fetchall()
 
-    return [
-        {
-            "content": row.content,
-            "source": row.source,
-            "page": row.page,
-            "similarity": 0.5,
-            "chunk_type": getattr(row, "chunk_type", None),
-            "metadata": getattr(row, "metadata", None) if hasattr(row, "metadata") else None,
-        }
-        for row in rows
-    ]
+    return [_row_to_chunk_dict(row) for row in rows]
 
 
 _CATALOG_LLM_PROMPT = """\
@@ -550,6 +522,9 @@ Fragmentos:
 """
 
 _CATALOG_BATCH_SIZE = 30  # chunks per LLM call for large catalogs
+_HALLUCINATION_THRESHOLD = 0.5  # LLM must retain ≥ 50% of source items
+_NEUTRAL_SIMILARITY = 0.5  # similarity for policy/section chunks (included by rule, not relevance)
+_CLASSIFY_CONCURRENCY = 5  # max parallel chunk classification LLM calls
 
 
 async def _format_catalog_with_llm(
@@ -601,7 +576,7 @@ async def _format_catalog_with_llm(
         if source_item_count > 0:
             llm_item_lines = sum(1 for line in result.split("\n")
                                  if line.strip() and not line.strip().startswith("*") and "—" in line)
-            if llm_item_lines <= source_item_count * 0.5:
+            if llm_item_lines <= source_item_count * _HALLUCINATION_THRESHOLD:
                 logger.warning("catalog_hallucination_guard items=%d llm_items=%d — retrying",
                                source_item_count, llm_item_lines)
                 retry_messages = [
@@ -612,7 +587,7 @@ async def _format_catalog_with_llm(
                                          channel=channel, on_failover=on_failover)
                 llm_item_lines = sum(1 for line in result.split("\n")
                                      if line.strip() and not line.strip().startswith("*") and "—" in line)
-                if llm_item_lines <= source_item_count * 0.5:
+                if llm_item_lines <= source_item_count * _HALLUCINATION_THRESHOLD:
                     logger.warning("catalog_hallucination_guard still failing items=%d llm_items=%d — raw fallback",
                                    source_item_count, llm_item_lines)
                     formatted_sections.append(_format_catalog_raw(batch))
@@ -691,7 +666,24 @@ ALLOWED_CHUNK_TYPES = frozenset({
     "general_info",    # everything else (hours, contact info, descriptions)
 })
 
-_CLASSIFY_SEMAPHORE = asyncio.Semaphore(5)  # limit concurrent classification calls
+_CLASSIFY_SEMAPHORE = asyncio.Semaphore(_CLASSIFY_CONCURRENCY)  # limit concurrent classification calls
+_MAX_SECTION_SIBLINGS = 5  # cap to prevent unbounded OR conditions
+
+
+def _row_to_chunk_dict(row, similarity: float = _NEUTRAL_SIMILARITY) -> dict:
+    """Convert a raw SQL row to a chunk dict with consistent attribute access.
+
+    Uses getattr with defaults for optional columns (chunk_type, metadata_)
+    that may be absent in queries that don't select them.
+    """
+    return {
+        "content": row.content,
+        "source": row.source,
+        "page": row.page,
+        "similarity": similarity,
+        "chunk_type": getattr(row, "chunk_type", None),
+        "metadata": getattr(row, "metadata_", None),
+    }
 
 
 async def classify_chunk_type(chunk_content: str) -> str:
@@ -1040,17 +1032,7 @@ async def retrieve_policy_chunks(db: AsyncSession, namespace: str) -> list[dict]
         )
         rows = result.fetchall()
 
-    return [
-        {
-            "content": row.content,
-            "source": row.source,
-            "page": row.page,
-            "similarity": 0.5,  # neutral similarity — included by policy, not relevance
-            "chunk_type": getattr(row, "chunk_type", None),
-            "metadata": getattr(row, "metadata", None) if hasattr(row, "metadata") else None,
-        }
-        for row in rows
-    ]
+    return [_row_to_chunk_dict(row) for row in rows]
 
 
 async def retrieve_section_siblings(
@@ -1068,7 +1050,6 @@ async def retrieve_section_siblings(
 
     E9: Cross-section retrieval for procedure requirements.
     """
-    MAX_SECTIONS = 5  # cap to prevent unbounded OR conditions
 
     # Collect unique (source, section_name) pairs from price_row chunks
     sections = set()
@@ -1098,7 +1079,7 @@ async def retrieve_section_siblings(
         return []
 
     # Cap sections to prevent unbounded queries
-    sections = set(list(sections)[:MAX_SECTIONS])
+    sections = set(list(sections)[:_MAX_SECTION_SIBLINGS])
 
     # Build query for all chunks in those sections
     # Using metadata->>'section_name' for typed chunks
@@ -1157,17 +1138,7 @@ async def retrieve_section_siblings(
             if any(r.content.startswith(h) for h in section_headers)
         ]
 
-    return [
-        {
-            "content": row.content,
-            "source": row.source,
-            "page": row.page,
-            "similarity": 0.5,  # neutral similarity — included by section association
-            "chunk_type": getattr(row, "chunk_type", None),
-            "metadata": getattr(row, "metadata", None) if hasattr(row, "metadata") else None,
-        }
-        for row in rows
-    ]
+    return [_row_to_chunk_dict(row) for row in rows]
 
 
 async def _extract_search_terms_from_images(images: list[dict]) -> tuple[str, str]:
@@ -1761,6 +1732,32 @@ TOOLS = [
     },
 ]
 
+# ─── Index status tracking ────────────────────────────────────────────────────
+# (namespace, source) → "procesando" | "activo". Set before index_chunks, updated
+# after success. Entries auto-expire after 5 min (lazy TTL check on read).
+# PR2 portal UI reads this for the ◐ procesando badge.
+
+_index_status: dict[tuple[str, str], tuple[str, float]] = {}  # key → (status, monotonic_ts)
+_INDEX_STATUS_TTL = 300  # 5 minutes
+
+
+def set_index_status(namespace: str, source: str, status: str) -> None:
+    """Set index status: 'procesando' or 'activo'."""
+    _index_status[(namespace, source)] = (status, time.monotonic())
+
+
+def get_index_status(namespace: str, source: str) -> str | None:
+    """Return 'procesando' or 'activo', or None if not tracked / expired."""
+    entry = _index_status.get((namespace, source))
+    if entry is None:
+        return None
+    status, ts = entry
+    if time.monotonic() - ts > _INDEX_STATUS_TTL:
+        del _index_status[(namespace, source)]
+        return None
+    return status
+
+
 # ─── Tool result cache ────────────────────────────────────────────────────────
 # Keyed by "namespace:tool_name:sha256(query)[:16]". Value: (result_str, chunks, monotonic_ts).
 # LRU cap: 1000 entries (FIFO eviction on overflow). TTL: 300s (lazy eviction on read).
@@ -1818,7 +1815,7 @@ async def _tool_search_documents(
         logger.debug("tool_cache hit: %s:search_documents", namespace)
         return cached
 
-    async with AsyncSessionLocal() as db:
+    async with tenant_session(namespace) as db:
         hyde_q = await _hyde_query(query, expertise_area)
         search_q = hyde_q if hyde_q else query
         chunks = await retrieve_context(db, search_q, namespace)
@@ -1949,6 +1946,52 @@ async def _classify_intent(question: str, last_bot_turn: str | None = None, expe
     except Exception as e:
         logger.warning("classify_intent failed: %s — fallback search_docs", e)
         return "search_docs"
+
+
+# ─── E1: Faithfulness self-check ──────────────────────────────────────────────
+# When low_confidence=True AND top similarity < 0.85, run a second LLM call
+# to verify the answer is grounded in the provided context. If not, append a caveat.
+
+_FAITHFULNESS_CEILING = 0.85
+
+
+async def _faithfulness_check(
+    question: str,
+    answer: str,
+    context: list[dict],
+    channel: str = "telegram",
+) -> str:
+    """Verify that the answer is grounded in the provided context.
+
+    Returns the original answer if faithful, or the answer with a caveat appended
+    if the LLM identifies unsupported claims.
+    """
+    context_text = "\n\n".join(
+        f"[Source: {c['source']}, Page {c.get('page', 0)}]\n{c['content']}"
+        for c in context[:5]  # Limit context for the check call
+    )
+    messages = [
+        {"role": "system", "content": (
+            "You are a fact-checker. Given a question, an answer, and source context, "
+            "verify that the answer is supported by the context. "
+            "If the answer contains claims NOT supported by the context, respond with a JSON object: "
+            '{"faithful": false, "unsupported_claims": "description of unsupported claims"}'
+            "\nIf the answer is fully supported, respond: "
+            '{"faithful": true}'
+            "\n\nRespond ONLY with the JSON object."
+        )},
+        {"role": "user", "content": f"Question: {question}\n\nAnswer: {answer}\n\nContext:\n{context_text}"},
+    ]
+    try:
+        result = await call_chat(messages, max_tokens=200, temperature=0.0)
+        parsed = extract_json_from_llm_response(result)
+        if parsed.get("faithful") is False:
+            unsupported = parsed.get("unsupported_claims", "")
+            caveat = f"\n\n⚠️ Aclaración: algunas afirmaciones pueden no estar completamente verificadas en los documentos disponibles. {unsupported}"
+            return answer + caveat
+    except Exception as e:
+        logger.warning("faithfulness_check failed: %s", e)
+    return answer
 
 
 async def rag_query(
@@ -2359,6 +2402,11 @@ async def rag_query(
         on_failover=_on_failover,
         doc_structure_summary=_doc_summary,
     )
+
+    # E1: Faithfulness self-check — only when low confidence AND top similarity below ceiling
+    if is_low_confidence and context and context[0].get("similarity", 1.0) < _FAITHFULNESS_CEILING:
+        answer = await _faithfulness_check(question, answer, context, channel=channel)
+
     answer = validate_output(answer, user_id=user_id)
     # Redact canary token at write time — prevents exfiltration via history
     if CANARY_TOKEN in answer:

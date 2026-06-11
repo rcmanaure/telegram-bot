@@ -1,5 +1,14 @@
 # TODOS
 
+## Portal Security Hardening (from /ship review)
+
+- [ ] **D1 (P1, CSRF empty-secret guard)** — `generate_csrf_token()` and `verify_csrf_token()` produce deterministic HMAC when `jwt_secret` is empty string. Login already returns 500, but dashboard CSRF generation silently produces predictable tokens. Fix: add guard to refuse token generation/verification when secret is empty. Effort: ~5 lines.
+- [ ] **D2 (P1, per-tenant login rate limiting)** — `portal_login_limiter` keys on IP only. Botnet can brute-force any tenant password with rotating IPs. Fix: add `portal_login_limiter.check(f"login_tenant:{slug}")` before bcrypt check. Effort: ~3 lines.
+- [ ] **D3 (P2, timing attack on slug enumeration)** — `_authenticate_portal_user` returns instantly for invalid slugs (no bcrypt), ~100ms for valid ones. Attacker can enumerate tenant slugs. Fix: always call `bcrypt.checkpw(input, DUMMY_HASH)` when slug not found. Effort: ~10 lines.
+- [ ] **D4 (P2, bare Exception catch in upload)** — `except Exception` in portal upload route catches `CancelledError` and swallows it. Fix: catch specific exceptions, re-raise `CancelledError`. Effort: ~10 lines.
+- [ ] **D5 (P2, upload thread timeout)** — `ThreadPoolExecutor(max_workers=2)` with no timeout. Pathological PDF could hang worker permanently. Fix: add `asyncio.wait_for` timeout (~30s). Effort: ~5 lines.
+- [ ] **D6 (P2, test coverage gaps)** — Add unit tests for: `generate_csrf_token`/`verify_csrf_token` (auth.py), `_check_csrf` failure branches (portal.py), `_authenticate_portal_user` 500 path, `_get_token` header/cookie precedence, `_row_to_chunk_dict` (rag.py). Effort: ~1h.
+
 ## LLM Fallback Chain
 
 - [x] **FALL-1 (P2, fallback alert to operator)** — Shipped: `on_failover` callback in `call_chat()` → `_alert_llm_failover()` in `rag.py` sends Telegram message to `operator_chat_id`, deduped per hour per tenant. 5 tests.
@@ -128,6 +137,14 @@
 ## LLM-First Intent Router
 
 - [ ] **INTENT-3 (P2, post-ship validation)** — 1 week after Commit 1 ships, check `classify_intent` warning log rate (grep `"classify_intent failed"`); if >5% of messages hit the except clause, investigate LLM provider reliability. Also sample `UnansweredQuery` WHERE `intent = 'ambiguous'` to verify the `price_catalog` router hasn't introduced false negatives on specific-price queries (e.g., "cuánto cuesta la biopsia" should stay `search_docs`, not `price_catalog`). If regressions found, tighten the `_classify_intent` prompt counter-examples. Effort: CC ~5min (log grep + query) / human ~30min (review + prompt tweak if needed). Context: `_PRICE_INTENT_RE` removed in Commit 1 and replaced by LLM classification; DB migration for `UnansweredQuery.source` was reverted — use log grep `"unanswered_escalation.*source=intent_router"` to distinguish intent_router vs triage_response escalations.
+
+## Self-Service Tenant Portal (CEO plan 2026-06-09)
+
+CEO plan: `~/.gstack/projects/rcmanaure-telegram-bot/ceo-plans/2026-06-09-self-service-tenant-portal.md`. Mode: SELECTIVE EXPANSION. In scope this phase: portal (B) + E1 + E2 + E3 + E5 + E6, Postgres RLS isolation, JWT auth, bcrypt passwords, background+thread-offload re-index, D1 by-source history-clear.
+
+- [ ] **PORTAL-E4 (P2, self-signup + onboarding) — DEFERRED** — Per-tenant self-registration: client signs up, connects WhatsApp/Telegram creds, uploads first doc, goes live without operator. Why deferred: premature before first paying clients validate the loop; manual onboarding fine at <10 tenants and teaches friction points. Trigger: after first paying clients confirm the self-service edit loop works. Effort: human ~4-5d / CC ~60-90min. Risk: WhatsApp Cloud API cred onboarding is fiddly; needs anti-spam-signup guard. Context: sits on top of services/knowledge.py + portal JWT auth from this phase.
+- [ ] **PORTAL-BILLING (P2, real billing integration) — DEFERRED** — Wire Tenant.plan/billing_id to an actual payment rail (Stripe or LATAM-local). E2 metering (this phase) produces the usage counts billing will consume. Trigger: first tier upgrade or paid conversion. Effort: human ~3-5d / CC ~1-2h.
+- [x] **PORTAL-RLS-VERIFY (P1, blocks portal ship)** — Verify Postgres RLS coexists with raw-SQL retrieve_context, the SET LOCAL hnsw settings (no commit between SET LOCAL and SELECT), and the single connection pool. RLS session GUC must be set per request on the same connection that runs the vector SELECT. **Completed:** v0.5.0.0 (2026-06-10) — RLS implemented with SET (not SET LOCAL), tenant_session() context manager, integration tests in test_rls.py, adversarial review cleared.
 
 ## Deferred (cuando haya > 10 clientes)
 

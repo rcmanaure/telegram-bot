@@ -33,14 +33,20 @@ class RateLimiter:
         self._timestamps: dict[str, deque] = defaultdict(deque)
 
     def check(self, key: str) -> bool:
-        """Return True if key is rate-limited (>= max_messages in window)."""
+        """Return True if key is rate-limited (>= max_messages in window).
+
+        Only records timestamps for allowed (non-limited) requests — blocked
+        requests do not consume deque slots, preventing lockout extension.
+        """
         now = time.monotonic()
         timestamps = self._timestamps[key]
-        timestamps.append(now)
         cutoff = now - self._window
         while timestamps and timestamps[0] <= cutoff:
             timestamps.popleft()
-        return len(timestamps) >= self._max
+        if len(timestamps) >= self._max:
+            return True
+        timestamps.append(now)
+        return False
 
     def sweep(self) -> int:
         """Remove entries whose window has fully expired. Returns count removed."""
@@ -82,3 +88,6 @@ tg_rate_limiter = RateLimiter()
 
 # WhatsApp rate limiter (separate keys: namespace:user_id)
 wa_rate_limiter = RateLimiter()
+
+# Portal login rate limiter — 5 attempts per 60s per IP (brute force protection)
+portal_login_limiter = RateLimiter(max_messages=5, window_seconds=60)

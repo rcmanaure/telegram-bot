@@ -57,6 +57,21 @@ def _admin_auth(password="changeme"):
     return {"Authorization": f"Basic {creds}"}
 
 
+def _mock_tenant_session(mock_db):
+    """Return an async context manager mock for tenant_session(slug).
+
+    tenant_session is called as `async with tenant_session(slug) as db:`.
+    We patch it to yield mock_db regardless of the slug argument.
+    """
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _session(slug):
+        yield mock_db
+
+    return _session
+
+
 def _patch_lifespan_db():
     mock_result = MagicMock()
     mock_result.scalars.return_value.all.return_value = []
@@ -64,7 +79,11 @@ def _patch_lifespan_db():
     mock_db.execute = AsyncMock(return_value=mock_result)
     mock_db.__aenter__ = AsyncMock(return_value=mock_db)
     mock_db.__aexit__ = AsyncMock(return_value=False)
-    return patch("db.AsyncSessionLocal", MagicMock(return_value=mock_db))
+    mock_session_factory = MagicMock(return_value=mock_db)
+    return (
+        patch("db.AsyncSessionLocal", mock_session_factory),
+        patch("db.TenantSessionLocal", mock_session_factory),
+    )
 
 
 def _make_db_mock(fetchall=None, scalars_all=None, scalar_one_or_none=None):
@@ -466,7 +485,7 @@ async def test_cmd_clear_uses_correct_user_id_and_namespace():
     mock_db.execute = AsyncMock()
     mock_db.commit = AsyncMock()
 
-    with patch("bot.AsyncSessionLocal", MagicMock(return_value=mock_db)):
+    with patch("bot.tenant_session", _mock_tenant_session(mock_db)):
         await cmd_clear(update, ctx)
 
     params = mock_db.execute.call_args[0][1]
@@ -489,7 +508,7 @@ async def test_cmd_sources_no_docs_sends_empty_state_message():
     mock_db.__aenter__ = AsyncMock(return_value=mock_db)
     mock_db.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("bot.AsyncSessionLocal", MagicMock(return_value=mock_db)):
+    with patch("bot.tenant_session", _mock_tenant_session(mock_db)):
         await cmd_sources(update, ctx)
 
     text = update.message.reply_text.call_args[0][0]
@@ -514,7 +533,7 @@ async def test_cmd_sources_with_docs_shows_source_names_and_chunk_count():
     mock_db.__aenter__ = AsyncMock(return_value=mock_db)
     mock_db.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("bot.AsyncSessionLocal", MagicMock(return_value=mock_db)):
+    with patch("bot.tenant_session", _mock_tenant_session(mock_db)):
         await cmd_sources(update, ctx)
 
     text = update.message.reply_text.call_args[0][0]
@@ -534,7 +553,7 @@ async def test_cmd_sources_db_error_replied_gracefully():
     mock_db.__aenter__ = AsyncMock(return_value=mock_db)
     mock_db.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("bot.AsyncSessionLocal", MagicMock(return_value=mock_db)):
+    with patch("bot.tenant_session", _mock_tenant_session(mock_db)):
         await cmd_sources(update, ctx)  # must not propagate
 
     update.message.reply_text.assert_called_once()
@@ -552,7 +571,7 @@ async def test_handle_message_sends_typing_action_before_reply():
     mock_db.__aenter__ = AsyncMock(return_value=mock_db)
     mock_db.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("bot.AsyncSessionLocal", MagicMock(return_value=mock_db)):
+    with patch("bot.tenant_session", _mock_tenant_session(mock_db)):
         with patch("bot.rag_query", new=AsyncMock(return_value=("respuesta", [], None))):
             await handle_message(update, ctx)
 
@@ -575,7 +594,7 @@ async def test_handle_message_high_similarity_appends_sources_footer():
     mock_db.__aenter__ = AsyncMock(return_value=mock_db)
     mock_db.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("bot.AsyncSessionLocal", MagicMock(return_value=mock_db)):
+    with patch("bot.tenant_session", _mock_tenant_session(mock_db)):
         with patch("bot.rag_query", new=AsyncMock(return_value=("Abrimos de 8am a 10pm.", chunks, None))):
             await handle_message(update, ctx)
 
@@ -598,7 +617,7 @@ async def test_handle_message_low_similarity_still_shows_sources():
     mock_db.__aenter__ = AsyncMock(return_value=mock_db)
     mock_db.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("bot.AsyncSessionLocal", MagicMock(return_value=mock_db)):
+    with patch("bot.tenant_session", _mock_tenant_session(mock_db)):
         with patch("bot.rag_query", new=AsyncMock(return_value=("respuesta", chunks, None))):
             await handle_message(update, ctx)
 
@@ -618,7 +637,7 @@ async def test_handle_message_empty_chunks_no_footer():
     mock_db.__aenter__ = AsyncMock(return_value=mock_db)
     mock_db.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("bot.AsyncSessionLocal", MagicMock(return_value=mock_db)):
+    with patch("bot.tenant_session", _mock_tenant_session(mock_db)):
         with patch("bot.rag_query", new=AsyncMock(return_value=("no sé", [], None))):
             await handle_message(update, ctx)
 
@@ -636,7 +655,7 @@ async def test_handle_message_runtime_error_forwarded_to_user():
     mock_db.__aenter__ = AsyncMock(return_value=mock_db)
     mock_db.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("bot.AsyncSessionLocal", MagicMock(return_value=mock_db)):
+    with patch("bot.tenant_session", _mock_tenant_session(mock_db)):
         with patch("bot.rag_query", new=AsyncMock(side_effect=RuntimeError("Servicio rate-limited"))):
             await handle_message(update, ctx)
 
@@ -654,7 +673,7 @@ async def test_handle_message_generic_exception_returns_generic_message():
     mock_db.__aenter__ = AsyncMock(return_value=mock_db)
     mock_db.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("bot.AsyncSessionLocal", MagicMock(return_value=mock_db)):
+    with patch("bot.tenant_session", _mock_tenant_session(mock_db)):
         with patch("bot.rag_query", new=AsyncMock(side_effect=ValueError("boom"))):
             await handle_message(update, ctx)
 
@@ -1626,7 +1645,7 @@ async def test_handle_message_off_topic_no_follow_up_appended():
     mock_db.__aenter__ = AsyncMock(return_value=mock_db)
     mock_db.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("bot.AsyncSessionLocal", MagicMock(return_value=mock_db)):
+    with patch("bot.tenant_session", _mock_tenant_session(mock_db)):
         with patch("bot.rag_query", new=AsyncMock(return_value=("Fuera de área", [], "off_topic"))):
             await handle_message(update, ctx)
 
@@ -1645,7 +1664,7 @@ async def test_handle_message_answered_intent_no_hardcoded_follow_up():
     mock_db.__aenter__ = AsyncMock(return_value=mock_db)
     mock_db.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("bot.AsyncSessionLocal", MagicMock(return_value=mock_db)):
+    with patch("bot.tenant_session", _mock_tenant_session(mock_db)):
         with patch("bot.rag_query", new=AsyncMock(return_value=("Abrimos a las 8am.", [], None))):
             await handle_message(update, ctx)
 
@@ -1666,7 +1685,7 @@ async def test_handle_message_needs_human_with_url_shows_keyboard():
     mock_db.__aenter__ = AsyncMock(return_value=mock_db)
     mock_db.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("bot.AsyncSessionLocal", MagicMock(return_value=mock_db)):
+    with patch("bot.tenant_session", _mock_tenant_session(mock_db)):
         with patch("bot.rag_query", new=AsyncMock(return_value=("Contactanos", [], "needs_human"))):
             await handle_message(update, ctx)
 
@@ -1686,7 +1705,7 @@ async def test_handle_message_passes_language_code_to_rag_query():
     mock_db.__aexit__ = AsyncMock(return_value=False)
 
     mock_rag = AsyncMock(return_value=("Hours: 8am-10pm", [], None))
-    with patch("bot.AsyncSessionLocal", MagicMock(return_value=mock_db)):
+    with patch("bot.tenant_session", _mock_tenant_session(mock_db)):
         with patch("bot.rag_query", mock_rag):
             await handle_message(update, ctx)
 
@@ -1904,7 +1923,7 @@ async def test_handle_message_regression():
     mock_db.__aenter__ = AsyncMock(return_value=mock_db)
     mock_db.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("bot.AsyncSessionLocal", MagicMock(return_value=mock_db)):
+    with patch("bot.tenant_session", _mock_tenant_session(mock_db)):
         with patch("bot.rag_query", new=AsyncMock(return_value=("Abrimos a las 8am.", [], None))):
             await handle_message(update, ctx)
 
@@ -1919,10 +1938,10 @@ def test_per_user_rate_limit_burst():
     from limiter import RateLimiter
     limiter = RateLimiter(max_messages=20, window_seconds=60)
     uid = "rl_test_user_burst"
-    # First 19 calls must NOT be rate limited
-    for _ in range(19):
+    # First 20 calls are allowed (blocked requests don't consume slots)
+    for _ in range(20):
         assert limiter.check(uid) is False
-    # 20th call triggers the limit (>= MAX)
+    # 21st call triggers the limit (20 >= 20)
     assert limiter.check(uid) is True
 
 
@@ -2251,7 +2270,7 @@ def test_admin_upload_accepts_markdown(api_client):
 
     db_override, mock_db = _make_db_mock(scalars_all=[mock_tenant], scalar_one_or_none=mock_tenant)
 
-    with patch("routes.admin.index_chunks", new_callable=AsyncMock, return_value=5) as mock_index:
+    with patch("services.knowledge.index_chunks", new_callable=AsyncMock, return_value=5) as mock_index:
         main_module.app.dependency_overrides[get_db] = db_override
         try:
             with patch.object(config.settings, "admin_password", "changeme"):
@@ -2950,9 +2969,9 @@ async def test_retrieve_section_siblings_fetches_by_section_name():
 
     mock_result = MagicMock()
     mock_result.fetchall.return_value = [
-        MagicMock(content="Biopsia Extemporánea $490", source="lab.pdf", page=1, chunk_type="price_row", metadata={"section_name": "Biopsia Extemporánea"}),
-        MagicMock(content="Traer cita el día del examen", source="lab.pdf", page=1, chunk_type="policy_statement", metadata={"section_name": "Biopsia Extemporánea"}),
-        MagicMock(content="Sin formol, en frasco limpio", source="lab.pdf", page=1, chunk_type="general_info", metadata={"section_name": "Biopsia Extemporánea"}),
+        MagicMock(content="Biopsia Extemporánea $490", source="lab.pdf", page=1, chunk_type="price_row", metadata_={"section_name": "Biopsia Extemporánea"}),
+        MagicMock(content="Traer cita el día del examen", source="lab.pdf", page=1, chunk_type="policy_statement", metadata_={"section_name": "Biopsia Extemporánea"}),
+        MagicMock(content="Sin formol, en frasco limpio", source="lab.pdf", page=1, chunk_type="general_info", metadata_={"section_name": "Biopsia Extemporánea"}),
     ]
 
     mock_db = AsyncMock()
@@ -3101,6 +3120,67 @@ def test_max_context_chunks_constant():
     """MAX_CONTEXT_CHUNKS is defined and reasonable."""
     from rag import MAX_CONTEXT_CHUNKS
     assert MAX_CONTEXT_CHUNKS == 30
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 4C: Query metering in TG/WA webhook paths
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_tg_handler_increments_usage_after_rag_query():
+    """Phase 4C: bot.py calls increment_usage after rag_query (inside tenant_session)."""
+    import inspect
+    from bot import _process_question
+    source = inspect.getsource(_process_question)
+    rag_pos = source.find("await rag_query(")
+    usage_pos = source.find("await increment_usage(")
+    assert rag_pos > 0, "rag_query call not found in _process_question"
+    assert usage_pos > 0, "increment_usage call not found in _process_question"
+    assert usage_pos > rag_pos, "increment_usage should be called after rag_query"
+
+
+def test_wa_text_handler_increments_usage_after_rag_query():
+    """Phase 4C: wa_processor text-only path calls increment_usage after rag_query."""
+    import inspect
+    from services.wa_processor import handle_wa_message
+    source = inspect.getsource(handle_wa_message)
+    # Find the LAST rag_query call (text-only path) and the increment_usage after it
+    rag_positions = []
+    pos = 0
+    while True:
+        pos = source.find("await rag_query(", pos)
+        if pos == -1:
+            break
+        rag_positions.append(pos)
+        pos += 1
+    usage_pos = source.find("await increment_usage(")
+    assert len(rag_positions) >= 1, "rag_query call not found in handle_wa_message"
+    assert usage_pos > 0, "increment_usage call not found in handle_wa_message"
+    # increment_usage should appear after the last rag_query
+    assert usage_pos > rag_positions[-1], "increment_usage should be after the last rag_query call"
+
+
+def test_wa_flushed_handler_increments_usage_after_rag_query():
+    """Phase 4C: wa_processor flushed-image path calls increment_usage after rag_query."""
+    import inspect
+    from services.wa_processor import _wa_process_flushed
+    source = inspect.getsource(_wa_process_flushed)
+    rag_pos = source.find("await rag_query(")
+    usage_pos = source.find("await increment_usage(")
+    assert rag_pos > 0, "rag_query call not found in _wa_process_flushed"
+    assert usage_pos > 0, "increment_usage call not found in _wa_process_flushed"
+    assert usage_pos > rag_pos, "increment_usage should be called after rag_query"
+
+
+def test_bot_imports_increment_usage():
+    """Phase 4C: bot.py imports increment_usage from services.usage."""
+    import bot
+    assert hasattr(bot, "increment_usage"), "bot module should import increment_usage"
+
+
+def test_wa_processor_imports_increment_usage():
+    """Phase 4C: wa_processor imports increment_usage from services.usage."""
+    import services.wa_processor
+    assert hasattr(services.wa_processor, "increment_usage"), "wa_processor module should import increment_usage"
 
 
 @pytest.mark.asyncio

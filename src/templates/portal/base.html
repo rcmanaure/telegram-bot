@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Portal{% endblock %} — RAG Bot</title>
+  <link rel="stylesheet" href="/static/css/portal.css">
+  {% block extra_head %}{% endblock %}
+</head>
+<body>
+  <a href="#main-content" class="skip-link">Saltar al contenido</a>
+  <main id="main-content">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

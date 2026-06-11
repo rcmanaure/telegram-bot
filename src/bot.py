@@ -12,11 +12,12 @@ from telegram.ext import ContextTypes
 
 from config import settings
 from config_overlay import get_setting
-from db import AsyncSessionLocal, Conversation, DocumentChunk, Tenant
+from db import AsyncSessionLocal, Conversation, DocumentChunk, Tenant, tenant_session
 from image_buffer import image_buffer
 from limiter import tg_rate_limiter
 from llm import is_tool_use_available
 from rag import rag_query, _build_source_footer
+from services.usage import increment_usage
 from services.stt import transcribe_voice
 from security import sanitize_user_input
 
@@ -134,7 +135,7 @@ async def cmd_contactar(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cmd_sources(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     tenant = _get_tenant(ctx)
     try:
-        async with AsyncSessionLocal() as db:
+        async with tenant_session(tenant.slug) as db:
             result = await db.execute(
                 select(DocumentChunk.source, func.count(DocumentChunk.id).label("chunks"))
                 .where(DocumentChunk.namespace == tenant.slug)
@@ -165,7 +166,7 @@ async def cmd_clear(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     tenant = _get_tenant(ctx)
     uid = str(update.effective_user.id)
 
-    async with AsyncSessionLocal() as db:
+    async with tenant_session(tenant.slug) as db:
         await db.execute(
             text("DELETE FROM conversations WHERE user_id = :uid AND namespace = :ns"),
             {"uid": uid, "ns": tenant.slug},
@@ -213,7 +214,7 @@ async def _process_question(
 
     try:
         await ctx.bot.send_chat_action(update.effective_chat.id, "typing")
-        async with AsyncSessionLocal() as db:
+        async with tenant_session(tenant.slug) as db:
             answer, chunks, intent = await rag_query(
                 db=db,
                 question=question,
@@ -225,6 +226,7 @@ async def _process_question(
                 images=images,
                 tenant=tenant,
             )
+            await increment_usage(db, tenant.id, "queries")
 
         source_footer = _build_source_footer(chunks, channel="telegram")
         full_reply = answer + source_footer

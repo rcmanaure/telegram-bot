@@ -6,12 +6,14 @@ from logging_config import setup_logging
 setup_logging()
 
 from fastapi import FastAPI, Request
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi.errors import RateLimitExceeded
 
+from dependencies import PortalAuthRedirect
 from limiter import limiter, rate_limit_handler
 from lifespan import lifespan
-from routes import api, admin, webhook
+from routes import api, admin, portal, webhook
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +36,7 @@ app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 
 app.include_router(api.router)
 app.include_router(admin.router)
+app.include_router(portal.router)
 app.include_router(webhook.router)
 
 # ─── Exception handlers ──────────────────────────────────────────────────────
@@ -41,3 +44,13 @@ app.include_router(webhook.router)
 @app.exception_handler(RateLimitExceeded)
 async def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
     return rate_limit_handler(request, exc)
+
+
+@app.exception_handler(PortalAuthRedirect)
+async def _portal_auth_redirect_handler(request: Request, exc: PortalAuthRedirect):
+    """Convert PortalAuthRedirect exceptions into proper 303 browser redirects.
+
+    HTTPException(303) does NOT produce a browser redirect — it renders a JSON
+    error body with status 303. This handler returns a real RedirectResponse.
+    """
+    return RedirectResponse(url="/portal/login", status_code=303)

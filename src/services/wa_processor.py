@@ -3,13 +3,14 @@ import asyncio
 import logging
 
 from config_overlay import get_setting
-from db import AsyncSessionLocal, Tenant
+from db import AsyncSessionLocal, Tenant, tenant_session
 from channels.whatsapp import WhatsAppAdapter, check_wa_service_window, update_wa_service_window, send_wa_template
 from channels.protocol import ChannelButton, ChannelSendError
 from image_buffer import image_buffer
 from limiter import wa_rate_limiter
 from llm import is_tool_use_available
 from rag import rag_query, _log_unanswered, _build_source_footer
+from services.usage import increment_usage
 from security import sanitize_user_input
 
 logger = logging.getLogger(__name__)
@@ -85,7 +86,7 @@ async def _wa_process_flushed(
         except Exception:
             pass
 
-        async with AsyncSessionLocal() as db:
+        async with tenant_session(namespace) as db:
             try:
                 answer, chunks, intent = await rag_query(
                     db=db,
@@ -98,6 +99,7 @@ async def _wa_process_flushed(
                     images=images,
                     tenant=tenant,
                 )
+                await increment_usage(db, tenant.id, "queries")
             except Exception as e:
                 logger.error("wa_rag_error user=%s: %s", user_id, e)
                 try:
@@ -201,7 +203,7 @@ async def handle_wa_message(
                 return
 
         # Service window check (before buffering)
-        async with AsyncSessionLocal() as db:
+        async with tenant_session(namespace) as db:
             within_window = await check_wa_service_window(db, tenant.id, user_id)
             if not within_window:
                 if tenant.wa_reengagement_template:
@@ -258,7 +260,7 @@ async def handle_wa_message(
             except Exception:
                 pass  # best-effort
 
-        async with AsyncSessionLocal() as db:
+        async with tenant_session(namespace) as db:
             try:
                 answer, chunks, intent = await rag_query(
                     db=db,
@@ -270,6 +272,7 @@ async def handle_wa_message(
                     channel="whatsapp",
                     tenant=tenant,
                 )
+                await increment_usage(db, tenant.id, "queries")
             except Exception as e:
                 logger.error("wa_rag_error user=%s: %s", user_id, e)
                 try:
