@@ -1,5 +1,14 @@
 # TODOS
 
+## Portal Security Hardening (from /ship review)
+
+- [ ] **D1 (P1, CSRF empty-secret guard)** — `generate_csrf_token()` and `verify_csrf_token()` produce deterministic HMAC when `jwt_secret` is empty string. Login already returns 500, but dashboard CSRF generation silently produces predictable tokens. Fix: add guard to refuse token generation/verification when secret is empty. Effort: ~5 lines.
+- [ ] **D2 (P1, per-tenant login rate limiting)** — `portal_login_limiter` keys on IP only. Botnet can brute-force any tenant password with rotating IPs. Fix: add `portal_login_limiter.check(f"login_tenant:{slug}")` before bcrypt check. Effort: ~3 lines.
+- [ ] **D3 (P2, timing attack on slug enumeration)** — `_authenticate_portal_user` returns instantly for invalid slugs (no bcrypt), ~100ms for valid ones. Attacker can enumerate tenant slugs. Fix: always call `bcrypt.checkpw(input, DUMMY_HASH)` when slug not found. Effort: ~10 lines.
+- [ ] **D4 (P2, bare Exception catch in upload)** — `except Exception` in portal upload route catches `CancelledError` and swallows it. Fix: catch specific exceptions, re-raise `CancelledError`. Effort: ~10 lines.
+- [ ] **D5 (P2, upload thread timeout)** — `ThreadPoolExecutor(max_workers=2)` with no timeout. Pathological PDF could hang worker permanently. Fix: add `asyncio.wait_for` timeout (~30s). Effort: ~5 lines.
+- [ ] **D6 (P2, test coverage gaps)** — Add unit tests for: `generate_csrf_token`/`verify_csrf_token` (auth.py), `_check_csrf` failure branches (portal.py), `_authenticate_portal_user` 500 path, `_get_token` header/cookie precedence, `_row_to_chunk_dict` (rag.py). Effort: ~1h.
+
 ## LLM Fallback Chain
 
 - [x] **FALL-1 (P2, fallback alert to operator)** — Shipped: `on_failover` callback in `call_chat()` → `_alert_llm_failover()` in `rag.py` sends Telegram message to `operator_chat_id`, deduped per hour per tenant. 5 tests.
