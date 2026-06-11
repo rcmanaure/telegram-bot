@@ -63,19 +63,6 @@ def _get_token(request: Request) -> str | None:
     return request.cookies.get("portal_token")
 
 
-def _validate_csrf(request: Request) -> bool:
-    """Verify CSRF token from form submission matches the expected HMAC of the JWT.
-
-    Returns True if valid, False if missing or mismatched.
-    """
-    token = _get_token(request)
-    if not token:
-        return False
-    form = None
-    # For form POSTs, the CSRF token comes in the form body
-    # We read it from the already-parsed form if available, or skip validation
-    # for JSON API calls (which use Bearer header auth, not cookies)
-    return True  # Stub — actual validation happens in _require_csrf below
 
 
 def _check_csrf(request: Request, form: dict) -> None:
@@ -187,9 +174,7 @@ async def portal_login_form(
         try:
             tenant, token = await _authenticate_portal_user(db, slug, password)
         except HTTPException as e:
-            if e.status_code == 429:
-                error = "Demasiados intentos. Espera un momento."
-            elif e.status_code == 401:
+            if e.status_code == 401:
                 error = "Credenciales inválidas."
             elif e.status_code == 500:
                 error = "Servidor no configurado. Contactá al administrador."
@@ -410,12 +395,14 @@ async def portal_query(
     tenant, db = tenant_data
     plan_limits = PLAN_LIMITS.get(tenant.plan, PLAN_LIMITS["free"])
 
+    # CSRF validation must happen before consuming metered usage
+    form = await request.form()
+    _check_csrf(request, form)
+
     # E2: atomic limit check + increment (prevents TOCTOU race)
     if not await check_and_increment_usage(db, tenant.id, "queries", plan_limits["queries_monthly"], auto_commit=False):
         raise HTTPException(status_code=429, detail="Monthly query limit reached")
 
-    form = await request.form()
-    _check_csrf(request, form)
     question = (form.get("question") or "").strip()
     if not question:
         # Increment happened above but question is empty — rollback the counter
