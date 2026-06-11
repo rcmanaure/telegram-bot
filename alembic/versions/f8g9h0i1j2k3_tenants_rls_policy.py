@@ -6,12 +6,15 @@ Create Date: 2026-06-10
 
 Adds:
 - ENABLE ROW LEVEL SECURITY on tenants table
-- GRANT SELECT on tenants to ragbot_tenant
 - RLS policy: tenants can only see their own row (slug = app.current_tenant)
 
 Defense-in-depth: even if future code queries tenants through a tenant-scoped
 session, only the tenant's own row is visible. The admin role (ragbot) bypasses
 RLS and continues to see all rows.
+
+Note: SELECT on tenants is already granted to ragbot_tenant by the
+portal_rls_foundation migration (d6e7f8g9h0i2). This migration only adds
+the RLS policy; the GRANT is not duplicated here.
 """
 from typing import Sequence, Union
 
@@ -27,9 +30,6 @@ _TENANT_ROLE = "ragbot_tenant"
 
 
 def upgrade() -> None:
-    # Grant SELECT so ragbot_tenant can query the tenants table at all
-    op.execute(f"GRANT SELECT ON tenants TO {_TENANT_ROLE}")
-
     # Enable RLS — owner role (ragbot) bypasses; only ragbot_tenant is restricted
     op.execute("ALTER TABLE tenants ENABLE ROW LEVEL SECURITY")
 
@@ -44,4 +44,3 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute(f"DROP POLICY IF EXISTS tenant_self ON tenants")
     op.execute("ALTER TABLE tenants DISABLE ROW LEVEL SECURITY")
-    op.execute(f"REVOKE SELECT ON tenants FROM {_TENANT_ROLE}")
