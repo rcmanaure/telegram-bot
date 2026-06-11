@@ -75,8 +75,8 @@
     "semantic_hash": "5ee5a8e56d14a28cc9aaae0f8acc266e"
   },
   "src/bot.py": {
-    "mtime": 1781100916.971061,
-    "ast_hash": "a1694fc2385bb8fa1ddbf0c740faa53b",
+    "mtime": 1781124789.8209212,
+    "ast_hash": "a1ef9240809811be3e8f3cf90890da88",
     "semantic_hash": ""
   },
   "src/channels/__init__.py": {
@@ -115,8 +115,8 @@
     "semantic_hash": "bc24ef71027a9fd52d7abfbbbec76769"
   },
   "src/db.py": {
-    "mtime": 1781100916.971061,
-    "ast_hash": "403087f671c4af17e9a8f75dc0661ef2",
+    "mtime": 1781119114.1707542,
+    "ast_hash": "31f4e5b00e8c77b49a27dd22f43df19e",
     "semantic_hash": ""
   },
   "src/dependencies.py": {
@@ -135,8 +135,8 @@
     "semantic_hash": "afb1d37e82100aa819b15341ffa73a07"
   },
   "src/limiter.py": {
-    "mtime": 1781100916.971061,
-    "ast_hash": "af1115a49494566b880dbd4c7e1c1632",
+    "mtime": 1781123719.4910321,
+    "ast_hash": "708ebbf67a0f6060f8ce43e8212bcc58",
     "semantic_hash": ""
   },
   "src/llm.py": {
@@ -220,8 +220,8 @@
     "semantic_hash": ""
   },
   "src/services/wa_processor.py": {
-    "mtime": 1781100916.971061,
-    "ast_hash": "7653a2413125aca94f8aec1c3605e35a",
+    "mtime": 1781124798.7557316,
+    "ast_hash": "523d96ba86004f4ab24c70f0522a83ca",
     "semantic_hash": ""
   },
   "src/state.py": {
@@ -250,8 +250,8 @@
     "semantic_hash": ""
   },
   "tests/test_edge_cases.py": {
-    "mtime": 1781100916.971061,
-    "ast_hash": "dbbb68763e591cfc173be7cd61f160f3",
+    "mtime": 1781124904.50048,
+    "ast_hash": "8bc405649c8142eaf6b335f080f9227a",
     "semantic_hash": ""
   },
   "tests/test_image_buffer.py": {
@@ -300,9 +300,9 @@
     "semantic_hash": "94bbacf0223a36ed133a9dc5d804fa34"
   },
   "CHANGELOG.md": {
-    "mtime": 1780885085.336087,
-    "ast_hash": "c95fa32386d3570cdf887904e0b7b3c6",
-    "semantic_hash": "c95fa32386d3570cdf887904e0b7b3c6"
+    "mtime": 1781120548.0393226,
+    "ast_hash": "a0fa4339427518ed8cd388b346ff9d6a",
+    "semantic_hash": ""
   },
   "README.md": {
     "mtime": 1780885085.336087,
@@ -310,8 +310,8 @@
     "semantic_hash": "d1e8665cd2188df23213fe1e979fa86b"
   },
   "TODOS.md": {
-    "mtime": 1781100916.954981,
-    "ast_hash": "35df02acda41ff332e330b52c148f2e4",
+    "mtime": 1781120609.7658782,
+    "ast_hash": "ea8c36952057c8e9f661653ef0ed601d",
     "semantic_hash": ""
   },
   "docker-compose.yml": {
@@ -365,13 +365,13 @@
     "semantic_hash": ""
   },
   "alembic/versions/d6e7f8g9h0i2_portal_rls_foundation.py": {
-    "mtime": 1781099432.4385593,
-    "ast_hash": "5a97ae1d6ed0396227368f777c21c749",
+    "mtime": 1781119133.0911212,
+    "ast_hash": "74499ee21a61966c48501bd30868e216",
     "semantic_hash": ""
   },
   "alembic/versions/e7f8g9h0i1j3_portal_schema.py": {
-    "mtime": 1781099658.137226,
-    "ast_hash": "4d24dae248825ce49e8c1184a86a7a22",
+    "mtime": 1781119182.623503,
+    "ast_hash": "38c88e1d8082ab35c150ce67cd0a5297",
     "semantic_hash": ""
   },
   "src/auth.py": {
@@ -380,8 +380,8 @@
     "semantic_hash": ""
   },
   "src/routes/portal.py": {
-    "mtime": 1781116935.2717543,
-    "ast_hash": "f6dcdb8dcf818058471204061301c9ad",
+    "mtime": 1781123709.1487792,
+    "ast_hash": "03c5224eedfb51f95115aad674fd1f69",
     "semantic_hash": ""
   },
   "src/services/knowledge.py": {
@@ -390,8 +390,8 @@
     "semantic_hash": ""
   },
   "src/services/usage.py": {
-    "mtime": 1781116271.96008,
-    "ast_hash": "761bdef2d5eb6bac7f75800016e3db64",
+    "mtime": 1781123666.4015925,
+    "ast_hash": "66783eccb3a2eb961b04d1a653c24940",
     "semantic_hash": ""
   },
   "tests/test_auth.py": {
@@ -405,8 +405,8 @@
     "semantic_hash": ""
   },
   "tests/test_portal.py": {
-    "mtime": 1781116941.9680667,
-    "ast_hash": "2615a425d2bea3815ac965d6d6a322a8",
+    "mtime": 1781124076.8732283,
+    "ast_hash": "d0eeed376616fdc7c83d906f5d8aa2c5",
     "semantic_hash": ""
   },
   "src/templates/portal/base.html": {
@@ -422,6 +422,16 @@
   "src/templates/portal/login.html": {
     "mtime": 1781116357.6099832,
     "ast_hash": "2e490d1eb3fa3f2cd5b260206d48e05f",
+    "semantic_hash": ""
+  },
+  "tests/test_portal_coverage.py": {
+    "mtime": 1781123869.9099567,
+    "ast_hash": "1be4170032915752121ed2d370e4754c",
+    "semantic_hash": ""
+  },
+  "tests/test_portal_edge_cases.py": {
+    "mtime": 1781124107.8872695,
+    "ast_hash": "579f73dc6d6ab87898ce42b54b1320f6",
     "semantic_hash": ""
   }
 }

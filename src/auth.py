@@ -35,7 +35,10 @@ def decode_access_token(token: str, signing_secret: str) -> dict:
     """Decode and verify a JWT.
 
     Raises jwt.InvalidTokenError (or subclass) on invalid/expired tokens.
+    Raises ValueError if signing_secret is empty (prevents token forgery).
     """
+    if not signing_secret:
+        raise ValueError("JWT_SECRET is not configured — token verification is disabled")
     return jwt.decode(token, signing_secret, algorithms=[JWT_ALGORITHM])
 
 

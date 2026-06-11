@@ -233,9 +233,9 @@ class TestJWTEdgeCases:
     """Test JWT edge cases: expired, missing sub, tampered, inactive tenant."""
 
     def test_expired_token_rejected_by_portal_auth(self):
-        """require_portal_auth rejects expired JWT with 303 redirect."""
+        """require_portal_auth rejects expired JWT with PortalAuthRedirect."""
         import asyncio
-        from dependencies import require_portal_auth
+        from dependencies import require_portal_auth, PortalAuthRedirect
         from auth import JWT_ALGORITHM
 
         secret = "test-secret-key-for-edge-cases-min16"
@@ -262,10 +262,9 @@ class TestJWTEdgeCases:
                     db=mock_db,
                 ):
                     pass
-                assert False, "Should have raised HTTPException"
-            except Exception as e:
-                # Should raise 303 redirect to login
-                assert e.status_code == 303 or e.status_code == 401
+                assert False, "Should have raised PortalAuthRedirect"
+            except PortalAuthRedirect:
+                pass  # Expected
 
         with patch("dependencies.settings") as mock_settings:
             mock_settings.jwt_secret = secret
@@ -274,7 +273,7 @@ class TestJWTEdgeCases:
     def test_token_without_sub_rejected(self):
         """require_portal_auth rejects JWT missing 'sub' claim."""
         import asyncio
-        from dependencies import require_portal_auth
+        from dependencies import require_portal_auth, PortalAuthRedirect
 
         secret = "test-secret-key-for-edge-cases-min16"
         payload = {"iat": int(time.time()), "exp": int(time.time()) + 3600}
@@ -295,9 +294,9 @@ class TestJWTEdgeCases:
                     db=mock_db,
                 ):
                     pass
-                assert False, "Should have raised HTTPException"
-            except Exception as e:
-                assert e.status_code == 303 or e.status_code == 401
+                assert False, "Should have raised PortalAuthRedirect"
+            except PortalAuthRedirect:
+                pass  # Expected
 
         with patch("dependencies.settings") as mock_settings:
             mock_settings.jwt_secret = secret
@@ -306,7 +305,7 @@ class TestJWTEdgeCases:
     def test_inactive_tenant_rejected_by_portal_auth(self):
         """require_portal_auth rejects JWT for an inactive tenant."""
         import asyncio
-        from dependencies import require_portal_auth
+        from dependencies import require_portal_auth, PortalAuthRedirect
         from auth import create_access_token
 
         secret = "test-secret-key-for-edge-cases-min16"
@@ -327,9 +326,9 @@ class TestJWTEdgeCases:
                     db=mock_db,
                 ):
                     pass
-                assert False, "Should have raised HTTPException"
-            except Exception as e:
-                assert e.status_code == 303 or e.status_code == 401
+                assert False, "Should have raised PortalAuthRedirect"
+            except PortalAuthRedirect:
+                pass  # Expected
 
         with patch("dependencies.settings") as mock_settings:
             mock_settings.jwt_secret = secret
@@ -1204,10 +1203,9 @@ class TestAuthStatusCodeDifference:
         asyncio.run(_test())
 
     def test_require_portal_auth_returns_303_on_missing_token(self):
-        """Portal auth (require_portal_auth) returns 303 redirect on missing token."""
+        """Portal auth (require_portal_auth) raises PortalAuthRedirect on missing token."""
         import asyncio
-        from dependencies import require_portal_auth
-        from fastapi import HTTPException
+        from dependencies import require_portal_auth, PortalAuthRedirect
 
         mock_request = MagicMock()
         mock_request.headers = {}
@@ -1220,9 +1218,9 @@ class TestAuthStatusCodeDifference:
             try:
                 async for _ in require_portal_auth(request=mock_request, db=mock_db):
                     pass
-                assert False, "Should have raised HTTPException"
-            except HTTPException as e:
-                assert e.status_code == 303
+                assert False, "Should have raised PortalAuthRedirect"
+            except PortalAuthRedirect:
+                pass  # Expected
 
         asyncio.run(_test())
 

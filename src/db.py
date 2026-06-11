@@ -262,6 +262,7 @@ def _build_tenant_engine():
         echo=False,
         pool_size=10,
         max_overflow=20,
+        pool_pre_ping=True,
     )
 
 tenant_engine = _build_tenant_engine()
@@ -290,8 +291,15 @@ async def tenant_session(slug: str):
         try:
             yield session
         finally:
+            # Roll back any uncommitted transaction so RESET runs in a clean state.
+            # Without this, an exception after commit could leave the session in
+            # an error-aborted transaction that prevents RESET from executing.
+            try:
+                await session.rollback()
+            except Exception:
+                pass  # Session may be broken; pool_pre_ping will discard it
             # Explicitly reset the GUC to prevent leaking to the session pool.
-            # If the session is broken, this is a no-op — the pool discards it.
+            # pool_pre_ping=True ensures broken connections are discarded on checkout.
             try:
                 await session.execute(text("RESET app.current_tenant"))
             except Exception:
