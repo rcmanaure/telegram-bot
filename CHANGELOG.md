@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1.0] - 2026-06-11
+
+### Changed
+
+- **Clean response format** — Removed inline `[Source: X, Page Y]` citations from LLM responses. The system prompt no longer requires source references inside the answer text. Sources are still tracked via the footer and portal API, but patient-facing responses are now clean and readable without internal metadata.
+- **Human-readable source names in footer** — `_build_source_footer()` now normalizes filenames: strips extensions (`.md`, `.pdf`, etc.), replaces hyphens/underscores with spaces, title-cases words. Footer shows `Sp Diagnostico Histologico` instead of `sp-diagnostico-histologico.md p.0`. Portal API still returns raw filenames in structured JSON.
+
 ## [0.6.0.0] - 2026-06-11
 
 ### Added
