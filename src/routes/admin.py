@@ -4,6 +4,8 @@ import logging
 import os
 import secrets as secrets_mod
 
+from auth import hash_portal_password
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
@@ -14,10 +16,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import settings
 from db import get_db, AsyncSessionLocal, DocumentChunk, Tenant, UnansweredQuery, SystemConfig
 from limiter import limiter
-from rag import chunk_text, flush_tool_cache, index_chunks, sync_faq_chunks
+from rag import sync_faq_chunks
+from services import knowledge
 from services.ngrok import get_ngrok_domain
 from services.tenant_bot import init_tenant_bot
-from services.upload import MAX_UPLOAD_BYTES, _IMAGE_EXTS, describe_image_for_upload, normalize_source_name, process_uploaded_file
+from services.upload import MAX_UPLOAD_BYTES, normalize_source_name
 from state import get_app
 
 logger = logging.getLogger(__name__)
@@ -152,6 +155,7 @@ async def admin_create_tenant(
     operator_chat_id = (form.get("operator_chat_id") or "").strip() or None
     raw_questions = (form.get("example_questions") or "").strip()
     example_questions = [q.strip() for q in raw_questions.splitlines() if q.strip()][:5] or None
+    portal_password = (form.get("portal_password") or "").strip()
 
     if not slug or not bot_token:
         tenants, doc_stats = await _admin_context(db)
@@ -185,6 +189,7 @@ async def admin_create_tenant(
         operator_chat_id=operator_chat_id,
         plan=plan,
         active=True,
+        portal_password_hash=hash_portal_password(portal_password) if portal_password else None,
     )
     db.add(tenant)
     await db.commit()
@@ -240,6 +245,9 @@ async def admin_update_tenant(
     # Vision / web search
     web_search_enabled = form.get("web_search_enabled") == "on"
 
+    # Portal password (only update when a new value is submitted — password fields submit empty when unchanged)
+    portal_password = (form.get("portal_password") or "").strip()
+
     if contact_url and not contact_url.startswith(("http://", "https://")):
         tenants, doc_stats = await _admin_context(db)
         return _render_admin(tenants, doc_stats=doc_stats, error="URL de contacto debe empezar con http:// o https://")
@@ -264,6 +272,10 @@ async def admin_update_tenant(
         tenant.wa_access_token = wa_access_token
     if wa_app_secret:
         tenant.wa_app_secret = wa_app_secret
+
+    # Only overwrite portal password when the user explicitly entered a new value
+    if portal_password:
+        tenant.portal_password_hash = hash_portal_password(portal_password)
 
     # Enable WhatsApp channel if WA credentials are present (including existing ones)
     has_wa_creds = bool(tenant.wa_phone_number_id and tenant.wa_access_token)
@@ -329,16 +341,9 @@ async def admin_upload_document(
         tenants, doc_stats = await _admin_context(db)
         return _render_admin(tenants, doc_stats=doc_stats, error="Archivo demasiado grande. Máximo 10MB.")
 
+    source_name = normalize_source_name(file.filename)
     try:
-        source_name = normalize_source_name(file.filename)
-        fname_lower = file.filename.lower()
-        full_doc_text: str | None = None
-        if any(fname_lower.endswith(ext) for ext in _IMAGE_EXTS):
-            description = await describe_image_for_upload(content, fname_lower)
-            all_chunks = chunk_text(description, source=source_name, page=1)
-            pages_processed = 1
-        else:
-            all_chunks, pages_processed, full_doc_text = process_uploaded_file(content, fname_lower, source_name)
+        all_chunks, _pages, full_doc_text = await knowledge.process_upload(content, file.filename)
     except HTTPException as e:
         tenants, doc_stats = await _admin_context(db)
         return _render_admin(tenants, doc_stats=doc_stats, error=e.detail)
@@ -347,14 +352,9 @@ async def admin_upload_document(
         tenants, doc_stats = await _admin_context(db)
         return _render_admin(tenants, doc_stats=doc_stats, error="No se pudo extraer texto del archivo.")
 
-    # Upsert: delete old chunks for this source, then insert new ones atomically
-    await db.execute(
-        text("DELETE FROM document_chunks WHERE namespace = :ns AND source = :src"),
-        {"ns": tenant.slug, "src": source_name},
+    stored = await knowledge.upsert_source(
+        db, tenant.slug, source_name, all_chunks, full_doc_text=full_doc_text
     )
-    stored = await index_chunks(db, all_chunks, tenant.slug, auto_commit=False, full_doc_text=full_doc_text)
-    await db.commit()
-    flush_tool_cache(tenant.slug)
     logger.info("Admin uploaded %s for tenant %s (%d chunks)", file.filename, tenant.slug, stored)
 
     tenants, doc_stats = await _admin_context(db)
@@ -377,14 +377,7 @@ async def admin_delete_docs(
     if not tenant:
         raise HTTPException(404, "Tenant not found")
 
-    ns = tenant.slug
-    await db.execute(text("DELETE FROM document_chunks WHERE namespace = :ns"), {"ns": ns})
-    await db.execute(text("DELETE FROM conversations WHERE namespace = :ns"), {"ns": ns})
-    await db.execute(text("DELETE FROM unanswered_queries WHERE namespace = :ns"), {"ns": ns})
-    await db.execute(text("DELETE FROM feedback WHERE namespace = :ns"), {"ns": ns})
-    await db.execute(text("DELETE FROM wa_service_windows WHERE tenant_id = :tid"), {"tid": tenant_id})
-    await db.commit()
-
+    await knowledge.delete_all(db, tenant.slug, tenant_id)
     logger.info("Admin deleted all docs for tenant %s", tenant.slug)
     tenants, doc_stats = await _admin_context(db)
     return _render_admin(

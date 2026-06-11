@@ -21,6 +21,8 @@ services:
     # --timeout-keep-alive 120: document uploads with contextual retrieval can take 60+s
     command: sh -c "alembic upgrade head && uvicorn src.main:app --workers 1 --host 0.0.0.0 --port 8000 --timeout-keep-alive 120"
     env_file: .env
+    environment:
+      TENANT_DB_PASSWORD: ${TENANT_DB_PASSWORD:-}
     volumes:
       - ./sp-diagnostico-histologico.md:/app/sp-diagnostico-histologico.md:ro
     depends_on:

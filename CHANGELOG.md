@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.5.0.0] - 2026-06-10
+
+### Added
+
+- **Self-service tenant portal** — tenants can now log in, manage documents, preview answers, view usage, and resolve unanswered questions through a browser dashboard at `/portal/dashboard`. Cookie-based auth with JWT, rate-limited login, and RLS-scoped DB sessions.
+- **Row-Level Security (RLS)** — Postgres RLS policies on all tenant-scoped tables (`document_chunks`, `conversations`, `unanswered_queries`, `feedback`, `wa_service_windows`, `tenant_audit_log`, `tenant_usage`). Tenant sessions connect as `ragbot_tenant` with GUC `app.current_tenant` set per-request; admin engine bypasses RLS as table owner.
+- **JWT portal authentication** — `src/auth.py` with bcrypt password hashing, `create_access_token`/`decode_access_token`, `require_portal_auth` dependency that reads JWT from `Authorization` header or `portal_token` cookie.
+- **Plan-based quotas (E2)** — `PLAN_LIMITS` config (free/basic/pro) enforcing document count, chunk count, and monthly query limits on portal uploads and queries.
+- **Citation enforcement (E1)** — system prompt now requires `[Source: X, Page Y]` format for all document-sourced answers across all channels. Faithfulness self-check gates on low-confidence results, appending a caveat when claims aren't grounded in retrieved context.
+- **Usage metering** — `TenantUsage` table tracks monthly query/upload counts per tenant. `increment_usage()` atomic upsert, `get_usage()` reads current count. Daily digest and weekly cleanup jobs.
+- **Audit trail (E6)** — `TenantAuditLog` records every knowledge mutation (upload, delete, query, login) with actor, action, and detail payload.
+- **Answer preview (E3)** — `/portal/query` endpoint lets tenants test answers in the dashboard with citation sources, scoped to their own namespace.
+- **Unanswered question resolution (E5)** — tenants can mark unanswered questions as resolved from the portal dashboard.
+- **RAG generalization (E1-E6)** — chunk metadata (`metadata_` JSONB column), policy chunk retrieval, section sibling retrieval, catalog overview with LLM-generated formatting, and doc structure summaries.
+- **E7 policy chunks / E8 prompt rule / E9 section siblings** — `classify_chunk_type()` tags chunks as `price_row`, `faq_answer`, `policy_statement`, `section_header`, or `general_info`; section emoji generation; sibling retrieval for context window padding.
+- **Tenant-scoped DB engine** — `_build_tenant_engine()` creates a SQLAlchemy async engine connecting as `ragbot_tenant` using `make_url().set()` (safe against special characters in passwords). Falls back to admin engine in dev mode.
+- **26 new tests** covering portal routes, auth, knowledge service, rate limiting, plan limits, and RLS.
+
+### Changed
+
+- `tenant_session()` now uses `SET` (not `SET LOCAL`) with explicit `RESET` on exit, preserving RLS GUC across commits within a request.
+- Portal write routes use `auto_commit=False` with a single final `commit()`, keeping the RLS scope alive for multi-write operations.
+- `_index_status` bug fixed — was keyed by `(namespace, source)` tuples but looked up with bare string, always returning `None`. Now uses `get_index_status()` correctly.
+- `DocumentChunk.metadata_` column type changed from `JSON` to `JSONB` (matching migration). `TenantUsage.value` gained `server_default="0"`.
+- Portal token cookie now has `secure=True`, `SameSite=Strict`, `HttpOnly`.
+- RLS policies on `tenant_audit_log` and `tenant_usage` split from single `FOR ALL` into separate `SELECT` and `INSERT` policies, preventing UPDATE/DELETE on audit and usage tables.
+- `_build_tenant_engine()` uses `make_url().set()` instead of fragile `url.index("@")` string parsing.
+- Migration password escaping (`replace("'", "''")`) for SQL injection defense-in-depth.
+
+### Fixed
+
+- RLS GUC reset on commit — `SET LOCAL` was used in `tenant_session()`, which resets on `COMMIT`, breaking tenant isolation for multi-write portal routes. Fixed by switching to `SET` with explicit `RESET` on exit.
+- Broken `_index_status` lookup — dict keyed by `(namespace, source)` tuples but checked with bare string `s["source"] in _index_status`, always returning False. Fixed by using `get_index_status(tenant.slug, s["source"])`.
+- SQL injection in migration password — f-string interpolation of `TENANT_DB_PASSWORD` into `CREATE ROLE ... PASSWORD '...'`. Fixed by escaping single quotes.
+- Broad exception catch — `except (ValueError, Exception)` swallowed all errors in resolve_question. Fixed to `except ValueError`.
+- JSON/JSONB model mismatch — model declared `JSON` but migration converts to `JSONB`. Fixed model to `JSONB`.
+- Filename normalization bypass — raw `file.filename` compared against normalized DB names. Fixed by calling `normalize_source_name()` before comparison.
+
 ## [0.4.2.0] - 2026-06-04
 
 ### Added

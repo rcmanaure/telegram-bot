@@ -39,6 +39,15 @@ async def lifespan(app: FastAPI):
             "Change it immediately via the ADMIN_PASSWORD environment variable."
         )
 
+    # JWT secret guard — portal auth is completely broken without it (empty secret
+    # means anyone can forge valid tokens). API-key auth is unaffected.
+    if not settings.jwt_secret:
+        logger.error(
+            "SECURITY: JWT_SECRET is not set. Portal auth is disabled — "
+            "any token would be accepted with an empty signing secret. "
+            "Set JWT_SECRET in your environment before enabling portal routes."
+        )
+
     # Load config overlay from DB (overrides .env at runtime)
     from config_overlay import reload_from_db
     from db import AsyncSessionLocal as _AsyncSessionLocal
