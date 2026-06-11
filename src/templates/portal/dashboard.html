@@ -48,6 +48,7 @@
 
     <!-- Upload form -->
     <form method="post" action="/portal/upload" enctype="multipart/form-data" class="upload-area">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <p>📎 Subí un documento (PDF, TXT, CSV, MD)</p>
       <input type="file" name="file" accept=".pdf,.txt,.csv,.md,.docx,.xlsx" required style="min-height:44px">
       <button type="submit" class="btn" style="margin-top:8px">Subir documento</button>
@@ -68,6 +69,7 @@
         </div>
         <div class="doc-actions">
           <form method="post" action="/portal/delete/{{ src.source }}" style="display:inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <button type="submit" class="btn btn-sm btn-err" onclick="return confirm('¿Eliminar {{ src.source }}?')">Eliminar</button>
           </form>
         </div>
@@ -169,6 +171,7 @@
   <!-- Logout -->
   <div style="margin-top:32px;text-align:center">
     <form method="post" action="/portal/logout" style="display:inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <button type="submit" class="btn btn-sm" style="background:var(--color-text-secondary)">Cerrar sesión</button>
     </form>
   </div>
@@ -211,6 +214,7 @@ if (askBtn) {
     try {
       const formData = new FormData();
       formData.append('question', question);
+      formData.append('csrf_token', '{{ csrf_token }}');
       const resp = await fetch('/portal/query', { method: 'POST', body: formData });
       if (resp.status === 429) {
         answerResult.innerHTML = '<div class="chat-error">Límite mensual de consultas alcanzado.</div>';
@@ -240,6 +244,7 @@ document.querySelectorAll('.resolve-btn').forEach(btn => {
     try {
       const formData = new FormData();
       formData.append('question_id', qid);
+      formData.append('csrf_token', '{{ csrf_token }}');
       const resp = await fetch('/portal/resolve-question', { method: 'POST', body: formData });
       if (resp.ok) {
         btn.closest('.unanswered-item').remove();

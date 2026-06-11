@@ -93,3 +93,10 @@ def authed_api_client(_app_client):
     main_module.app.dependency_overrides[require_tenant] = _mock_require_tenant
     yield _app_client, mock_tenant
     main_module.app.dependency_overrides.pop(require_tenant, None)
+
+
+@pytest.fixture(autouse=True)
+def _disable_csrf():
+    """Disable CSRF validation in tests — portal tests use auth overrides, not real cookies."""
+    with patch("routes.portal._check_csrf"):
+        yield
