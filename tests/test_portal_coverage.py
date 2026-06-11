@@ -345,6 +345,7 @@ class TestRequireTenantSession:
     def test_invalid_token_returns_401(self):
         """require_tenant_session raises 401 for invalid JWT."""
         import asyncio
+        from unittest.mock import patch
         from fastapi import HTTPException
         from dependencies import require_tenant_session
 
@@ -363,7 +364,9 @@ class TestRequireTenantSession:
             except HTTPException as e:
                 assert e.status_code == 401
 
-        asyncio.run(_test())
+        with patch("dependencies.settings") as mock_settings:
+            mock_settings.jwt_secret = "test-secret-key-for-coverage-min16"
+            asyncio.run(_test())
 
 
 # ─── Knowledge Service Unit Tests ──────────────────────────────────────────────

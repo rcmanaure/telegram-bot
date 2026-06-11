@@ -2969,9 +2969,9 @@ async def test_retrieve_section_siblings_fetches_by_section_name():
 
     mock_result = MagicMock()
     mock_result.fetchall.return_value = [
-        MagicMock(content="Biopsia Extemporánea $490", source="lab.pdf", page=1, chunk_type="price_row", metadata={"section_name": "Biopsia Extemporánea"}),
-        MagicMock(content="Traer cita el día del examen", source="lab.pdf", page=1, chunk_type="policy_statement", metadata={"section_name": "Biopsia Extemporánea"}),
-        MagicMock(content="Sin formol, en frasco limpio", source="lab.pdf", page=1, chunk_type="general_info", metadata={"section_name": "Biopsia Extemporánea"}),
+        MagicMock(content="Biopsia Extemporánea $490", source="lab.pdf", page=1, chunk_type="price_row", metadata_={"section_name": "Biopsia Extemporánea"}),
+        MagicMock(content="Traer cita el día del examen", source="lab.pdf", page=1, chunk_type="policy_statement", metadata_={"section_name": "Biopsia Extemporánea"}),
+        MagicMock(content="Sin formol, en frasco limpio", source="lab.pdf", page=1, chunk_type="general_info", metadata_={"section_name": "Biopsia Extemporánea"}),
     ]
 
     mock_db = AsyncMock()

@@ -282,6 +282,12 @@ async def portal_delete_source(
     success when deleting a non-existent source name).
     """
     tenant, db = tenant_data
+    # Path traversal guard: reject sources containing path separators or ..
+    if "/" in source or "\\" in source or ".." in source:
+        return RedirectResponse(
+            url="/portal/dashboard?error=Nombre+de+fuente+inválido",
+            status_code=303,
+        )
     # P0-4: Validate source exists in tenant's namespace before deleting
     normalized = normalize_source_name(source)
     sources = await list_sources(db, tenant.slug)

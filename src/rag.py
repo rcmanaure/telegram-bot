@@ -461,7 +461,7 @@ async def retrieve_catalog_overview(
             "page": row.page,
             "similarity": 0.5,
             "chunk_type": getattr(row, "chunk_type", None),
-            "metadata": getattr(row, "metadata", None) if hasattr(row, "metadata") else None,
+            "metadata": getattr(row, "metadata_", None),
         }
         for row in rows
     ]
@@ -514,7 +514,7 @@ async def retrieve_full_catalog(
             "page": row.page,
             "similarity": 0.5,
             "chunk_type": getattr(row, "chunk_type", None),
-            "metadata": getattr(row, "metadata", None) if hasattr(row, "metadata") else None,
+            "metadata": getattr(row, "metadata_", None),
         }
         for row in rows
     ]
@@ -1047,7 +1047,7 @@ async def retrieve_policy_chunks(db: AsyncSession, namespace: str) -> list[dict]
             "page": row.page,
             "similarity": 0.5,  # neutral similarity — included by policy, not relevance
             "chunk_type": getattr(row, "chunk_type", None),
-            "metadata": getattr(row, "metadata", None) if hasattr(row, "metadata") else None,
+            "metadata": getattr(row, "metadata_", None),
         }
         for row in rows
     ]
@@ -1164,7 +1164,7 @@ async def retrieve_section_siblings(
             "page": row.page,
             "similarity": 0.5,  # neutral similarity — included by section association
             "chunk_type": getattr(row, "chunk_type", None),
-            "metadata": getattr(row, "metadata", None) if hasattr(row, "metadata") else None,
+            "metadata": getattr(row, "metadata_", None),
         }
         for row in rows
     ]

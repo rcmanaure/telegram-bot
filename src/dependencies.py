@@ -4,12 +4,23 @@ from typing import AsyncGenerator
 
 import jwt as pyjwt
 from fastapi import Depends, Header, HTTPException, Request
+from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth import decode_access_token
 from config import settings
 from db import Tenant, get_db, tenant_session
+
+
+class PortalAuthRedirect(Exception):
+    """Raised by require_portal_auth to trigger a browser redirect to /portal/login.
+
+    FastAPI async generator dependencies cannot return Response objects — they can
+    only yield or raise. This custom exception is caught by an app-level exception
+    handler that returns a proper RedirectResponse. Raising HTTPException(303) does
+    NOT produce a browser redirect; it produces a JSON error body with status 303.
+    """
 
 
 async def require_tenant(
@@ -45,6 +56,8 @@ async def require_tenant_session(
         payload = decode_access_token(token, settings.jwt_secret)
     except pyjwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
+    except ValueError:
+        raise HTTPException(status_code=503, detail="Portal auth not configured")
 
     slug = payload.get("sub")
     if not slug:
@@ -69,7 +82,8 @@ async def require_portal_auth(
 ) -> AsyncGenerator[tuple[Tenant, AsyncSession], None]:
     """Portal browser auth. Reads JWT from Authorization header or portal_token cookie.
 
-    On auth failure, redirects to /portal/login (303) instead of returning JSON 401.
+    On auth failure, raises PortalAuthRedirect which is caught by an app-level
+    exception handler that returns a proper 303 RedirectResponse to /portal/login.
     Used by all portal HTML routes. API consumers should use require_tenant_session.
     """
     token = None
@@ -80,19 +94,16 @@ async def require_portal_auth(
         token = request.cookies["portal_token"]
 
     if not token:
-        raise HTTPException(status_code=303, detail="Login required",
-                            headers={"Location": "/portal/login"})
+        raise PortalAuthRedirect()
 
     try:
         payload = decode_access_token(token, settings.jwt_secret)
-    except pyjwt.InvalidTokenError:
-        raise HTTPException(status_code=303, detail="Invalid or expired token",
-                            headers={"Location": "/portal/login"})
+    except (pyjwt.InvalidTokenError, ValueError):
+        raise PortalAuthRedirect()
 
     slug = payload.get("sub")
     if not slug:
-        raise HTTPException(status_code=303, detail="Invalid token",
-                            headers={"Location": "/portal/login"})
+        raise PortalAuthRedirect()
 
     # Re-check tenant is active
     result = await db.execute(
@@ -100,8 +111,7 @@ async def require_portal_auth(
     )
     tenant = result.scalar_one_or_none()
     if not tenant:
-        raise HTTPException(status_code=303, detail="Tenant inactive or not found",
-                            headers={"Location": "/portal/login"})
+        raise PortalAuthRedirect()
 
     # Open tenant-scoped session with RLS GUC
     async with tenant_session(slug) as tenant_db:
