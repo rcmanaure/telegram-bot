@@ -129,6 +129,14 @@
 
 - [ ] **INTENT-3 (P2, post-ship validation)** — 1 week after Commit 1 ships, check `classify_intent` warning log rate (grep `"classify_intent failed"`); if >5% of messages hit the except clause, investigate LLM provider reliability. Also sample `UnansweredQuery` WHERE `intent = 'ambiguous'` to verify the `price_catalog` router hasn't introduced false negatives on specific-price queries (e.g., "cuánto cuesta la biopsia" should stay `search_docs`, not `price_catalog`). If regressions found, tighten the `_classify_intent` prompt counter-examples. Effort: CC ~5min (log grep + query) / human ~30min (review + prompt tweak if needed). Context: `_PRICE_INTENT_RE` removed in Commit 1 and replaced by LLM classification; DB migration for `UnansweredQuery.source` was reverted — use log grep `"unanswered_escalation.*source=intent_router"` to distinguish intent_router vs triage_response escalations.
 
+## Self-Service Tenant Portal (CEO plan 2026-06-09)
+
+CEO plan: `~/.gstack/projects/rcmanaure-telegram-bot/ceo-plans/2026-06-09-self-service-tenant-portal.md`. Mode: SELECTIVE EXPANSION. In scope this phase: portal (B) + E1 + E2 + E3 + E5 + E6, Postgres RLS isolation, JWT auth, bcrypt passwords, background+thread-offload re-index, D1 by-source history-clear.
+
+- [ ] **PORTAL-E4 (P2, self-signup + onboarding) — DEFERRED** — Per-tenant self-registration: client signs up, connects WhatsApp/Telegram creds, uploads first doc, goes live without operator. Why deferred: premature before first paying clients validate the loop; manual onboarding fine at <10 tenants and teaches friction points. Trigger: after first paying clients confirm the self-service edit loop works. Effort: human ~4-5d / CC ~60-90min. Risk: WhatsApp Cloud API cred onboarding is fiddly; needs anti-spam-signup guard. Context: sits on top of services/knowledge.py + portal JWT auth from this phase.
+- [ ] **PORTAL-BILLING (P2, real billing integration) — DEFERRED** — Wire Tenant.plan/billing_id to an actual payment rail (Stripe or LATAM-local). E2 metering (this phase) produces the usage counts billing will consume. Trigger: first tier upgrade or paid conversion. Effort: human ~3-5d / CC ~1-2h.
+- [x] **PORTAL-RLS-VERIFY (P1, blocks portal ship)** — Verify Postgres RLS coexists with raw-SQL retrieve_context, the SET LOCAL hnsw settings (no commit between SET LOCAL and SELECT), and the single connection pool. RLS session GUC must be set per request on the same connection that runs the vector SELECT. **Completed:** v0.5.0.0 (2026-06-10) — RLS implemented with SET (not SET LOCAL), tenant_session() context manager, integration tests in test_rls.py, adversarial review cleared.
+
 ## Deferred (cuando haya > 10 clientes)
 
 - [x] Dynamic tenant reload sin restart — `POST /admin/tenant/{id}/toggle-active`

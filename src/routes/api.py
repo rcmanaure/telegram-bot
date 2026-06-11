@@ -8,10 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from config_overlay import get_setting
-from db import get_db, DocumentChunk, Feedback, Tenant
+from db import get_db, AsyncSessionLocal, DocumentChunk, Feedback, Tenant, tenant_session
 from dependencies import require_tenant
 from limiter import limiter
-from rag import chunk_text, flush_tool_cache, index_chunks
+from rag import chunk_text, flush_tool_cache, index_chunks, post_index_enrichment, set_index_status
 from services.upload import MAX_UPLOAD_BYTES, _IMAGE_EXTS, describe_image_for_upload, normalize_source_name, process_uploaded_file
 from state import get_app
 
@@ -58,9 +58,25 @@ async def upload_document(
         text("DELETE FROM document_chunks WHERE namespace = :ns AND source = :src"),
         {"ns": tenant.slug, "src": source_name},
     )
+    set_index_status(tenant.slug, source_name, "procesando")
     stored = await index_chunks(db, all_chunks, tenant.slug, auto_commit=False, full_doc_text=full_doc_text)
     await db.commit()
     flush_tool_cache(tenant.slug)
+    set_index_status(tenant.slug, source_name, "activo")
+
+    # E4: Post-index enrichment (classify chunks, generate emojis, build doc summary)
+    # Runs as background task — doesn't block the HTTP response.
+    # Chunks are usable immediately with NULL chunk_type; enrichment completes within seconds.
+    if stored > 0 and tenant.id:
+        async def _enrich():
+            async with tenant_session(tenant.slug) as enrich_db:
+                try:
+                    await post_index_enrichment(enrich_db, tenant.slug, tenant.id, all_chunks)
+                except Exception as e:
+                    logger.warning("post_index_enrichment bg task failed ns=%s: %s", tenant.slug, e)
+
+        import asyncio
+        asyncio.create_task(_enrich())
 
     return {
         "status": "indexed",

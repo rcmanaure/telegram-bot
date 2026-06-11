@@ -1,0 +1,267 @@
+{% extends "portal/base.html" %}
+{% block title %}{{ tenant.expertise_area or tenant.slug }}{% endblock %}
+
+{% block content %}
+<div class="portal-layout">
+  <!-- Header: name + status -->
+  <header>
+    <h1>{{ tenant.expertise_area or tenant.slug }}</h1>
+    {% if tenant.active %}
+    <div class="status-pill active"><span class="dot"></span> Bot activo</div>
+    {% else %}
+    <div class="status-pill" style="background:var(--color-danger-bg);color:var(--color-danger-text)"><span class="dot" style="background:var(--color-danger)"></span> Inactivo</div>
+    {% endif %}
+
+    <!-- Usage strip -->
+    <div class="usage-strip">
+      <div class="usage-bar">
+        <label>Documentos</label>
+        <progress value="{{ doc_count }}" max="{{ doc_limit }}"></progress>
+        <div class="usage-text">{{ doc_count }} / {{ doc_limit }}</div>
+      </div>
+      <div class="usage-bar">
+        <label>Mensajes este mes</label>
+        <progress value="{{ query_count }}" max="{{ query_limit }}"></progress>
+        <div class="usage-text">{{ query_count }} / {{ query_limit }}</div>
+      </div>
+    </div>
+  </header>
+
+  {% if message %}
+  <div class="alert ok">{{ message }}</div>
+  {% endif %}
+  {% if error %}
+  <div class="alert err">{{ error }}</div>
+  {% endif %}
+
+  <!-- Tab navigation -->
+  <div class="tab-bar" role="tablist" aria-label="Secciones del portal">
+    <button role="tab" aria-selected="true" data-tab="conocimiento" id="tab-conocimiento" aria-controls="panel-conocimiento">Conocimiento</button>
+    <button role="tab" aria-selected="false" data-tab="uso" id="tab-uso" aria-controls="panel-uso">Uso</button>
+    <button role="tab" aria-selected="false" data-tab="probar" id="tab-probar" aria-controls="panel-probar">Probar</button>
+    <button role="tab" aria-selected="false" data-tab="preguntas" id="tab-preguntas" aria-controls="panel-preguntas">Preguntas sin responder</button>
+  </div>
+
+  <!-- Conocimiento tab -->
+  <div role="tabpanel" id="panel-conocimiento" aria-labelledby="tab-conocimiento" class="tab-panel active">
+    <h2>Tus documentos</h2>
+
+    <!-- Upload form -->
+    <form method="post" action="/portal/upload" enctype="multipart/form-data" class="upload-area">
+      <p>📎 Subí un documento (PDF, TXT, CSV, MD)</p>
+      <input type="file" name="file" accept=".pdf,.txt,.csv,.md,.docx,.xlsx" required style="min-height:44px">
+      <button type="submit" class="btn" style="margin-top:8px">Subir documento</button>
+    </form>
+
+    {% if sources %}
+    <ul class="doc-list">
+      {% for src in sources %}
+      <li class="doc-item">
+        <div>
+          <span class="doc-name">{{ src.source }}</span>
+          <span class="doc-chunks">({{ src.chunks }} fragmentos)</span>
+          {% if source_status.get(src.source) == 'procesando' %}
+          <span class="badge-processing"><span class="dot"></span> procesando</span>
+          {% else %}
+          <span class="badge-active"><span class="dot"></span> activo</span>
+          {% endif %}
+        </div>
+        <div class="doc-actions">
+          <form method="post" action="/portal/delete/{{ src.source }}" style="display:inline">
+            <button type="submit" class="btn btn-sm btn-err" onclick="return confirm('¿Eliminar {{ src.source }}?')">Eliminar</button>
+          </form>
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <div class="empty-state">
+      <div class="empty-icon">📄</div>
+      <p>Aún no agregás conocimiento. Subí tu primer documento para que tu bot empiece a responder.</p>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Uso tab -->
+  <div role="tabpanel" id="panel-uso" aria-labelledby="tab-uso" class="tab-panel" hidden>
+    <h2>Uso y métricas</h2>
+
+    <div class="card">
+      <h3>Actividad este mes</h3>
+      <div class="usage-strip">
+        <div class="usage-bar">
+          <label>Consultas</label>
+          <progress value="{{ query_count }}" max="{{ query_limit }}"></progress>
+          <div class="usage-text">{{ query_count }} / {{ query_limit }}</div>
+        </div>
+        <div class="usage-bar">
+          <label>Documentos</label>
+          <progress value="{{ doc_count }}" max="{{ doc_limit }}"></progress>
+          <div class="usage-text">{{ doc_count }} / {{ doc_limit }}</div>
+        </div>
+      </div>
+    </div>
+
+    {% if audit_entries %}
+    <div class="card">
+      <h3>Registro de actividad</h3>
+      <table class="audit-table">
+        <thead>
+          <tr><th>Fecha</th><th>Acción</th><th>Detalle</th></tr>
+        </thead>
+        <tbody>
+          {% for entry in audit_entries[:50] %}
+          <tr>
+            <td>{{ entry.created_at.strftime('%d/%m %H:%M') if entry.created_at else '' }}</td>
+            <td>{{ entry.action }}</td>
+            <td>{{ (entry.detail or {}) | tojson if entry.detail else '' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+      <p>Sin actividad registrada aún.</p>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Probar tab -->
+  <div role="tabpanel" id="panel-probar" aria-labelledby="tab-probar" class="tab-panel" hidden>
+    <h2>Probar el bot</h2>
+    <p class="sub">Escribí una pregunta como la haría un cliente y mirá cómo responde tu bot.</p>
+
+    <div class="chat-input-area">
+      <input type="text" id="question-input" placeholder="Escribí tu pregunta aquí…" aria-label="Pregunta de prueba">
+      <button type="button" class="btn" id="ask-btn" style="min-height:44px">Preguntar</button>
+    </div>
+
+    <div id="answer-result" aria-live="polite">
+      <div class="empty-state">
+        <p>Escribí una pregunta como la haría un cliente.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Preguntas sin responder tab -->
+  <div role="tabpanel" id="panel-preguntas" aria-labelledby="tab-preguntas" class="tab-panel" hidden>
+    <h2>Preguntas sin responder</h2>
+
+    {% if unanswered %}
+    {% for q in unanswered %}
+    <div class="unanswered-item">
+      <div class="question-text">{{ q.question }}</div>
+      <div class="question-meta">{{ q.created_at.strftime('%d/%m %H:%M') if q.created_at else '' }} · {{ q.intent_category or 'sin categoría' }}</div>
+      <div class="question-actions">
+        <button type="button" class="btn btn-sm btn-ok resolve-btn" data-question-id="{{ q.id }}">Agregar respuesta</button>
+      </div>
+    </div>
+    {% endfor %}
+    {% else %}
+    <div class="empty-state">
+      <div class="empty-icon">🎉</div>
+      <p>Tu bot respondió todo esta semana.</p>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Logout -->
+  <div style="margin-top:32px;text-align:center">
+    <form method="post" action="/portal/logout" style="display:inline">
+      <button type="submit" class="btn btn-sm" style="background:var(--color-text-secondary)">Cerrar sesión</button>
+    </form>
+  </div>
+</div>
+
+<script>
+// Tab switching
+document.querySelectorAll('.tab-bar [role="tab"]').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab-bar [role="tab"]').forEach(t => {
+      t.setAttribute('aria-selected', 'false');
+    });
+    document.querySelectorAll('.tab-panel').forEach(p => {
+      p.classList.remove('active');
+      p.hidden = true;
+    });
+    tab.setAttribute('aria-selected', 'true');
+    const panel = document.getElementById('panel-' + tab.dataset.tab);
+    panel.classList.add('active');
+    panel.hidden = false;
+  });
+});
+
+// Answer preview
+const askBtn = document.getElementById('ask-btn');
+const questionInput = document.getElementById('question-input');
+const answerResult = document.getElementById('answer-result');
+
+function escapeHtml(text) {
+  const d = document.createElement('div');
+  d.textContent = text;
+  return d.innerHTML;
+}
+
+if (askBtn) {
+  askBtn.addEventListener('click', async () => {
+    const question = questionInput.value.trim();
+    if (!question) return;
+    answerResult.innerHTML = '<div class="chat-loading" aria-live="polite">Pensando…</div>';
+    try {
+      const formData = new FormData();
+      formData.append('question', question);
+      const resp = await fetch('/portal/query', { method: 'POST', body: formData });
+      if (resp.status === 429) {
+        answerResult.innerHTML = '<div class="chat-error">Límite mensual de consultas alcanzado.</div>';
+        return;
+      }
+      const data = await resp.json();
+      let html = '<div class="chat-bubble">' + escapeHtml(data.answer) + '</div>';
+      if (data.sources && data.sources.length) {
+        const srcs = data.sources.map(s => escapeHtml(s.source + (s.page ? ' p.' + s.page : ''))).join(', ');
+        html += '<div class="chat-sources">📎 Fuentes: ' + srcs + '</div>';
+      }
+      answerResult.innerHTML = html;
+    } catch (e) {
+      answerResult.innerHTML = '<div class="chat-error">Error al procesar la pregunta. Intenta de nuevo.</div>';
+    }
+  });
+  questionInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') askBtn.click();
+  });
+}
+
+// Resolve question buttons — simple POST to resolve endpoint
+document.querySelectorAll('.resolve-btn').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const qid = btn.dataset.questionId;
+    if (!confirm('¿Marcar esta pregunta como resuelta?')) return;
+    try {
+      const formData = new FormData();
+      formData.append('question_id', qid);
+      const resp = await fetch('/portal/resolve-question', { method: 'POST', body: formData });
+      if (resp.ok) {
+        btn.closest('.unanswered-item').remove();
+      }
+    } catch (e) {
+      alert('Error al resolver la pregunta.');
+    }
+  });
+});
+</script>
+
+<style>
+.skip-link {
+  position: absolute;
+  top: -40px;
+  left: 0;
+  background: var(--color-portal-primary);
+  color: #fff;
+  padding: 8px 16px;
+  z-index: 100;
+  transition: top 0.2s;
+}
+.skip-link:focus { top: 0; }
+</style>
+{% endblock %}
