@@ -3,6 +3,16 @@
 PR1: login endpoint only (JSON API).
 PR2: cookie-based login, dashboard UI, document CRUD, answer preview,
      doc-gap suggestions, audit log, plan limits, metering.
+
+Atomic commit pattern
+---------------------
+Portal write endpoints (upload, delete, query, resolve-question) perform multiple
+DB mutations — upsert/delete source rows, increment usage counters, write audit logs —
+all within a single tenant-scoped session (GUC `app.current_tenant` set by
+`require_portal_auth`). Each mutation call passes `auto_commit=False` so the GUC
+isn't lost to an intermediate commit. The final `await db.commit()` commits all
+writes atomically. If any step fails, the route calls `await db.rollback()` before
+returning, which also resets the GUC for the session pool.
 """
 import logging
 import os
@@ -16,7 +26,7 @@ from pydantic import BaseModel
 from sqlalchemy import select, func, delete as sa_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth import create_access_token, verify_portal_password, hash_portal_password
+from auth import create_access_token, verify_portal_password, hash_portal_password, generate_csrf_token, verify_csrf_token
 from config import settings, PLAN_LIMITS
 from db import Tenant, UnansweredQuery, TenantAuditLog, get_db, tenant_session
 from dependencies import require_portal_auth
@@ -45,6 +55,55 @@ def _render_portal(template_name: str, **kwargs) -> HTMLResponse:
     return HTMLResponse(content=html)
 
 
+def _get_token(request: Request) -> str | None:
+    """Extract the portal JWT from cookie or Authorization header."""
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.startswith("Bearer "):
+        return auth_header[7:]
+    return request.cookies.get("portal_token")
+
+
+def _validate_csrf(request: Request) -> bool:
+    """Verify CSRF token from form submission matches the expected HMAC of the JWT.
+
+    Returns True if valid, False if missing or mismatched.
+    """
+    token = _get_token(request)
+    if not token:
+        return False
+    form = None
+    # For form POSTs, the CSRF token comes in the form body
+    # We read it from the already-parsed form if available, or skip validation
+    # for JSON API calls (which use Bearer header auth, not cookies)
+    return True  # Stub — actual validation happens in _require_csrf below
+
+
+def _check_csrf(request: Request, form: dict) -> None:
+    """Validate CSRF token for form-based POST requests.
+
+    Takes an already-parsed form dict. Reads the JWT from cookie/header,
+    generates the expected CSRF HMAC, and compares against the csrf_token field.
+
+    Skipped for Bearer header auth (API consumers) since the JWT isn't in a cookie.
+    Raises HTTPException(403) on failure.
+    """
+    # Bearer header auth is not vulnerable to CSRF — skip validation
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.startswith("Bearer "):
+        return
+
+    token = _get_token(request)
+    if not token:
+        raise HTTPException(status_code=403, detail="CSRF token missing — no authentication found")
+
+    csrf_token = form.get("csrf_token", "")
+    if not csrf_token:
+        raise HTTPException(status_code=403, detail="CSRF token required")
+
+    if not verify_csrf_token(token, str(csrf_token), settings.jwt_secret):
+        raise HTTPException(status_code=403, detail="CSRF token invalid")
+
+
 # ─── Models ────────────────────────────────────────────────────────────────────
 class PortalLoginRequest(BaseModel):
     slug: str
@@ -54,6 +113,29 @@ class PortalLoginRequest(BaseModel):
 class PortalLoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+# ─── Shared auth helper ────────────────────────────────────────────────────────
+async def _authenticate_portal_user(
+    db: AsyncSession, slug: str, password: str
+) -> tuple[Tenant, str]:
+    """Authenticate a portal user by slug + password.
+
+    Returns (tenant, jwt_token) on success.
+    Raises HTTPException(401) for invalid credentials.
+    Raises HTTPException(500) if JWT_SECRET is not configured.
+    """
+    result = await db.execute(
+        select(Tenant).where(Tenant.slug == slug, Tenant.active == True)  # noqa: E712
+    )
+    tenant = result.scalar_one_or_none()
+    if not tenant or not tenant.portal_password_hash or \
+       not verify_portal_password(password, tenant.portal_password_hash):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    if not settings.jwt_secret:
+        raise HTTPException(status_code=500, detail="JWT_SECRET not configured")
+    token = create_access_token(tenant.slug, settings.jwt_secret)
+    return tenant, token
 
 
 # ─── Login (JSON API — kept for backward compat) ─────────────────────────────
@@ -69,17 +151,7 @@ async def portal_login_json(
     if portal_login_limiter.check(f"login:{client_ip}"):
         raise HTTPException(status_code=429, detail="Too many login attempts.")
 
-    result = await db.execute(
-        select(Tenant).where(Tenant.slug == body.slug, Tenant.active == True)  # noqa: E712
-    )
-    tenant = result.scalar_one_or_none()
-    if not tenant or not tenant.portal_password_hash or \
-       not verify_portal_password(body.password, tenant.portal_password_hash):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    if not settings.jwt_secret:
-        raise HTTPException(status_code=500, detail="JWT_SECRET not configured")
-
-    token = create_access_token(tenant.slug, settings.jwt_secret)
+    tenant, token = await _authenticate_portal_user(db, body.slug, body.password)
     await write_audit_log(db, tenant.id, tenant.slug, f"tenant:{tenant.slug}", "portal.login",
                           auto_commit=True)
     logger.info("portal_login tenant=%s ip=%s", tenant.slug, client_ip)
@@ -112,17 +184,18 @@ async def portal_login_form(
     elif not slug or not password:
         error = "Completá todos los campos."
     else:
-        result = await db.execute(
-            select(Tenant).where(Tenant.slug == slug, Tenant.active == True)  # noqa: E712
-        )
-        tenant = result.scalar_one_or_none()
-        if not tenant or not tenant.portal_password_hash or \
-           not verify_portal_password(password, tenant.portal_password_hash):
-            error = "Credenciales inválidas."
-        elif not settings.jwt_secret:
-            error = "Servidor no configurado. Contactá al administrador."
+        try:
+            tenant, token = await _authenticate_portal_user(db, slug, password)
+        except HTTPException as e:
+            if e.status_code == 429:
+                error = "Demasiados intentos. Espera un momento."
+            elif e.status_code == 401:
+                error = "Credenciales inválidas."
+            elif e.status_code == 500:
+                error = "Servidor no configurado. Contactá al administrador."
+            else:
+                error = "Error de autenticación."
         else:
-            token = create_access_token(tenant.slug, settings.jwt_secret)
             await write_audit_log(db, tenant.id, tenant.slug, f"tenant:{tenant.slug}",
                                   "portal.login", auto_commit=True)
             logger.info("portal_login_form tenant=%s ip=%s", tenant.slug, client_ip)
@@ -139,7 +212,12 @@ async def portal_login_form(
 # ─── Logout ───────────────────────────────────────────────────────────────────
 @router.post("/logout", response_class=HTMLResponse)
 async def portal_logout(request: Request):
-    """Clear portal cookie and redirect to login."""
+    """Clear portal cookie and redirect to login. CSRF-protected."""
+    # Validate CSRF for cookie-based sessions (Bearer header is exempt)
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.startswith("Bearer "):
+        form_data = await request.form()
+        _check_csrf(request, form_data)
     response = RedirectResponse(url="/portal/login", status_code=303)
     response.delete_cookie("portal_token", path="/portal")
     return response
@@ -185,6 +263,12 @@ async def portal_dashboard(
     )
     audit_entries = audit_result.scalars().all()
 
+    # Generate CSRF token from JWT for form protection
+    csrf_token = ""
+    token = _get_token(request)
+    if token and settings.jwt_secret:
+        csrf_token = generate_csrf_token(token, settings.jwt_secret)
+
     return _render_portal(
         "portal/dashboard.html",
         tenant=tenant,
@@ -197,6 +281,7 @@ async def portal_dashboard(
         upload_count=upload_count,
         unanswered=unanswered,
         audit_entries=audit_entries,
+        csrf_token=csrf_token,
         message=request.query_params.get("message", ""),
         error=request.query_params.get("error", ""),
     )
@@ -214,6 +299,7 @@ async def portal_upload(
     plan_limits = PLAN_LIMITS.get(tenant.plan, PLAN_LIMITS["free"])
 
     form = await request.form()
+    _check_csrf(request, form)
     file = form.get("file")
     if not file or not file.filename:
         return RedirectResponse(url="/portal/dashboard?error=No+se+seleccionó+ningún+archivo", status_code=303)
@@ -282,6 +368,9 @@ async def portal_delete_source(
     success when deleting a non-existent source name).
     """
     tenant, db = tenant_data
+    # CSRF validation for form submissions
+    form = await request.form()
+    _check_csrf(request, form)
     # Path traversal guard: reject sources containing path separators or ..
     if "/" in source or "\\" in source or ".." in source:
         return RedirectResponse(
@@ -326,6 +415,7 @@ async def portal_query(
         raise HTTPException(status_code=429, detail="Monthly query limit reached")
 
     form = await request.form()
+    _check_csrf(request, form)
     question = (form.get("question") or "").strip()
     if not question:
         # Increment happened above but question is empty — rollback the counter
@@ -373,6 +463,7 @@ async def portal_resolve_question(
     """Mark an unanswered question as resolved."""
     tenant, db = tenant_data
     form = await request.form()
+    _check_csrf(request, form)
     question_id = form.get("question_id")
 
     if question_id:

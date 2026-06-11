@@ -405,15 +405,7 @@ async def retrieve_context(
     )
 
     rows = result.fetchall()
-    return [
-        {
-            "content": row.content,
-            "source": row.source,
-            "page": row.page,
-            "similarity": round(float(row.similarity), 3),
-        }
-        for row in rows
-    ]
+    return [_row_to_chunk_dict(row, similarity=round(float(row.similarity), 3)) for row in rows]
 
 
 async def retrieve_catalog_overview(
@@ -454,17 +446,7 @@ async def retrieve_catalog_overview(
         )
         rows = result.fetchall()
 
-    return [
-        {
-            "content": row.content,
-            "source": row.source,
-            "page": row.page,
-            "similarity": 0.5,
-            "chunk_type": getattr(row, "chunk_type", None),
-            "metadata": getattr(row, "metadata_", None),
-        }
-        for row in rows
-    ]
+    return [_row_to_chunk_dict(row) for row in rows]
 
 
 async def retrieve_full_catalog(
@@ -507,17 +489,7 @@ async def retrieve_full_catalog(
         )
         rows = result.fetchall()
 
-    return [
-        {
-            "content": row.content,
-            "source": row.source,
-            "page": row.page,
-            "similarity": 0.5,
-            "chunk_type": getattr(row, "chunk_type", None),
-            "metadata": getattr(row, "metadata_", None),
-        }
-        for row in rows
-    ]
+    return [_row_to_chunk_dict(row) for row in rows]
 
 
 _CATALOG_LLM_PROMPT = """\
@@ -550,6 +522,9 @@ Fragmentos:
 """
 
 _CATALOG_BATCH_SIZE = 30  # chunks per LLM call for large catalogs
+_HALLUCINATION_THRESHOLD = 0.5  # LLM must retain ≥ 50% of source items
+_NEUTRAL_SIMILARITY = 0.5  # similarity for policy/section chunks (included by rule, not relevance)
+_CLASSIFY_CONCURRENCY = 5  # max parallel chunk classification LLM calls
 
 
 async def _format_catalog_with_llm(
@@ -601,7 +576,7 @@ async def _format_catalog_with_llm(
         if source_item_count > 0:
             llm_item_lines = sum(1 for line in result.split("\n")
                                  if line.strip() and not line.strip().startswith("*") and "—" in line)
-            if llm_item_lines <= source_item_count * 0.5:
+            if llm_item_lines <= source_item_count * _HALLUCINATION_THRESHOLD:
                 logger.warning("catalog_hallucination_guard items=%d llm_items=%d — retrying",
                                source_item_count, llm_item_lines)
                 retry_messages = [
@@ -612,7 +587,7 @@ async def _format_catalog_with_llm(
                                          channel=channel, on_failover=on_failover)
                 llm_item_lines = sum(1 for line in result.split("\n")
                                      if line.strip() and not line.strip().startswith("*") and "—" in line)
-                if llm_item_lines <= source_item_count * 0.5:
+                if llm_item_lines <= source_item_count * _HALLUCINATION_THRESHOLD:
                     logger.warning("catalog_hallucination_guard still failing items=%d llm_items=%d — raw fallback",
                                    source_item_count, llm_item_lines)
                     formatted_sections.append(_format_catalog_raw(batch))
@@ -691,7 +666,24 @@ ALLOWED_CHUNK_TYPES = frozenset({
     "general_info",    # everything else (hours, contact info, descriptions)
 })
 
-_CLASSIFY_SEMAPHORE = asyncio.Semaphore(5)  # limit concurrent classification calls
+_CLASSIFY_SEMAPHORE = asyncio.Semaphore(_CLASSIFY_CONCURRENCY)  # limit concurrent classification calls
+_MAX_SECTION_SIBLINGS = 5  # cap to prevent unbounded OR conditions
+
+
+def _row_to_chunk_dict(row, similarity: float = _NEUTRAL_SIMILARITY) -> dict:
+    """Convert a raw SQL row to a chunk dict with consistent attribute access.
+
+    Uses getattr with defaults for optional columns (chunk_type, metadata_)
+    that may be absent in queries that don't select them.
+    """
+    return {
+        "content": row.content,
+        "source": row.source,
+        "page": row.page,
+        "similarity": similarity,
+        "chunk_type": getattr(row, "chunk_type", None),
+        "metadata": getattr(row, "metadata_", None),
+    }
 
 
 async def classify_chunk_type(chunk_content: str) -> str:
@@ -1040,17 +1032,7 @@ async def retrieve_policy_chunks(db: AsyncSession, namespace: str) -> list[dict]
         )
         rows = result.fetchall()
 
-    return [
-        {
-            "content": row.content,
-            "source": row.source,
-            "page": row.page,
-            "similarity": 0.5,  # neutral similarity — included by policy, not relevance
-            "chunk_type": getattr(row, "chunk_type", None),
-            "metadata": getattr(row, "metadata_", None),
-        }
-        for row in rows
-    ]
+    return [_row_to_chunk_dict(row) for row in rows]
 
 
 async def retrieve_section_siblings(
@@ -1068,7 +1050,6 @@ async def retrieve_section_siblings(
 
     E9: Cross-section retrieval for procedure requirements.
     """
-    MAX_SECTIONS = 5  # cap to prevent unbounded OR conditions
 
     # Collect unique (source, section_name) pairs from price_row chunks
     sections = set()
@@ -1098,7 +1079,7 @@ async def retrieve_section_siblings(
         return []
 
     # Cap sections to prevent unbounded queries
-    sections = set(list(sections)[:MAX_SECTIONS])
+    sections = set(list(sections)[:_MAX_SECTION_SIBLINGS])
 
     # Build query for all chunks in those sections
     # Using metadata->>'section_name' for typed chunks
@@ -1157,17 +1138,7 @@ async def retrieve_section_siblings(
             if any(r.content.startswith(h) for h in section_headers)
         ]
 
-    return [
-        {
-            "content": row.content,
-            "source": row.source,
-            "page": row.page,
-            "similarity": 0.5,  # neutral similarity — included by section association
-            "chunk_type": getattr(row, "chunk_type", None),
-            "metadata": getattr(row, "metadata_", None),
-        }
-        for row in rows
-    ]
+    return [_row_to_chunk_dict(row) for row in rows]
 
 
 async def _extract_search_terms_from_images(images: list[dict]) -> tuple[str, str]:
