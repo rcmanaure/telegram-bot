@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.2.0] - 2026-06-12
+
+### Fixed
+
+- **Source footer no longer shown on greetings** — Bots were appending "📎 Fuentes: …" to greeting responses like "¡Buen día!". The footer is now only shown when a response is grounded in retrieved documents (`intent = None`). Triage responses (greeting, off_topic, needs_human, ambiguous) never show sources regardless of what the retrieval pipeline returned.
+- **Greeting classifier recognizes "buen día" and inverted punctuation** — `_GREETING_PATTERN` now matches singular `buen día`/`buen di a` and handles `¡`/`¿` prefix characters, so `¡buen día!` is correctly classified as a greeting rather than falling through to vector search.
+- **26 new edge-case tests** — `TestGreetingPattern` (14 tests covering variant forms, punctuation, case insensitivity), plus Telegram and WhatsApp footer-suppression tests asserting that each intent path (greeting, off_topic, needs_human, doc-answer) produces or suppresses the footer correctly.
+
 ## [0.6.1.0] - 2026-06-11
 
 ### Changed
