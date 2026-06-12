@@ -195,7 +195,7 @@ DOCUMENTOS DISPONIBLES: {doc_structure_summary}"""
 # ─── Local classifiers (skip LLM for deterministic intents) ──────────────────────
 
 _GREETING_PATTERN = re.compile(
-    r'^\s*(hola|hey|buenas|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|hi|hello|saludos|qué\s+tal|como\s+andas|como\s+estás|que\s+onda|epa|che)\s*[!?.]*\s*$',
+    r'^\s*[¡¿]?\s*(hola|hey|buenas|buen\s+d[ií]a|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|hi|hello|saludos|qué\s+tal|como\s+andas|como\s+estás|que\s+onda|epa|che)\s*[!?.]*\s*$',
     re.IGNORECASE,
 )
 

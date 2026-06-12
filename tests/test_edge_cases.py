@@ -3245,3 +3245,145 @@ async def test_context_capped_after_merges():
     assert all(c["content"].startswith("high_") or c["content"].startswith("policy_") for c in capped[:15])
     # First chunk has highest similarity
     assert capped[0]["similarity"] >= capped[-1]["similarity"]
+
+
+# ─── _GREETING_PATTERN edge cases ─────────────────────────────────────────────
+
+class TestGreetingPattern:
+    def _pat(self):
+        from services.prompts import _GREETING_PATTERN
+        return _GREETING_PATTERN
+
+    def test_buen_dia_singular_matches(self):
+        assert self._pat().match("buen día")
+
+    def test_buen_dia_with_exclamation_matches(self):
+        assert self._pat().match("¡buen día!")
+
+    def test_buen_dia_uppercase_matches(self):
+        assert self._pat().match("Buen Día")
+
+    def test_buen_dia_no_accent_matches(self):
+        assert self._pat().match("buen dia")
+
+    def test_buenos_dias_plural_matches(self):
+        assert self._pat().match("buenos días")
+
+    def test_hola_matches(self):
+        assert self._pat().match("hola")
+
+    def test_hola_with_punctuation_matches(self):
+        assert self._pat().match("hola!")
+
+    def test_question_does_not_match(self):
+        assert not self._pat().match("¿cuánto cuesta?")
+
+    def test_greeting_plus_question_does_not_match(self):
+        assert not self._pat().match("hola, qué precios tienen?")
+
+    def test_empty_string_does_not_match(self):
+        assert not self._pat().match("")
+
+    def test_hi_matches(self):
+        assert self._pat().match("hi")
+
+    def test_hello_matches(self):
+        assert self._pat().match("hello")
+
+    def test_buenas_tardes_matches(self):
+        assert self._pat().match("buenas tardes")
+
+    def test_buenas_noches_matches(self):
+        assert self._pat().match("buenas noches")
+
+
+# ─── handle_message: footer suppressed for non-doc intents ────────────────────
+
+@pytest.mark.asyncio
+async def test_handle_message_greeting_intent_no_footer():
+    """When rag_query returns intent='greeting', source footer must not appear."""
+    from bot import handle_message
+
+    update = _make_update(text="buen día")
+    ctx = _make_ctx()
+
+    mock_db = AsyncMock()
+    mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+    mock_db.__aexit__ = AsyncMock(return_value=False)
+
+    chunks = [{"content": "text", "source": "doc.pdf", "page": 1, "similarity": 0.9}]
+
+    with patch("bot.tenant_session", _mock_tenant_session(mock_db)):
+        with patch("bot.rag_query", new=AsyncMock(return_value=("¡Hola! ¿En qué puedo ayudarte?", chunks, "greeting"))):
+            await handle_message(update, ctx)
+
+    reply = update.message.reply_text.call_args[0][0]
+    assert "📎" not in reply
+    assert "Fuentes" not in reply
+
+
+@pytest.mark.asyncio
+async def test_handle_message_off_topic_intent_no_footer():
+    """When rag_query returns intent='off_topic', no source footer."""
+    from bot import handle_message
+
+    update = _make_update(text="me gusta el fútbol")
+    ctx = _make_ctx()
+
+    mock_db = AsyncMock()
+    mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+    mock_db.__aexit__ = AsyncMock(return_value=False)
+
+    chunks = [{"content": "text", "source": "doc.pdf", "page": 1, "similarity": 0.9}]
+
+    with patch("bot.tenant_session", _mock_tenant_session(mock_db)):
+        with patch("bot.rag_query", new=AsyncMock(return_value=("Eso no es algo en lo que puedo ayudar.", chunks, "off_topic"))):
+            await handle_message(update, ctx)
+
+    reply = update.message.reply_text.call_args[0][0]
+    assert "📎" not in reply
+
+
+@pytest.mark.asyncio
+async def test_handle_message_needs_human_intent_no_footer():
+    """When rag_query returns intent='needs_human', no source footer."""
+    from bot import handle_message
+
+    update = _make_update(text="quiero hablar con alguien")
+    ctx = _make_ctx()
+
+    mock_db = AsyncMock()
+    mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+    mock_db.__aexit__ = AsyncMock(return_value=False)
+
+    chunks = [{"content": "text", "source": "doc.pdf", "page": 2, "similarity": 0.88}]
+
+    with patch("bot.tenant_session", _mock_tenant_session(mock_db)):
+        with patch("bot.rag_query", new=AsyncMock(return_value=("Te pongo en contacto con un operador.", chunks, "needs_human"))):
+            await handle_message(update, ctx)
+
+    reply = update.message.reply_text.call_args[0][0]
+    assert "📎" not in reply
+
+
+@pytest.mark.asyncio
+async def test_handle_message_doc_answer_intent_none_shows_footer():
+    """When rag_query returns intent=None (doc answer), source footer IS shown."""
+    from bot import handle_message
+
+    update = _make_update(text="¿cuáles son los precios?")
+    ctx = _make_ctx()
+
+    mock_db = AsyncMock()
+    mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+    mock_db.__aexit__ = AsyncMock(return_value=False)
+
+    chunks = [{"content": "precios...", "source": "catalog.pdf", "page": 3, "similarity": 0.92}]
+
+    with patch("bot.tenant_session", _mock_tenant_session(mock_db)):
+        with patch("bot.rag_query", new=AsyncMock(return_value=("El precio es $50.", chunks, None))):
+            await handle_message(update, ctx)
+
+    reply = update.message.reply_text.call_args[0][0]
+    assert "📎" in reply
+    assert "Catalog" in reply

@@ -29,7 +29,7 @@ async def _send_wa_reply(
     Shared by _wa_process_flushed and handle_wa_message to avoid
     divergent reply formatting.
     """
-    source_footer = _build_source_footer(chunks, channel="whatsapp")
+    source_footer = _build_source_footer(chunks, channel="whatsapp") if intent is None else ""
 
     # Escalation: add "Contactar" button for off-topic or needs-human intents
     buttons = None

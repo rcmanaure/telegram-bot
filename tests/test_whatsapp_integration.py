@@ -655,3 +655,94 @@ class TestParseIncomingMediaTypes:
         assert len(msgs) == 1
         assert msgs[0].text == "Option One"
         assert msgs[0].reply_to == "option_1"
+
+
+# ─── _send_wa_reply: footer suppressed by intent ──────────────────────────────
+
+class TestSendWaReplyFooter:
+    """Source footer appears only when intent is None (doc answer)."""
+
+    def _chunks(self):
+        return [{"content": "text", "source": "catalog.pdf", "page": 2, "similarity": 0.9}]
+
+    @pytest.mark.asyncio
+    async def test_intent_none_includes_footer(self):
+        from services.wa_processor import _send_wa_reply
+
+        adapter = make_wa_adapter()
+        adapter.send_reply = AsyncMock(return_value={"messages": [{"id": "wamid_1"}]})
+
+        await _send_wa_reply(adapter, "549111234567", "El precio es $50.", chunks=self._chunks(), intent=None)
+
+        text_sent = adapter.send_reply.call_args[0][1]
+        assert "📎" in text_sent
+        assert "Catalog" in text_sent
+
+    @pytest.mark.asyncio
+    async def test_greeting_intent_no_footer(self):
+        from services.wa_processor import _send_wa_reply
+
+        adapter = make_wa_adapter()
+        adapter.send_reply = AsyncMock(return_value={"messages": [{"id": "wamid_2"}]})
+
+        await _send_wa_reply(adapter, "549111234567", "¡Hola!", chunks=self._chunks(), intent="greeting")
+
+        text_sent = adapter.send_reply.call_args[0][1]
+        assert "📎" not in text_sent
+        assert "Fuentes" not in text_sent
+
+    @pytest.mark.asyncio
+    async def test_off_topic_intent_no_footer(self):
+        from services.wa_processor import _send_wa_reply
+
+        adapter = make_wa_adapter()
+        adapter.send_reply = AsyncMock(return_value={"messages": [{"id": "wamid_3"}]})
+
+        await _send_wa_reply(adapter, "549111234567", "No puedo ayudar con eso.", chunks=self._chunks(), intent="off_topic")
+
+        text_sent = adapter.send_reply.call_args[0][1]
+        assert "📎" not in text_sent
+
+    @pytest.mark.asyncio
+    async def test_needs_human_intent_no_footer(self):
+        from services.wa_processor import _send_wa_reply
+
+        adapter = make_wa_adapter()
+        adapter.send_reply = AsyncMock(return_value={"messages": [{"id": "wamid_4"}]})
+
+        await _send_wa_reply(adapter, "549111234567", "Te conecto con un agente.", chunks=self._chunks(), intent="needs_human")
+
+        text_sent = adapter.send_reply.call_args[0][1]
+        assert "📎" not in text_sent
+
+    @pytest.mark.asyncio
+    async def test_no_chunks_intent_none_no_footer(self):
+        """Empty chunks + intent=None → no footer (nothing to cite)."""
+        from services.wa_processor import _send_wa_reply
+
+        adapter = make_wa_adapter()
+        adapter.send_reply = AsyncMock(return_value={"messages": [{"id": "wamid_5"}]})
+
+        await _send_wa_reply(adapter, "549111234567", "Respuesta.", chunks=[], intent=None)
+
+        text_sent = adapter.send_reply.call_args[0][1]
+        assert "📎" not in text_sent
+        assert text_sent == "Respuesta."
+
+    @pytest.mark.asyncio
+    async def test_needs_human_with_contact_url_sends_button(self):
+        """intent='needs_human' + tenant.contact_url → Contactar button included."""
+        from services.wa_processor import _send_wa_reply
+
+        adapter = make_wa_adapter()
+        adapter.send_reply = AsyncMock(return_value={"messages": [{"id": "wamid_6"}]})
+
+        tenant = make_tenant()
+        tenant.contact_url = "https://wa.me/5491112345678"
+
+        await _send_wa_reply(adapter, "549111234567", "Te conecto.", chunks=[], intent="needs_human", tenant=tenant)
+
+        kw = adapter.send_reply.call_args
+        buttons = (kw[1] or {}).get("buttons") or kw.kwargs.get("buttons")
+        assert buttons is not None
+        assert any(b.label == "Contactar" for b in buttons)
