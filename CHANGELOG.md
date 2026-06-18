@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.7.0.0] - 2026-06-18
+
+### Added
+
+- **Laboratory customer support module** — New specialized RAG pipeline for histological analysis lab (SP Diagnóstico Histológico). Chatbot now answers lab service pricing, sample handling requirements, and procedural timelines with strict policy enforcement.
+- **Critical policy injection system** — System prompt now includes hardcoded policies for laboratory contexts (formol-only preservation, full payment upfront, WhatsApp text-only, 3-5 day results timeline, frozen-cut same-day exception). Policies are always mentioned when context includes relevant procedures or prices, preventing silent omissions.
+- **Vision extraction for auto-quote (E1)** — `extract_service_codes_from_image()` accepts medical order images and returns service codes with confidence scores. Low-confidence extractions trigger user confirmation via text input before returning price quotes.
+- **Lab document semantic indexing** — 167 chunks from service catalog (`sp-diagnostico-histologico.md`) indexed with semantic retrieval. Pricing tables chunked to preserve per-service rows as distinct units, ensuring price accuracy on point lookups.
+- **Comprehensive lab support tests** — 23 unit tests covering policies (E8), pricing (P0), sample handling (E1), contact info, prompt injection, vision extraction, and table chunking strategy. Full end-to-end validation with live OpenRouter queries confirms policies appear in responses.
+
+### Changed
+
+- `build_system_prompt()` now always injects a `POLÍTICAS CRÍTICAS` block at the start of every system prompt for laboratory and clinic contexts. Block is visible only to the LLM; human-facing responses remain clean.
+- Dependency cleanup: removed duplicate `httpx` entry, synced `pyproject.toml` with `requirements.txt`.
+
 ## [0.6.2.0] - 2026-06-12
 
 ### Fixed

@@ -174,8 +174,8 @@ Mode: SELECTIVE EXPANSION. Core + E1 in scope now; E2+E3 deferred.
   - 3 tests: vision extraction mocked
   - 1 test: chunking preserves structure
 - [x] **LAB-VISION-EXTRACT (P1, E1)** — `extract_service_codes_from_image()` in rag.py: takes medical order image, extracts service codes via vision model, returns confidence. If confidence < 0.70, user confirms via text.
-- [ ] **LAB-INDEX-SCRIPT (P2)** — `scripts/index_lab_document.py` ready to run (not yet tested with real DB)
-- [ ] **LAB-INDEX-EXECUTION (P2)** — Index sp-diagnostico-histologico.md into a test tenant's namespace. Verify retrieval via `/upload` test + manual query. Command: `docker compose exec api python scripts/index_lab_document.py demo-lab --rebuild`
+- [x] **LAB-INDEX-SCRIPT (P2)** — `scripts/index_lab_document.py` ready to run. Standalone async script indexes sp-diagnostico-histologico.md into any tenant namespace.
+- [x] **LAB-INDEX-EXECUTION (P2)** — Tested with demo-lab tenant: 167 chunks indexed successfully. Semantic retrieval validates pricing info and policy chunks returned with 0.63+ similarity scores. End-to-end validation: OpenRouter free model generates policy-compliant responses with correct prices and formol requirements.
 
 ### DEFERRED: E2 + E3
 
