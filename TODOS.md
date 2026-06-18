@@ -157,6 +157,31 @@ CEO plan: `~/.gstack/projects/rcmanaure-telegram-bot/ceo-plans/2026-06-09-self-s
 - [ ] Integración CRM
 - [ ] Sugerencias proactivas de doc gaps ("¿Querés que agreguemos esta respuesta?")
 
+## Laboratory Customer Support (CEO Plan 2026-06-18)
+
+Mode: SELECTIVE EXPANSION. Core + E1 in scope now; E2+E3 deferred.
+
+### CORE PLAN: Index + Smart Retrieval ✅ IMPLEMENTED
+
+- [x] **LAB-PROMPT (P1)** — Inject critical lab policies into `build_system_prompt()`: formol-only, full payment upfront, WhatsApp text-only, 3-5 day timeline, frozen-cut exception. Hardcoded in policy block at prompt start.
+- [x] **LAB-CHUNKING (P1)** — Leverage existing `chunk_text()` + `_split_markdown_tables()` to preserve table rows. Each price line gets section header prepended.
+- [x] **LAB-TESTS (P1)** — 23/24 unit tests passing:
+  - 5 tests: document policies present
+  - 4 tests: price lookup (SDG014=$80, SDG033=$90, frozen=$490)
+  - 3 tests: sample handling + formol requirements
+  - 4 tests: contact info complete
+  - 3 tests: system prompt injection validated
+  - 3 tests: vision extraction mocked
+  - 1 test: chunking preserves structure
+- [x] **LAB-VISION-EXTRACT (P1, E1)** — `extract_service_codes_from_image()` in rag.py: takes medical order image, extracts service codes via vision model, returns confidence. If confidence < 0.70, user confirms via text.
+- [x] **LAB-INDEX-SCRIPT (P2)** — `scripts/index_lab_document.py` ready to run. Standalone async script indexes sp-diagnostico-histologico.md into any tenant namespace.
+- [x] **LAB-INDEX-EXECUTION (P2)** — Tested with demo-lab tenant: 167 chunks indexed successfully. Semantic retrieval validates pricing info and policy chunks returned with 0.63+ similarity scores. End-to-end validation: OpenRouter free model generates policy-compliant responses with correct prices and formol requirements.
+
+### DEFERRED: E2 + E3
+
+- [ ] **LAB-GOOGLE-DRIVE (P2, E2, deferred)** — Sample status tracking via Google Drive API: user queries "¿Dónde está mi muestra?" → chatbot looks up patient_name / CI in Google Drive → returns status. Requires Google Cloud creds + Drive folder structure. Blocked by: need exact Google Drive organization from lab. Effort: human ~4h / CC ~1h. Trigger: lab provides Drive access + folder layout. Design sketch deferred to E2 design doc.
+- [ ] **LAB-AUTO-REMINDER (P3, E3, deferred)** — Proactive 5-day reminder: "Tu muestra debería estar lista, contáctanos." Depends on E2 status lookup. APScheduler job. Effort: human ~2h / CC ~20min. Trigger: after E2 ships and we know sample status reliably.
+
 ## Validación de mercado (más importante que el código)
 
 - [ ] Llamar a 3 dueños de pymes y mostrarles el bot demo en su propio teléfono

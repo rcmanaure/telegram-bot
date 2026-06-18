@@ -1577,11 +1577,33 @@ _GENERIC_SEARCH_BODY = lambda q: json.dumps({"query": q}).encode()
 
 # ─── Source citation footer ──────────────────────────────────────────────────
 
+_SOURCE_EXTENSIONS = ('.md', '.pdf', '.txt', '.docx', '.doc', '.csv', '.xlsx', '.xls', '.pptx', '.ppt')
+
+
+def _normalize_source_name(name: str) -> str:
+    """Strip file extension and replace hyphens/underscores with spaces.
+
+    Turns internal filenames like 'sp-diagnostico-histologico.md' into
+    human-readable labels like 'Sp Diagnostico Histologico'.
+    """
+    for ext in _SOURCE_EXTENSIONS:
+        if name.lower().endswith(ext):
+            name = name[:-len(ext)]
+            break
+    name = name.replace('-', ' ').replace('_', ' ')
+    name = name.strip()
+    # Title-case each word (preserves existing capitals)
+    name = ' '.join(word[0].upper() + word[1:] if word else '' for word in name.split())
+    return name
+
+
 def _build_source_footer(chunks: list[dict] | None, channel: str = "telegram") -> str:
     """Build a source citation footer from retrieved chunks.
 
     Collects document sources (with page numbers) and web URLs from chunks,
     deduplicates by source name, and formats per-channel conventions.
+    Source filenames are normalized to human-readable names (stripped of
+    extensions, hyphens replaced with spaces, title-cased).
 
     Returns empty string if no attribution info is available.
     """
@@ -1611,11 +1633,12 @@ def _build_source_footer(chunks: list[dict] | None, channel: str = "telegram") -
 
     parts: list[str] = []
     for name, pages in doc_sources.items():
+        display_name = _normalize_source_name(name)
         sorted_pages = sorted(pages)
         if sorted_pages:
-            parts.append(f"{name} p.{','.join(str(p) for p in sorted_pages)}")
+            parts.append(f"{display_name} p.{','.join(str(p) for p in sorted_pages)}")
         else:
-            parts.append(name)
+            parts.append(display_name)
 
     parts.extend(web_urls)
     joined = ", ".join(parts)
@@ -2414,3 +2437,39 @@ async def rag_query(
         logger.warning("canary_redacted user_id=%s context_answer", user_id)
     await save_turn(db, user_id, namespace, question, answer, channel=channel)
     return answer, context, None
+
+
+# ─── Lab Support: Vision Extraction for Auto-Quote (E1) ──────────────────────
+
+async def extract_service_codes_from_image(image_base64: str) -> dict:
+    """Extract service codes from medical order image via vision model.
+
+    Returns: {"codes": ["GIN001", "GMM002"], "confidence": 0.85, "raw_text": "..."}
+    If confidence < 0.70, user should confirm via text input.
+    """
+    try:
+        response = await call_chat(
+            model="gpt-4o-mini",  # or settings.LLM_VISION_MODEL
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Extract all service codes from this medical order image. Return ONLY a JSON with 'codes': [list of codes], 'confidence': 0-1. If no codes found, return empty list."},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}}
+                ]
+            }],
+            temperature=0,
+        )
+
+        extracted = extract_json_from_llm_response(response)
+        codes = extracted.get("codes", [])
+        confidence = extracted.get("confidence", 0.0)
+
+        logger.info("vision_extraction codes=%s confidence=%.2f", codes, confidence)
+        return {
+            "codes": codes,
+            "confidence": confidence,
+            "raw_text": response,
+        }
+    except Exception as e:
+        logger.warning("vision_extraction_failed: %s", e, exc_info=True)
+        return {"codes": [], "confidence": 0.0, "error": str(e)}

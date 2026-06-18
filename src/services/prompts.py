@@ -58,9 +58,9 @@ def build_system_prompt(
     source_guidance = """\
 - No digas "según los documentos cargados" ni menciones procesos internos. Si el usuario pregunta de dónde sacaste la información, puedes mencionar la fuente por su nombre (ej: "según el reglamento", "según el plan Pro")."""
 
-    # E1: Citation enforcement — require inline source references for factual claims
+    # E1: Citation enforcement — no inline source references; attribution handled by footer
     citation_clause = """\
-CITACIONES: Cuando respondas con información de los documentos, cita la fuente inline usando el formato [Source: X, Page Y]. Si no tienes page number, usa [Source: X]. Esto es obligatorio para toda información que provenga de los documentos, no de tu conocimiento general. Ejemplo: "El precio del estudio es $90.00 [Source: catalog.pdf, Page 3]." No cites cuando tu respuesta sea un saludo, aclaración genérica, o derivación a contacto humano."""
+CITACIONES: No incluyas referencias internas como [Source: X, Page Y] en tu respuesta. Responde de forma natural y directa. Las fuentes se registran automáticamente al final de tu respuesta. Si el usuario pregunta de dónde viene la información, puedes mencionar el nombre del documento (ej: "según el catálogo de precios"). No cites cuando tu respuesta sea un saludo, aclaración genérica, o derivación a contacto humano."""
 
     web_clause = ""
     if from_web:
@@ -98,6 +98,17 @@ DOCUMENTOS DISPONIBLES: {doc_structure_summary}"""
     # Build prompt from clause list — conditional sections are appended only when active.
     # Each clause is a self-contained paragraph; joined with double newlines.
     clauses: list[str] = []
+
+    # CRITICAL POLICIES — always inject for laboratory/clinic contexts (formol, payment, etc)
+    critical_policies = """\
+POLÍTICAS CRÍTICAS DEL LABORATORIO — SIEMPRE MENCIÓNALO EN RESPUESTAS RELEVANTES:
+🧪 Muestras en formol: El ÚNICO líquido preservante aceptado es el FORMOL. NO se aceptan agua, suero fisiológico, alcohol ni otro líquido. EXCEPCIÓN: cortes congelados (biopsia per-operatoria) NO deben estar en formol.
+💰 Pago previo: Toda muestra DEBE ser cancelada en su TOTALIDAD antes de ser procesada. NO se aceptan pagos parciales.
+📱 WhatsApp texto solo: No respondemos llamadas de WhatsApp ni mensajes de voz. Solo mensajería de texto por WhatsApp.
+⏱️ Resultados: 3-5 días hábiles. EXCEPCIÓN: cortes congelados = mismo día.
+❄️ Cortes congelados (per-operatorio): $490, pago ANTES de cirugía, NO formol, mismo día."""
+
+    clauses.append(critical_policies)
 
     clauses.append(
         f"Eres un asistente especializado exclusivamente en la información de los documentos "
@@ -195,7 +206,7 @@ DOCUMENTOS DISPONIBLES: {doc_structure_summary}"""
 # ─── Local classifiers (skip LLM for deterministic intents) ──────────────────────
 
 _GREETING_PATTERN = re.compile(
-    r'^\s*(hola|hey|buenas|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|hi|hello|saludos|qué\s+tal|como\s+andas|como\s+estás|que\s+onda|epa|che)\s*[!?.]*\s*$',
+    r'^\s*[¡¿]?\s*(hola|hey|buenas|buen\s+d[ií]a|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|hi|hello|saludos|qué\s+tal|como\s+andas|como\s+estás|que\s+onda|epa|che)\s*[!?.]*\s*$',
     re.IGNORECASE,
 )
 

@@ -600,7 +600,7 @@ async def test_handle_message_high_similarity_appends_sources_footer():
 
     reply = update.message.reply_text.call_args[0][0]
     assert "📎" in reply
-    assert "horarios.pdf" in reply
+    assert "Horarios" in reply
 
 
 @pytest.mark.asyncio
@@ -623,7 +623,7 @@ async def test_handle_message_low_similarity_still_shows_sources():
 
     reply = update.message.reply_text.call_args[0][0]
     assert "📎" in reply
-    assert "doc.pdf" in reply
+    assert "Doc" in reply
 
 
 @pytest.mark.asyncio
@@ -2782,7 +2782,7 @@ async def test_call_chat_on_failover_not_called_on_primary_success():
 # ─── TOOL-E1: Source citation footer ─────────────────────────────────────────
 
 def test_build_source_footer_doc_chunks_with_pages():
-    """Doc chunks with page numbers show source and page."""
+    """Doc chunks with page numbers show normalized source name and page."""
     from rag import _build_source_footer
 
     chunks = [
@@ -2791,13 +2791,13 @@ def test_build_source_footer_doc_chunks_with_pages():
         {"content": "text3", "source": "policy.md", "page": 1, "similarity": 0.70},
     ]
     result = _build_source_footer(chunks, channel="telegram")
-    assert "lab-prices.pdf p.3,5" in result
-    assert "policy.md p.1" in result
+    assert "Lab Prices p.3,5" in result
+    assert "Policy p.1" in result
     assert "_Fuentes:" in result and result.strip().endswith("_")
 
 
 def test_build_source_footer_doc_chunks_no_pages():
-    """Doc chunks without valid page numbers show just the source name."""
+    """Doc chunks without valid page numbers show just the normalized source name."""
     from rag import _build_source_footer
 
     chunks = [
@@ -2805,7 +2805,8 @@ def test_build_source_footer_doc_chunks_no_pages():
         {"content": "text2", "source": "faq.md", "page": None, "similarity": 0.85},
     ]
     result = _build_source_footer(chunks, channel="telegram")
-    assert "faq.md" in result
+    assert "Faq" in result
+    assert "faq.md" not in result
     assert "p." not in result
 
 
@@ -2821,7 +2822,7 @@ def test_build_source_footer_web_urls():
 
 
 def test_build_source_footer_mixed_doc_and_web():
-    """Mixed doc and web chunks both appear."""
+    """Mixed doc and web chunks both appear, doc names normalized."""
     from rag import _build_source_footer
 
     chunks = [
@@ -2829,7 +2830,8 @@ def test_build_source_footer_mixed_doc_and_web():
         {"content": "web text", "source": "https://example.com/faq", "page": 0, "similarity": 0.4},
     ]
     result = _build_source_footer(chunks, channel="whatsapp")
-    assert "catalog.pdf p.2" in result
+    assert "Catalog p.2" in result
+    assert "catalog.pdf" not in result
     assert "https://example.com/faq" in result
     assert "📎 Fuentes:" in result
     assert "_" not in result  # WhatsApp: no italic markers
@@ -2845,7 +2847,8 @@ def test_build_source_footer_excludes_faq():
     ]
     result = _build_source_footer(chunks, channel="telegram")
     assert "__faq__" not in result
-    assert "manual.pdf p.1" in result
+    assert "Manual p.1" in result
+    assert "manual.pdf" not in result
 
 
 def test_build_source_footer_empty_and_none():
@@ -2857,7 +2860,7 @@ def test_build_source_footer_empty_and_none():
 
 
 def test_build_source_footer_deduplicates_pages():
-    """Same page appearing in multiple chunks is shown only once."""
+    """Same page appearing in multiple chunks is shown only once, name normalized."""
     from rag import _build_source_footer
 
     chunks = [
@@ -2866,7 +2869,40 @@ def test_build_source_footer_deduplicates_pages():
         {"content": "c", "source": "doc.pdf", "page": 7, "similarity": 0.80},
     ]
     result = _build_source_footer(chunks, channel="telegram")
-    assert "doc.pdf p.3,7" in result
+    assert "Doc p.3,7" in result
+    assert "doc.pdf" not in result
+
+
+# ─── _normalize_source_name ────────────────────────────────────────────────
+
+
+def test_normalize_source_name_strips_extensions():
+    """Common file extensions are stripped."""
+    from rag import _normalize_source_name
+    assert _normalize_source_name("catalog.pdf") == "Catalog"
+    assert _normalize_source_name("prices.md") == "Prices"
+    assert _normalize_source_name("data.xlsx") == "Data"
+    assert _normalize_source_name("notes.docx") == "Notes"
+
+
+def test_normalize_source_name_replaces_separators():
+    """Hyphens and underscores become spaces, words title-cased."""
+    from rag import _normalize_source_name
+    assert _normalize_source_name("sp-diagnostico-histologico.md") == "Sp Diagnostico Histologico"
+    assert _normalize_source_name("reglamento_interno.pdf") == "Reglamento Interno"
+    assert _normalize_source_name("Catalogo_de_Precios_2024.pdf") == "Catalogo De Precios 2024"
+
+
+def test_normalize_source_name_no_extension():
+    """Names without extensions pass through with separator normalization."""
+    from rag import _normalize_source_name
+    assert _normalize_source_name("manual-de-uso") == "Manual De Uso"
+
+
+def test_normalize_source_name_preserves_existing_caps():
+    """Existing capital letters in acronyms are preserved."""
+    from rag import _normalize_source_name
+    assert _normalize_source_name("FAQ-precios.md") == "FAQ Precios"
 
 
 # ─── E7: retrieve_policy_chunks ────────────────────────────────────────────────
@@ -3209,3 +3245,145 @@ async def test_context_capped_after_merges():
     assert all(c["content"].startswith("high_") or c["content"].startswith("policy_") for c in capped[:15])
     # First chunk has highest similarity
     assert capped[0]["similarity"] >= capped[-1]["similarity"]
+
+
+# ─── _GREETING_PATTERN edge cases ─────────────────────────────────────────────
+
+class TestGreetingPattern:
+    def _pat(self):
+        from services.prompts import _GREETING_PATTERN
+        return _GREETING_PATTERN
+
+    def test_buen_dia_singular_matches(self):
+        assert self._pat().match("buen día")
+
+    def test_buen_dia_with_exclamation_matches(self):
+        assert self._pat().match("¡buen día!")
+
+    def test_buen_dia_uppercase_matches(self):
+        assert self._pat().match("Buen Día")
+
+    def test_buen_dia_no_accent_matches(self):
+        assert self._pat().match("buen dia")
+
+    def test_buenos_dias_plural_matches(self):
+        assert self._pat().match("buenos días")
+
+    def test_hola_matches(self):
+        assert self._pat().match("hola")
+
+    def test_hola_with_punctuation_matches(self):
+        assert self._pat().match("hola!")
+
+    def test_question_does_not_match(self):
+        assert not self._pat().match("¿cuánto cuesta?")
+
+    def test_greeting_plus_question_does_not_match(self):
+        assert not self._pat().match("hola, qué precios tienen?")
+
+    def test_empty_string_does_not_match(self):
+        assert not self._pat().match("")
+
+    def test_hi_matches(self):
+        assert self._pat().match("hi")
+
+    def test_hello_matches(self):
+        assert self._pat().match("hello")
+
+    def test_buenas_tardes_matches(self):
+        assert self._pat().match("buenas tardes")
+
+    def test_buenas_noches_matches(self):
+        assert self._pat().match("buenas noches")
+
+
+# ─── handle_message: footer suppressed for non-doc intents ────────────────────
+
+@pytest.mark.asyncio
+async def test_handle_message_greeting_intent_no_footer():
+    """When rag_query returns intent='greeting', source footer must not appear."""
+    from bot import handle_message
+
+    update = _make_update(text="buen día")
+    ctx = _make_ctx()
+
+    mock_db = AsyncMock()
+    mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+    mock_db.__aexit__ = AsyncMock(return_value=False)
+
+    chunks = [{"content": "text", "source": "doc.pdf", "page": 1, "similarity": 0.9}]
+
+    with patch("bot.tenant_session", _mock_tenant_session(mock_db)):
+        with patch("bot.rag_query", new=AsyncMock(return_value=("¡Hola! ¿En qué puedo ayudarte?", chunks, "greeting"))):
+            await handle_message(update, ctx)
+
+    reply = update.message.reply_text.call_args[0][0]
+    assert "📎" not in reply
+    assert "Fuentes" not in reply
+
+
+@pytest.mark.asyncio
+async def test_handle_message_off_topic_intent_no_footer():
+    """When rag_query returns intent='off_topic', no source footer."""
+    from bot import handle_message
+
+    update = _make_update(text="me gusta el fútbol")
+    ctx = _make_ctx()
+
+    mock_db = AsyncMock()
+    mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+    mock_db.__aexit__ = AsyncMock(return_value=False)
+
+    chunks = [{"content": "text", "source": "doc.pdf", "page": 1, "similarity": 0.9}]
+
+    with patch("bot.tenant_session", _mock_tenant_session(mock_db)):
+        with patch("bot.rag_query", new=AsyncMock(return_value=("Eso no es algo en lo que puedo ayudar.", chunks, "off_topic"))):
+            await handle_message(update, ctx)
+
+    reply = update.message.reply_text.call_args[0][0]
+    assert "📎" not in reply
+
+
+@pytest.mark.asyncio
+async def test_handle_message_needs_human_intent_no_footer():
+    """When rag_query returns intent='needs_human', no source footer."""
+    from bot import handle_message
+
+    update = _make_update(text="quiero hablar con alguien")
+    ctx = _make_ctx()
+
+    mock_db = AsyncMock()
+    mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+    mock_db.__aexit__ = AsyncMock(return_value=False)
+
+    chunks = [{"content": "text", "source": "doc.pdf", "page": 2, "similarity": 0.88}]
+
+    with patch("bot.tenant_session", _mock_tenant_session(mock_db)):
+        with patch("bot.rag_query", new=AsyncMock(return_value=("Te pongo en contacto con un operador.", chunks, "needs_human"))):
+            await handle_message(update, ctx)
+
+    reply = update.message.reply_text.call_args[0][0]
+    assert "📎" not in reply
+
+
+@pytest.mark.asyncio
+async def test_handle_message_doc_answer_intent_none_shows_footer():
+    """When rag_query returns intent=None (doc answer), source footer IS shown."""
+    from bot import handle_message
+
+    update = _make_update(text="¿cuáles son los precios?")
+    ctx = _make_ctx()
+
+    mock_db = AsyncMock()
+    mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+    mock_db.__aexit__ = AsyncMock(return_value=False)
+
+    chunks = [{"content": "precios...", "source": "catalog.pdf", "page": 3, "similarity": 0.92}]
+
+    with patch("bot.tenant_session", _mock_tenant_session(mock_db)):
+        with patch("bot.rag_query", new=AsyncMock(return_value=("El precio es $50.", chunks, None))):
+            await handle_message(update, ctx)
+
+    reply = update.message.reply_text.call_args[0][0]
+    assert "📎" in reply
+    assert "Catalog" in reply

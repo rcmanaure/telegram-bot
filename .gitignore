@@ -20,3 +20,6 @@ PLAN_*.md
 .gstack/
 graphify-out
 CLAUDE.md
+.strip-coauthor.py
+.pytest_cache
+alembic

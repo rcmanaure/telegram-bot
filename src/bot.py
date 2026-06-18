@@ -228,7 +228,7 @@ async def _process_question(
             )
             await increment_usage(db, tenant.id, "queries")
 
-        source_footer = _build_source_footer(chunks, channel="telegram")
+        source_footer = _build_source_footer(chunks, channel="telegram") if intent is None else ""
         full_reply = answer + source_footer
 
         full_reply += reply_suffix
