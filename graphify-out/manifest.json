@@ -155,9 +155,9 @@
     "semantic_hash": "ab665df2e5d5853a0db827ed5206a4fc"
   },
   "src/rag.py": {
-    "mtime": 1781208839.0043645,
-    "ast_hash": "b8f2bf8281d4dfc32dd7869ec2c23054",
-    "semantic_hash": "b8f2bf8281d4dfc32dd7869ec2c23054"
+    "mtime": 1781804003.3547273,
+    "ast_hash": "6cfcdcbf02c843d693288c41bb4a6d86",
+    "semantic_hash": ""
   },
   "src/routes/__init__.py": {
     "mtime": 1780885085.351804,
@@ -200,9 +200,9 @@
     "semantic_hash": "1dfa80ae9c86432a61102729add123db"
   },
   "src/services/prompts.py": {
-    "mtime": 1781273575.1293101,
-    "ast_hash": "1287d11b7aa7a0bd36f8d027edb9b8d7",
-    "semantic_hash": "1287d11b7aa7a0bd36f8d027edb9b8d7"
+    "mtime": 1781803985.8017309,
+    "ast_hash": "92130e4ce24839256a9218e1c30a8fc3",
+    "semantic_hash": ""
   },
   "src/services/stt.py": {
     "mtime": 1780885085.351804,
@@ -310,9 +310,9 @@
     "semantic_hash": "952b69dd5d3cbe864a0a90013508e9b2"
   },
   "TODOS.md": {
-    "mtime": 1781184432.9290588,
-    "ast_hash": "640f7614a1a5c0a2bf5da0ea93c4aff5",
-    "semantic_hash": "640f7614a1a5c0a2bf5da0ea93c4aff5"
+    "mtime": 1781806247.780257,
+    "ast_hash": "d4bc3d0f8f5af15395022d64e179e7fe",
+    "semantic_hash": ""
   },
   "docker-compose.yml": {
     "mtime": 1781100916.954981,
@@ -443,5 +443,15 @@
     "mtime": 1781183747.511678,
     "ast_hash": "99008d00a390f0aba2a6f9de5eeb0a38",
     "semantic_hash": "99008d00a390f0aba2a6f9de5eeb0a38"
+  },
+  "scripts/index_lab_document.py": {
+    "mtime": 1781806232.0487897,
+    "ast_hash": "bac5785add2520ab61ef965a2f37745d",
+    "semantic_hash": ""
+  },
+  "tests/test_lab_support.py": {
+    "mtime": 1781806214.609751,
+    "ast_hash": "dda34a730826ae78aa44bc5ef8740019",
+    "semantic_hash": ""
   }
 }

@@ -1,16 +1,16 @@
 # Graph Report - telegram-bot  (2026-06-18)
 
 ## Corpus Check
-- 81 files · ~85,778 words
+- 65 files · ~83,970 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 1981 nodes · 3514 edges · 202 communities (123 shown, 79 thin omitted)
-- Extraction: 72% EXTRACTED · 28% INFERRED · 0% AMBIGUOUS · INFERRED: 983 edges (avg confidence: 0.67)
+- 2079 nodes · 3611 edges · 237 communities (126 shown, 111 thin omitted)
+- Extraction: 73% EXTRACTED · 27% INFERRED · 0% AMBIGUOUS · INFERRED: 982 edges (avg confidence: 0.68)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `028073c4`
+- Built from commit: `0412465b`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -204,13 +204,48 @@
 - [[_COMMUNITY_Community 199|Community 199]]
 - [[_COMMUNITY_Community 200|Community 200]]
 - [[_COMMUNITY_Community 201|Community 201]]
+- [[_COMMUNITY_Community 202|Community 202]]
+- [[_COMMUNITY_Community 203|Community 203]]
+- [[_COMMUNITY_Community 204|Community 204]]
+- [[_COMMUNITY_Community 205|Community 205]]
+- [[_COMMUNITY_Community 206|Community 206]]
+- [[_COMMUNITY_Community 207|Community 207]]
+- [[_COMMUNITY_Community 208|Community 208]]
+- [[_COMMUNITY_Community 209|Community 209]]
+- [[_COMMUNITY_Community 210|Community 210]]
+- [[_COMMUNITY_Community 211|Community 211]]
+- [[_COMMUNITY_Community 212|Community 212]]
+- [[_COMMUNITY_Community 213|Community 213]]
+- [[_COMMUNITY_Community 214|Community 214]]
+- [[_COMMUNITY_Community 215|Community 215]]
+- [[_COMMUNITY_Community 216|Community 216]]
+- [[_COMMUNITY_Community 217|Community 217]]
+- [[_COMMUNITY_Community 218|Community 218]]
+- [[_COMMUNITY_Community 219|Community 219]]
+- [[_COMMUNITY_Community 220|Community 220]]
+- [[_COMMUNITY_Community 221|Community 221]]
+- [[_COMMUNITY_Community 222|Community 222]]
+- [[_COMMUNITY_Community 223|Community 223]]
+- [[_COMMUNITY_Community 224|Community 224]]
+- [[_COMMUNITY_Community 225|Community 225]]
+- [[_COMMUNITY_Community 226|Community 226]]
+- [[_COMMUNITY_Community 227|Community 227]]
+- [[_COMMUNITY_Community 228|Community 228]]
+- [[_COMMUNITY_Community 229|Community 229]]
+- [[_COMMUNITY_Community 230|Community 230]]
+- [[_COMMUNITY_Community 231|Community 231]]
+- [[_COMMUNITY_Community 232|Community 232]]
+- [[_COMMUNITY_Community 233|Community 233]]
+- [[_COMMUNITY_Community 234|Community 234]]
+- [[_COMMUNITY_Community 235|Community 235]]
+- [[_COMMUNITY_Community 236|Community 236]]
 
 ## God Nodes (most connected - your core abstractions)
-1. `Tenant` - 91 edges
+1. `Tenant` - 89 edges
 2. `rag_query()` - 69 edges
 3. `WhatsAppAdapter` - 60 edges
-4. `UnansweredQuery` - 48 edges
-5. `ChannelSendError` - 46 edges
+4. `ChannelSendError` - 46 edges
+5. `UnansweredQuery` - 46 edges
 6. `ChannelButton` - 45 edges
 7. `ChannelMessage` - 45 edges
 8. `RateLimiter` - 44 edges
@@ -237,71 +272,71 @@
 - **RAG retrieval chain — query reformulation, HNSW pgvector search, greeting fast-path together form the retrieval pipeline** — concept_query_reformulation, concept_hnsw_pgvector, concept_greeting_fastpath [EXTRACTED 0.95]
 - **Single-worker in-memory state — concept, README constraint section, and docker-compose --workers 1 setting all enforce this together** — concept_single_worker, docker_compose_api_service, readme_worker_constraint [EXTRACTED 0.95]
 
-## Communities (202 total, 79 thin omitted)
+## Communities (237 total, 111 thin omitted)
 
 ### Community 0 - "RAG Edge Case Tests"
-Cohesion: 0.03
-Nodes (69): get_history(), Classify intent and generate fallback reply when no context found.     Returns, _triage_response(), _admin_auth(), _make_db_mock(), Edge-case test battery for the RAG bot.  Unit tests: no external deps, run any, Triage system prompt must prohibit self-introduction and greetings., que planes tienes?' must be classified as ambiguous, not greeting. (+61 more)
+Cohesion: 0.05
+Nodes (43): get_history(), _admin_auth(), _make_db_mock(), Edge-case test battery for the RAG bot.  Unit tests: no external deps, run any, Triage system prompt must prohibit self-introduction and greetings., MAX_CONTEXT_CHUNKS is defined and reasonable., Phase 4C: bot.py calls increment_usage after rag_query (inside tenant_session)., Phase 4C: wa_processor text-only path calls increment_usage after rag_query. (+35 more)
 
 ### Community 1 - "Answer Generation & Telegram Handlers"
-Cohesion: 0.08
-Nodes (27): RuntimeError, generate_answer(), Generate an answer using retrieved context + conversation history.     When ima, When images is set, generate_answer must include an instruction     telling the, When low_confidence=True, generate_answer includes an approximate-match note, test_generate_answer_image_includes_do_not_ask_for_image_instruction(), test_generate_answer_llm_429_raises_rate_limited(), test_generate_answer_llm_500_raises_with_status_code() (+19 more)
+Cohesion: 0.06
+Nodes (48): RuntimeError, handle_photo(), generate_answer(), Generate an answer using retrieved context + conversation history.     When ima, When images is set, generate_answer must include an instruction     telling the, When low_confidence=True, generate_answer includes an approximate-match note, test_generate_answer_image_includes_do_not_ask_for_image_instruction(), test_generate_answer_llm_429_raises_rate_limited() (+40 more)
 
 ### Community 2 - "Rate Limiting & Unanswered Queries"
-Cohesion: 0.06
-Nodes (30): UnansweredQuery, RateLimiter, Generic sliding-window rate limiter.      check(key) returns True if the user, Return True if key is rate-limited (>= max_messages in window).          Only, Remove entries whose window has fully expired. Returns count removed., Coverage gap tests for portal routes, auth branches, and knowledge service.  Fil, POST /portal/logout clears portal_token cookie and redirects to login., POST /portal/logout sets cookie with deletion markers. (+22 more)
+Cohesion: 0.08
+Nodes (63): Tenant, UnansweredQuery, PortalAuthRedirect, Raised by require_portal_auth to trigger a browser redirect to /portal/login., RateLimiter, Generic sliding-window rate limiter.      check(key) returns True if the user, Coverage gap tests for portal routes, auth branches, and knowledge service.  Fil, TestConfigPortalSettings (+55 more)
 
 ### Community 3 - "Admin UI Routes"
-Cohesion: 0.06
-Nodes (51): _admin_context(), admin_create_tenant(), admin_delete_docs(), admin_download_template(), admin_health_data(), admin_panel(), admin_queries(), admin_save_settings() (+43 more)
+Cohesion: 0.11
+Nodes (38): HTMLResponse, HTTPBasicCredentials, _admin_context(), admin_create_tenant(), admin_delete_docs(), admin_download_template(), admin_health_data(), admin_panel() (+30 more)
 
 ### Community 4 - "RAG Architecture Concepts"
 Cohesion: 0.06
 Nodes (4): Document Upsert Pattern (delete-then-insert by namespace+source), HNSW pgvector Index, MRL (Matryoshka Representation Learning) Embedding Truncation, Multi-Tenant Schema Pattern
 
 ### Community 5 - "Telegram Message Handling Tests"
-Cohesion: 0.06
-Nodes (75): DEFAULT_TYPE, cmd_clear(), cmd_contactar(), cmd_help(), cmd_sources(), cmd_start(), _get_tenant(), handle_message() (+67 more)
+Cohesion: 0.14
+Nodes (37): handle_message(), _make_ctx(), _make_update(), _mock_tenant_session(), When rag_query returns intent='greeting', source footer must not appear., When rag_query returns intent='off_topic', no source footer., When rag_query returns intent='needs_human', no source footer., When rag_query returns intent=None (doc answer), source footer IS shown. (+29 more)
 
 ### Community 6 - "Channel Protocol & Error Types"
 Cohesion: 0.11
 Nodes (13): Any, Bot, Send reply via Telegram Bot API., Send 'typing' indicator via Telegram., Verify TG webhook using secret token comparison., TG doesn't use GET verification — returns None always., Telegram formatting — pass through (prompt already handles it)., ChannelAdapter implementation for Telegram.      Phase 1: Valid protocol imple (+5 more)
 
 ### Community 7 - "RAG Pipeline Tests"
-Cohesion: 0.05
-Nodes (27): _patch_lifespan_db(), Smoke tests for the RAG pipeline.  Unit tests run always (no external deps)., call_embeddings must always pass dimensions= so MRL truncation and     validate, hyde_enabled=off must prevent _hyde_query from being called., When HyDE returns a result, retrieve_context must receive the hypothetical, not, Context manager that mocks DB calls in the lifespan (no tenants loaded)., When LLM_CONTEXT_MODEL is not configured, skip contextual summary., process_uploaded_file must return 3-tuple including full_doc_text. (+19 more)
+Cohesion: 0.06
+Nodes (23): _patch_lifespan_db(), Smoke tests for the RAG pipeline.  Unit tests run always (no external deps)., hyde_enabled=off must prevent _hyde_query from being called., When HyDE returns a result, retrieve_context must receive the hypothetical, not, Context manager that mocks DB calls in the lifespan (no tenants loaded)., When LLM_CONTEXT_MODEL is not configured, skip contextual summary., ROOT BUG REGRESSION: 'contactar' in an info-seeking question must NOT escalate., Explicit human-handoff phrasing must classify as needs_human. (+15 more)
 
 ### Community 8 - "LLM Tool Use"
-Cohesion: 0.10
-Nodes (13): Tests for the native tool-use agent fan-out (T1–T5).  Covers all 22 code paths, One tool raises an exception; the other succeeds; synthesis still runs., When all tools return '', the sequential pipeline runs instead., test_dispatch_tool_search_web_no_url(), test_dispatch_tool_unknown_tool(), test_rag_query_partial_tool_failure(), test_rag_query_tool_all_empty_falls_back(), test_rag_query_tool_path_canary_redacted() (+5 more)
+Cohesion: 0.09
+Nodes (22): call_chat_with_tools(), is_tool_use_available(), Call chat/completions with tool_use support (OpenAI-compatible format).      I, _make_chat_response(), _make_error_response(), Tests for the native tool-use agent fan-out (T1–T5).  Covers all 22 code paths, Build a mock httpx.Response for a chat/completions call., One tool raises an exception; the other succeeds; synthesis still runs. (+14 more)
 
 ### Community 9 - "RAG Query Entry Point"
 Cohesion: 0.05
-Nodes (37): _illegible_fallback_msg(), rag_query(), Full RAG pipeline: retrieve context → generate answer → save history.     Retur, Return the appropriate illegible-image message (singular or plural)., When images is set but LLM_VISION_MODEL is empty, rag_query returns     a clear, When images is set AND LLM_VISION_MODEL is configured, rag_query     proceeds n, When images is set but no text context found, rag_query sends the     image to, When the vision model reports image as illegible via JSON extraction,     rag_q (+29 more)
+Nodes (41): rag_query(), Full RAG pipeline: retrieve context → generate answer → save history.     Retur, When images is set but LLM_VISION_MODEL is empty, rag_query returns     a clear, When images is set AND LLM_VISION_MODEL is configured, rag_query     proceeds n, When images is set but no text context found, rag_query sends the     image to, When the vision model reports image as illegible via JSON extraction,     rag_q, When images sent with generic question and no context found, vision model     e, When vision-extracted terms also find nothing, fall back to image-only path. (+33 more)
 
 ### Community 10 - "Admin Auth & API Routes"
 Cohesion: 0.09
-Nodes (40): Base, BaseModel, FastAPI, HTMLResponse, HTTPBasicCredentials, delete_namespace(), get_feedback(), REST API routes — health, upload, stats, update_tenant, delete_namespace. (+32 more)
+Nodes (31): Base, FastAPI, delete_namespace(), get_feedback(), health(), REST API routes — health, upload, stats, update_tenant, delete_namespace., Return recent feedback for the authenticated tenant's namespace., stats() (+23 more)
 
 ### Community 11 - "Document Knowledge Management"
-Cohesion: 0.06
-Nodes (29): set_index_status / get_index_status, delete_all(), delete_source(), Idempotently replace all chunks for (namespace, source).      Deletes existing r, Delete all chunks for a single (namespace, source)., Purge all knowledge + conversation state for a tenant namespace.      Mirrors th, upsert_source(), flush_tool_cache() (+21 more)
+Cohesion: 0.12
+Nodes (12): delete_all(), delete_source(), Delete all chunks for a single (namespace, source)., Purge all knowledge + conversation state for a tenant namespace.      Mirrors th, flush_tool_cache(), Remove all cached tool results for a namespace. Call after document upsert., AsyncSession, delete_source runs DELETE and commits when auto_commit=True. (+4 more)
 
 ### Community 12 - "RAG Chunk Classification"
-Cohesion: 0.06
-Nodes (48): Conversation, _cache_key(), classify_chunk_type(), classify_chunks_batch(), _dispatch_tool(), generate_doc_structure_summary(), generate_section_emoji(), _get_cached() (+40 more)
+Cohesion: 0.11
+Nodes (28): get_setting(), Return DB override if present, else fallback (.env value).      Note: `or` sem, _add_contextual_summary(), _cache_key(), _classify_intent(), _dispatch_tool(), _format_catalog_raw(), _format_catalog_with_llm() (+20 more)
 
 ### Community 13 - "Upload & Knowledge Indexing"
-Cohesion: 0.11
-Nodes (17): process_upload(), Shared knowledge-base CRUD service.  Single source of truth for document upsert, Turn raw uploaded bytes into indexable chunks.      Delegates to process_upload_, describe_image_for_upload(), normalize_source_name(), process_upload_async(), process_uploaded_file(), File upload and vision processing — shared by API and admin routes. (+9 more)
+Cohesion: 0.17
+Nodes (11): process_upload(), Shared knowledge-base CRUD service.  Single source of truth for document upsert, Turn raw uploaded bytes into indexable chunks.      Delegates to process_upload_, describe_image_for_upload(), detect_mime(), process_upload_async(), File upload and vision processing — shared by API and admin routes., Async wrapper: offload CPU-bound PDF/text parsing to thread pool.      Images (+3 more)
 
 ### Community 14 - "Web Search Fallback"
-Cohesion: 0.11
-Nodes (17): Tests for web search fallback: _web_search(), rag_query web search path, descri, When WEB_SEARCH_URL is empty, returns [] immediately (no HTTP call)., Results with content < 50 chars are filtered out., When no context found and tenant.web_search_enabled=True, falls back to web sear, Ollama-style response with 'results' key returns context chunks., describe_image_for_upload calls vision model and returns description text., When vision model returns None, describe_image raises HTTPException 422., Generic response with 'content' field works as fallback. (+9 more)
+Cohesion: 0.07
+Nodes (29): Tests for web search fallback: _web_search(), rag_query web search path, descri, When WEB_SEARCH_URL is empty, returns [] immediately (no HTTP call)., Results with content < 50 chars are filtered out., When no context found and tenant.web_search_enabled=True, falls back to web sear, Ollama-style response with 'results' key returns context chunks., When web_search_enabled=False, falls through to _triage_response., When web search fails (timeout), falls through to _triage_response., When context IS found in the KB, web search is never called. (+21 more)
 
 ### Community 15 - "Portal Edge Case Tests"
-Cohesion: 0.07
-Nodes (20): PortalAuthRedirect, FastAPI dependencies — shared across route modules., Raised by require_portal_auth to trigger a browser redirect to /portal/login., Verify rollback patterns in portal routes., resolve_question calls db.rollback() on ValueError for non-numeric ID., portal_upload catches Exception from process_upload and redirects., P0-1: doc limit is checked before process_upload., Test that unknown plans fall back to free tier limits. (+12 more)
+Cohesion: 0.20
+Nodes (6): Test that unknown plans fall back to free tier limits., PLAN_LIMITS.get(unknown_plan) returns free tier limits., None plan falls back to free tier limits., All plan tiers have docs, chunks, queries_monthly keys., Free < Basic < Pro for all limit dimensions., TestPlanLimitFallback
 
 ### Community 16 - "WhatsApp Adapter Tests"
 Cohesion: 0.12
@@ -312,76 +347,76 @@ Cohesion: 0.11
 Nodes (27): Canary token prompt injection detection, CANARY_TOKEN (runtime secret token), # NOTE: single-worker only — each uvicorn worker gets a different token., Normalize and check user input for injection patterns.      Returns the (possi, Returns True if the chunk looks like an injection attempt.      Call inside in, Log a warning if the LLM response contains the canary token.      Returns resp, sanitize_user_input(), scan_chunk_for_injection() (+19 more)
 
 ### Community 18 - "WhatsApp Message Processing"
-Cohesion: 0.18
-Nodes (14): ChannelMessage, Parsed message from any channel., create_wa_adapter(), handle_wa_message(), Background task: process a single WA message through the RAG pipeline.      Cr, Create a WhatsApp adapter for the tenant, or None if WA not configured., Process flushed images from the image buffer (WA channel).      Creates its ow, _wa_process_flushed() (+6 more)
+Cohesion: 0.17
+Nodes (13): ChannelMessage, Parsed message from any channel., handle_wa_message(), Background task: process a single WA message through the RAG pipeline.      Cr, make_tenant(), make_wa_adapter(), When outside 24h window with no template, _log_unanswered is called         ins, Test interactive list_reply (not just button_reply). (+5 more)
 
 ### Community 19 - "LLM Chat Layer"
 Cohesion: 0.10
 Nodes (28): call_chat(), Call chat/completions with primary model, then fallback on failure.     Returns, call_chat invokes on_failover callback when fallback model succeeds after primar, call_chat does NOT call on_failover when primary model succeeds., test_call_chat_on_failover_callback_called(), test_call_chat_on_failover_not_called_on_primary_success(), _mock_response(), Build a fake httpx.Response. (+20 more)
 
 ### Community 20 - "Community 20"
-Cohesion: 0.14
-Nodes (13): build_system_prompt(), _INJECTION_PATTERNS_ES, Build the system prompt for the LLM, incorporating expertise area, channel forma, Policy clause is always present in the system prompt., Policy clause is present alongside example questions., System prompt must instruct the LLM to provide near-match info instead     of s, test_build_system_prompt_empty_area_no_trailing_dot_clause(), test_build_system_prompt_includes_expertise_area() (+5 more)
+Cohesion: 0.06
+Nodes (26): ChannelFormatting, format_text_for_channel, TELEGRAM_FORMATTING, WHATSAPP_FORMATTING, build_system_prompt(), _INJECTION_PATTERNS_ES, System prompt builder for the RAG pipeline., Build the system prompt for the LLM, incorporating expertise area, channel forma (+18 more)
 
 ### Community 21 - "Community 21"
 Cohesion: 0.13
 Nodes (6): format_text_for_channel(), Apply channel-specific post-processing to LLM output.      Universal normaliza, Post-process LLM output for WhatsApp display rules., LLMs often emit **bold** but Telegram needs *bold*., Don't convert __ inside URLs or snake_case identifiers., TestFormatText
 
 ### Community 22 - "Community 22"
-Cohesion: 0.23
-Nodes (7): ChannelButton, Channel-agnostic button. Adapters translate to native format.      - url: open, Verify WhatsApp webhook signature using HMAC-SHA256.          Callers should r, Handle WA webhook GET verification (hub.challenge).          Returns Response, Request, Response, TestChannelButton
+Cohesion: 0.13
+Nodes (9): ChannelButton, Channel-agnostic button. Adapters translate to native format.      - url: open, Tests for WhatsApp integration paths not covered by test_whatsapp_adapter.py., When >3 buttons, WA Cloud API requires <=3, so code falls back         to text-, TestChannelButton, TestDownloadMedia, TestFormatTextFallback, TestRagChannelParam (+1 more)
 
 ### Community 23 - "Community 23"
-Cohesion: 0.06
-Nodes (31): PortalAuthRedirect, detect_mime(), Sniff MIME type from bytes, falling back to a default., _api_key_func(), RateLimitExceeded, rate_limit_handler(), Unified rate limiting — Telegram and WhatsApp.  Single RateLimiter class used, Per-tenant rate limiting: use X-API-Key hash for authed API routes,     fall ba (+23 more)
+Cohesion: 0.14
+Nodes (13): _admin_auth(), _make_db_mock(), Tests for feat/admin-redesign codepaths not covered by existing test files.  C, Return (override_fn, mock_db) for use with app.dependency_overrides[get_db]., DX-T7: Admin can set and update tenant portal password., Creating a tenant with a portal password hashes and stores it., Creating a tenant without a portal password leaves portal_password_hash as None., Updating a tenant with a new portal password hashes and stores it. (+5 more)
 
 ### Community 24 - "Community 24"
-Cohesion: 0.08
-Nodes (13): ChannelSendError, Raised when a channel adapter fails to send a message., Download media from WA Cloud API using media ID.          WA returns a media I, Send a text message via WhatsApp Cloud API.          Max 3 quick-reply buttons, Send 'typing' indicator via WhatsApp (best-effort)., ChannelAdapter implementation for WhatsApp Cloud API., WhatsAppAdapter, ChannelButton (+5 more)
+Cohesion: 0.07
+Nodes (17): ChannelSendError, Raised when a channel adapter fails to send a message., Download media from WA Cloud API using media ID.          WA returns a media I, Send a text message via WhatsApp Cloud API.          Max 3 quick-reply buttons, Send 'typing' indicator via WhatsApp (best-effort)., Verify WhatsApp webhook signature using HMAC-SHA256.          Callers should r, Handle WA webhook GET verification (hub.challenge).          Returns Response, ChannelAdapter implementation for WhatsApp Cloud API. (+9 more)
 
 ### Community 25 - "Community 25"
-Cohesion: 0.07
-Nodes (25): _make_portal_auth_override(), Edge case tests for the tenant portal.  Covers findings from security audit (P0–, Document the call order in portal_query: check_and_increment → RAG → commit., Verify that portal_query calls check_and_increment_usage before _rag_query., Clear portal_login_limiter and SlowAPI state before each test to prevent cross-t, Test source deletion edge cases., P0-4 fix: Deleting a non-existent source redirects with error message., Source path with special chars is normalized and validated before deletion. (+17 more)
+Cohesion: 0.12
+Nodes (9): _make_portal_auth_override(), P0-4 fix: Deleting a non-existent source redirects with error message., Source path with special chars is normalized and validated before deletion., Return (override_fn, mock_tenant, mock_tenant_db) for require_portal_auth., P2-14: Resolving a non-existent question ID returns success (no error)., Negative question ID (ValueError for int) triggers rollback., Very large question ID (valid int) returns success even if not found., Files exceeding MAX_UPLOAD_BYTES are rejected after full read. (+1 more)
 
 ### Community 26 - "Community 26"
-Cohesion: 0.12
-Nodes (32): _authenticate_portal_user(), _check_csrf(), _get_token(), portal_dashboard(), portal_delete_source(), portal_login_form(), portal_login_json(), portal_login_page() (+24 more)
+Cohesion: 0.14
+Nodes (29): _authenticate_portal_user(), _check_csrf(), _get_token(), portal_dashboard(), portal_delete_source(), portal_login_form(), portal_login_page(), portal_logout() (+21 more)
 
 ### Community 27 - "Community 27"
 Cohesion: 0.18
 Nodes (9): decrypt_value(), generate_key(), get_fernet(), Symmetric encryption for secrets stored in the database.  Uses Fernet (AES-128, Return a lazy-initialised Fernet instance. Returns None if key not configured., Decrypt a Fernet token. Falls back to returning input as-is if decryption fails., Generate a new Fernet key. Paste the output into ENCRYPTION_KEY in .env., When encryption key is set but value isn't a valid Fernet token,         decryp (+1 more)
 
 ### Community 28 - "Community 28"
-Cohesion: 0.11
-Nodes (19): chunk_text(), Split text into semantically coherent chunks by splitting on paragraph     boun, Markdown table rows should become individual chunks with section headers,     n, Markdown table separator rows (|---|---|) should not appear in chunks., test_chunk_text_51_chars_included(), test_chunk_text_exactly_50_chars_skipped(), test_chunk_text_large_text_produces_multiple_chunks(), test_chunk_text_markdown_table_rows_become_separate_chunks() (+11 more)
+Cohesion: 0.09
+Nodes (21): Seed script — creates a realistic demo document and indexes it. Run this to hav, seed(), chunk_text(), Split text into semantically coherent chunks by splitting on paragraph     boun, Markdown table rows should become individual chunks with section headers,     n, Markdown table separator rows (|---|---|) should not appear in chunks., test_chunk_text_51_chars_included(), test_chunk_text_exactly_50_chars_skipped() (+13 more)
 
 ### Community 29 - "Community 29"
-Cohesion: 0.16
-Nodes (20): handle_photo(), _make_photo_ctx(), _make_photo_update(), Tests for vision pipeline: call_chat model override, generate_answer with image,, When model= override is set, only that model is tried (no fallback)., Photo handler adds image to buffer instead of calling _process_question directly, Photos with media_group_id use album-specific buffer key., Photo without media_group_id uses _pending_ buffer key. (+12 more)
+Cohesion: 0.08
+Nodes (21): normalize_source_name(), Normalize a filename for use as source in the chunks table.      Strips browse, Browser suffix (1) is stripped from filename., Browser suffix (2), (3) etc. are stripped., _copy and _copy2 suffixes are stripped., _2, _3 etc. before extension are stripped (Chrome download pattern)., Filenames are lowercased regardless of original casing., Files without extension still get normalized. (+13 more)
 
 ### Community 30 - "Community 30"
-Cohesion: 0.10
-Nodes (15): Send a WhatsApp reply with sources footer and escalation button.      Shared b, _send_wa_reply(), make_wa_adapter(), Tests for WhatsApp integration paths not covered by test_whatsapp_adapter.py., When >3 buttons, WA Cloud API requires <=3, so code falls back         to text-, Test interactive list_reply (not just button_reply)., Source footer appears only when intent is None (doc answer)., Empty chunks + intent=None → no footer (nothing to cite). (+7 more)
+Cohesion: 0.14
+Nodes (13): create_wa_adapter(), WhatsApp message processing — background task handler., Send a WhatsApp reply with sources footer and escalation button.      Shared b, Create a WhatsApp adapter for the tenant, or None if WA not configured., Process flushed images from the image buffer (WA channel).      Creates its ow, _send_wa_reply(), _wa_process_flushed(), Tenant (+5 more)
 
 ### Community 31 - "Community 31"
-Cohesion: 0.20
-Nodes (8): Version 0.3.0.0 — Runtime config overlay, Fernet encryption, tabbed admin UI, Fernet AES-128-CBC encryption for DB secrets, encrypt_value(), Encrypt a string. Returns Fernet token (base64) or plaintext if key not set., Decrypt WA access token on read. Falls back to plaintext if ENCRYPTION_KEY not s, Encrypt WA access token on write. Stores plaintext if ENCRYPTION_KEY not set., Decrypt WA app secret on read. Falls back to plaintext if ENCRYPTION_KEY not set, Encrypt WA app secret on write. Stores plaintext if ENCRYPTION_KEY not set.
+Cohesion: 0.15
+Nodes (11): Admin UI health tab — system status data loaded on click, Admin UI settings tab — LLM/embedding/Groq config with test-connection, Admin UI tenants tab — tenant CRUD, document upload, toggle-active, Version 0.3.0.0 — Runtime config overlay, Fernet encryption, tabbed admin UI, Fernet AES-128-CBC encryption for DB secrets, encrypt_value(), Encrypt a string. Returns Fernet token (base64) or plaintext if key not set., Decrypt WA access token on read. Falls back to plaintext if ENCRYPTION_KEY not s (+3 more)
 
 ### Community 32 - "Community 32"
-Cohesion: 0.13
-Nodes (11): check_wa_service_window(), Check if the 24-hour service window is still open for this user.      Returns, UPSERT: update last_user_message_at for the 24h window tracker., update_wa_service_window(), WhatsApp 24-hour Service Window Rule, WhatsApp Message Deduplication (in-memory TTL cache), WaServiceWindow, generate_answer should accept channel param without error. (+3 more)
+Cohesion: 0.11
+Nodes (15): check_wa_service_window(), _is_duplicate(), WhatsAppAdapter.parse_incoming(), WhatsApp Cloud API channel adapter.  Implements ChannelAdapter for Meta's What, Check if the 24-hour service window is still open for this user.      Returns, UPSERT: update last_user_message_at for the 24h window tracker., Check if a WA message ID was already processed. Thread-safe for single worker., Parse WA webhook payload into ChannelMessage list.          Returns [] for sta (+7 more)
 
 ### Community 33 - "Community 33"
 Cohesion: 0.10
-Nodes (19): Seed script — creates a realistic demo document and indexes it. Run this to hav, seed(), index_chunks(), Embed and store chunks in pgvector.     Returns number of chunks stored., test_index_chunks_skips_injected_chunk(), Chunks indexed under tenant_a are not visible from tenant_b namespace., DELETE /namespace only removes the authenticated tenant's data., FAQ chunks (full_doc_text=None) must not call _add_contextual_summary. (+11 more)
+Nodes (19): index_lab_document(), Index sp-diagnostico-histologico.md into tenant namespace., index_chunks(), Embed and store chunks in pgvector.     Returns number of chunks stored., test_index_chunks_skips_injected_chunk(), Chunks indexed under tenant_a are not visible from tenant_b namespace., DELETE /namespace only removes the authenticated tenant's data., FAQ chunks (full_doc_text=None) must not call _add_contextual_summary. (+11 more)
 
 ### Community 34 - "Community 34"
-Cohesion: 0.15
-Nodes (9): normalize_phone(), Normalize a phone number for consistent DB lookups and rate limiting.      Str, _is_duplicate(), WhatsAppAdapter.parse_incoming(), Check if a WA message ID was already processed. Thread-safe for single worker., Parse WA webhook payload into ChannelMessage list.          Returns [] for sta, ChannelMessage, TestMessageDedup (+1 more)
+Cohesion: 0.19
+Nodes (7): ChannelFormatting, normalize_phone(), Channel-agnostic protocol for multi-tenant messaging.  Every channel (Telegram, Normalize a phone number for consistent DB lookups and rate limiting.      Str, Per-channel formatting rules for LLM system prompts and output post-processing., Telegram channel adapter — Phase 1 scaffold.  Valid implementation of the Chan, TestNormalizePhone
 
 ### Community 35 - "Community 35"
-Cohesion: 0.06
-Nodes (33): create_access_token(), decode_access_token(), generate_csrf_token(), hash_portal_password(), JWT authentication + bcrypt password hashing for tenant portal.  Portal sessions, Create a JWT for the given tenant slug.      Args:         slug: Tenant slug (be, Decode and verify a JWT.      Raises jwt.InvalidTokenError (or subclass) on inva, Generate a CSRF token derived from the JWT and signing secret.      Uses HMAC-SH (+25 more)
+Cohesion: 0.14
+Nodes (10): hash_portal_password(), Verify a portal password against its bcrypt hash., Hash a portal password with bcrypt., verify_portal_password(), TestBcrypt, POST /portal/login/form with valid creds sets portal_token cookie and redirects, POST /portal/login/form returns 429 after 5 rapid attempts from same IP., verify_portal_password with empty string hash raises ValueError (not a valid bcr (+2 more)
 
 ### Community 36 - "Community 36"
 Cohesion: 0.12
@@ -396,16 +431,8 @@ Cohesion: 0.16
 Nodes (13): Conversation, Feedback, Tenant, TenantAuditLog, TenantUsage, WaServiceWindow, Migration e7f8g9h0i1j3: Portal Schema, Migration f8g9h0i1j2k3: Tenants RLS Policy (+5 more)
 
 ### Community 39 - "Community 39"
-Cohesion: 0.22
-Nodes (6): ChannelFormatting, Channel-agnostic protocol for multi-tenant messaging.  Every channel (Telegram, Per-channel formatting rules for LLM system prompts and output post-processing., Telegram channel adapter — Phase 1 scaffold.  Valid implementation of the Chan, WhatsApp Cloud API channel adapter.  Implements ChannelAdapter for Meta's What, WhatsApp message processing — background task handler.
-
-### Community 40 - "Community 40"
-Cohesion: 0.33
-Nodes (4): Test tenant_session GUC behavior., tenant_session uses set_config() (SET, not SET LOCAL) for GUC persistence across, tenant_session resets app.current_tenant in finally block., TestTenantSessionGUC
-
-### Community 41 - "Community 41"
-Cohesion: 0.33
-Nodes (4): Document that portal login has both SlowAPI and custom RateLimiter., portal_login_json has @limiter.limit decorator., Both login handlers check portal_login_limiter.check() explicitly., TestDuplicateRateLimiter
+Cohesion: 0.11
+Nodes (15): _count_chunks(), _insert_chunk(), AsyncSession, Tests for RLS integration (requires Docker — integration tests).  Validates that, TenantSessionLocal without GUC set sees zero rows., Regression: RLS on the webhook path does not break the live bot.          This i, SET LOCAL app.current_tenant + SET LOCAL hnsw.ef_search compose.          Both S, Insert a test chunk via admin session (bypasses RLS). (+7 more)
 
 ### Community 42 - "Community 42"
 Cohesion: 0.28
@@ -420,8 +447,8 @@ Cohesion: 0.11
 Nodes (19): create_access_token, decode_access_token, generate_csrf_token, JWT Constants (HS256 / TTL), verify_portal_password, PLAN_LIMITS, Settings, tenant_engine (+11 more)
 
 ### Community 46 - "Community 46"
-Cohesion: 0.17
-Nodes (13): PortalAuthRedirect exception, CSRF Protection, Portal JWT Authentication, require_portal_auth dependency, TestAdminPortalPassword, TestConfigOverlay, TestStateModule, TestBcrypt (+5 more)
+Cohesion: 0.13
+Nodes (17): PortalAuthRedirect exception, CSRF Protection, Portal JWT Authentication, require_portal_auth dependency, Row-Level Security (RLS) isolation, Python dependencies (requirements.txt), TestAdminPortalPassword, TestConfigOverlay (+9 more)
 
 ### Community 47 - "Community 47"
 Cohesion: 0.14
@@ -440,12 +467,12 @@ Cohesion: 0.14
 Nodes (13): Tests for the image buffer module (multi-image debounce + flush)., After flush, the entry is removed from the buffer., A single image is flushed after the buffer window expires., clear() cancels all pending flush tasks and removes entries., _flush must not cancel the asyncio.Task it's running inside.      Regression:, Adding a 6th image returns an error string; first 5 are kept., Images under different buffer keys flush independently., test_clear_cancels_pending_tasks() (+5 more)
 
 ### Community 51 - "Community 51"
-Cohesion: 0.18
-Nodes (11): Version 0.2.0.0 — WhatsApp Cloud API channel adapter, Version 0.6.1.0 — Clean response format & human-readable source names, Version 0.6.2.0 — Greeting classifier & footer suppression fix, Greeting fast-path — regex classifier skips vector search for common greetings, HNSW pgvector index — cosine search with namespace isolation per tenant, Query reformulation — pronoun resolution against last 3 conversation turns before embedding, WhatsApp 24-hour service window enforcement — re-engagement template on expiry, Self-service portal with RLS & JWT — README description (+3 more)
+Cohesion: 0.20
+Nodes (10): Version 0.2.0.0 — WhatsApp Cloud API channel adapter, Version 0.6.1.0 — Clean response format & human-readable source names, Version 0.6.2.0 — Greeting classifier & footer suppression fix, Greeting fast-path — regex classifier skips vector search for common greetings, HNSW pgvector index — cosine search with namespace isolation per tenant, Query reformulation — pronoun resolution against last 3 conversation turns before embedding, WhatsApp 24-hour service window enforcement — re-engagement template on expiry, Self-service portal with RLS & JWT — README description (+2 more)
 
 ### Community 52 - "Community 52"
-Cohesion: 0.11
-Nodes (15): check_and_increment_usage(), get_usage(), increment_usage(), Usage metering and audit log helpers for E2/E6.  increment_usage / get_usage: pe, Atomically increment a usage counter for the current month.      Uses INSERT ..., Atomically check the monthly limit and increment if under it.      Prevents TOCT, Return current-month usage for a metric. Returns 0 if no row exists., AsyncSession (+7 more)
+Cohesion: 0.13
+Nodes (12): check_and_increment_usage(), get_usage(), increment_usage(), Usage metering and audit log helpers for E2/E6.  increment_usage / get_usage: pe, Atomically increment a usage counter for the current month.      Uses INSERT ..., Atomically check the monthly limit and increment if under it.      Prevents TOCT, Return current-month usage for a metric. Returns 0 if no row exists., AsyncSession (+4 more)
 
 ### Community 53 - "Community 53"
 Cohesion: 0.15
@@ -456,8 +483,8 @@ Cohesion: 0.15
 Nodes (8): _auth_override(), POST /portal/upload with no file redirects with error message., POST /portal/upload redirects with error when doc limit is reached., POST /portal/delete/{source} deletes source and redirects to dashboard., POST /portal/resolve-question with valid ID deletes the query., POST /portal/resolve-question with non-numeric ID rolls back gracefully., _make_portal_auth_override(), Return (override_fn, mock_tenant, mock_tenant_db) for require_portal_auth.
 
 ### Community 55 - "Community 55"
-Cohesion: 0.40
-Nodes (5): _make_chat_response(), Build a mock httpx.Response for a chat/completions call., test_call_chat_with_tools_returns_tool_calls(), test_call_chat_with_tools_system_prepended(), test_call_chat_with_tools_text_response()
+Cohesion: 0.09
+Nodes (22): Admin UI Redesign + Secure Config ✅, CORE PLAN: Index + Smart Retrieval ✅ IMPLEMENTED, Deferred (cuando haya > 10 clientes), DEFERRED: E2 + E3, Fundaciones (orden CRÍTICO — seguir en este orden), Laboratory Customer Support (CEO Plan 2026-06-18), LLM Fallback Chain, LLM-First Intent Router (+14 more)
 
 ### Community 56 - "Community 56"
 Cohesion: 0.25
@@ -468,32 +495,32 @@ Cohesion: 0.23
 Nodes (12): Plantilla de Documento de Conocimiento, FAQ Section Template, Bot Knowledge Base Template, SP Unidad de Diagnóstico Histológico Knowledge Base, 3-5 Business Day Result Delivery, SP Lab FAQ Section, Frozen Section (Corte Congelado) No-Fixative Exception, Histopathology and Cytology Services (+4 more)
 
 ### Community 58 - "Community 58"
-Cohesion: 0.50
-Nodes (4): ChannelFormatting, format_text_for_channel, TELEGRAM_FORMATTING, WHATSAPP_FORMATTING
+Cohesion: 0.23
+Nodes (18): DEFAULT_TYPE, cmd_clear(), cmd_contactar(), cmd_help(), cmd_sources(), cmd_start(), _get_tenant(), _process_question() (+10 more)
 
 ### Community 59 - "Community 59"
-Cohesion: 0.33
-Nodes (9): Version 0.6.0.0 — Self-service tenant portal, RLS, JWT auth, plan quotas, TenantAuditLog — every knowledge mutation recorded with actor, action, detail, Background reindex with ThreadPoolExecutor — offloads PDF parsing from async loop, HMAC double-submit CSRF tokens for portal state-changing forms, Postgres RLS with GUC app.current_tenant — per-request tenant isolation, Portal base Jinja2 template — skip-link, portal.css, viewport meta, Portal dashboard — knowledge, usage, answer preview, unanswered questions tabs, Portal login form — slug + password, posts to /portal/login (+1 more)
+Cohesion: 0.24
+Nodes (12): v0.6.0.0 — Self-Service Portal release, Version 0.6.0.0 — Self-service tenant portal, RLS, JWT auth, plan quotas, TenantAuditLog — every knowledge mutation recorded with actor, action, detail, Background reindex with ThreadPoolExecutor — offloads PDF parsing from async loop, HMAC double-submit CSRF tokens for portal state-changing forms, PLAN_LIMITS config, Postgres RLS with GUC app.current_tenant — per-request tenant isolation, Portal base Jinja2 template — skip-link, portal.css, viewport meta (+4 more)
 
 ### Community 60 - "Community 60"
 Cohesion: 0.22
 Nodes (7): Speech-to-text — Groq Whisper transcription., Transcribe audio bytes using Groq Whisper. Raises RuntimeError on failure., transcribe_voice(), TestSttAdditional, test_transcribe_voice_429(), test_transcribe_voice_success(), test_transcribe_voice_timeout()
 
 ### Community 61 - "Community 61"
-Cohesion: 0.50
-Nodes (4): Row-Level Security (RLS) isolation, Python dependencies (requirements.txt), TestTenantSessionGUC, TestRLSIsolation
+Cohesion: 0.17
+Nodes (9): create_access_token(), decode_access_token(), Create a JWT for the given tenant slug.      Args:         slug: Tenant slug (be, Decode and verify a JWT.      Raises jwt.InvalidTokenError (or subclass) on inva, Tests for JWT authentication and bcrypt password hashing (src/auth.py)., TestJWT, require_portal_auth reads JWT from portal_token cookie., JWT signed with wrong secret is rejected. (+1 more)
 
 ### Community 62 - "Community 62"
-Cohesion: 0.67
-Nodes (4): is_tool_use_available(), _make_error_response(), test_generic_400_no_backoff(), test_tool_use_not_supported_400_triggers_backoff()
+Cohesion: 0.12
+Nodes (14): PortalAuthRedirect, _api_key_func(), RateLimitExceeded, rate_limit_handler(), Unified rate limiting — Telegram and WhatsApp.  Single RateLimiter class used, Per-tenant rate limiting: use X-API-Key hash for authed API routes,     fall ba, FastAPI exception handler for slowapi rate limits., _portal_auth_redirect_handler() (+6 more)
 
 ### Community 63 - "Community 63"
-Cohesion: 0.18
-Nodes (6): _admin_auth(), Tests for PR2 portal features.  Covers: - Portal login (JSON + form/cookie) - Po, POST /portal/login/form with wrong password re-renders with error., Return Basic auth headers for admin routes., TestPlanLimits, TestPortalLoginForm
+Cohesion: 0.05
+Nodes (24): extract_json_from_llm_response(), Extract a JSON object from an LLM response.     Handles:     - Bare JSON: {"in, _faithfulness_check(), Verify that the answer is grounded in the provided context.      Returns the o, TestExtractJson, _admin_auth(), Tests for PR2 portal features.  Covers: - Portal login (JSON + form/cookie) - Po, Without cookie or Authorization header, dashboard returns 303 or 401. (+16 more)
 
 ### Community 64 - "Community 64"
-Cohesion: 0.18
-Nodes (8): Write an audit log entry for a knowledge mutation (E6).      Actor format: "tena, write_audit_log(), Test audit log write patterns., write_audit_log with detail=None creates a valid entry., write_audit_log with dict detail creates a valid entry., Portal routes should use auto_commit=False for multi-write operations., TestAuditLogEdgeCases, TestAuditLog
+Cohesion: 0.15
+Nodes (12): BaseModel, portal_login_json(), PortalLoginRequest, PortalLoginResponse, Authenticate tenant with slug + portal password. Returns JWT (JSON)., Write an audit log entry for a knowledge mutation (E6).      Actor format: "tena, write_audit_log(), Per-tenant knowledge mutation audit trail (E6). (+4 more)
 
 ### Community 65 - "Community 65"
 Cohesion: 0.20
@@ -504,56 +531,60 @@ Cohesion: 0.20
 Nodes (10): _normalize_source_name(), Strip file extension and replace hyphens/underscores with spaces.      Turns i, Common file extensions are stripped., Hyphens and underscores become spaces, words title-cased., Names without extensions pass through with separator normalization., Existing capital letters in acronyms are preserved., test_normalize_source_name_no_extension(), test_normalize_source_name_preserves_existing_caps() (+2 more)
 
 ### Community 67 - "Community 67"
-Cohesion: 0.50
-Nodes (4): Pre-process markdown tables: separate each row into its own paragraph     so ch, _split_markdown_tables(), _split_markdown_tables should prepend the section header to each table row., test_split_markdown_tables_prepends_header()
+Cohesion: 0.25
+Nodes (7): Pre-process markdown tables: separate each row into its own paragraph     so ch, _split_markdown_tables(), _split_markdown_tables should prepend the section header to each table row., test_split_markdown_tables_prepends_header(), Test that lab document chunks preserve structure, Chunking should preserve price table rows as units, TestLabChunkingStrategy
 
-### Community 68 - "Community 68"
-Cohesion: 0.20
-Nodes (6): Test JWT edge cases: expired, missing sub, tampered, inactive tenant., require_portal_auth rejects expired JWT with PortalAuthRedirect., require_portal_auth rejects JWT missing 'sub' claim., require_portal_auth rejects JWT for an inactive tenant., require_portal_auth reads Bearer header first, then cookie., TestJWTEdgeCases
+### Community 69 - "Community 69"
+Cohesion: 0.19
+Nodes (10): init_tenant_bot(), Telegram bot initialization — shared by lifespan and admin create-tenant., Build telegram Application for a tenant and register its webhook.      Returns, get_app(), Shared in-process state — telegram app registry.  Single-worker only (1 uvicor, Refresh the cached Tenant object in an already-registered bot., register_app(), remove_app() (+2 more)
 
 ### Community 70 - "Community 70"
 Cohesion: 0.22
 Nodes (5): BaseSettings, Fallback API key resolution:         1. LLM_FALLBACK_API_KEY if explicitly set, Embedding API key. Falls back to openrouter_api_key for backwards compat., LLM_API_KEY takes precedence over openrouter_api_key., Settings
 
 ### Community 71 - "Community 71"
-Cohesion: 0.33
-Nodes (5): Runtime Config Overlay (DB overrides .env), AsyncSession, Runtime config overlay: DB-stored settings override .env values without restart., Load all SystemConfig rows into the in-process overlay.     Per-row decrypt err, reload_from_db()
+Cohesion: 0.22
+Nodes (7): Runtime Config Overlay (DB overrides .env), get_setting_int(), AsyncSession, Runtime config overlay: DB-stored settings override .env values without restart., Return DB override cast to int if present, else fallback., Load all SystemConfig rows into the in-process overlay.     Per-row decrypt err, reload_from_db()
 
 ### Community 72 - "Community 72"
 Cohesion: 0.33
 Nodes (8): Webhook routes — Telegram and WhatsApp., WhatsApp webhook GET verification (hub.challenge)., WhatsApp webhook POST — receive and process messages.      Sync path: tenant l, telegram_webhook(), whatsapp_webhook(), whatsapp_webhook_verify(), AsyncSession, Request
 
+### Community 73 - "Community 73"
+Cohesion: 0.15
+Nodes (9): set_index_status / get_index_status, Idempotently replace all chunks for (namespace, source).      Deletes existing r, upsert_source(), Set index status: 'procesando' or 'activo'., set_index_status(), upsert_source deletes old chunks, indexes new ones, returns count., upsert_source with auto_commit=False does not call db.commit., upsert_source calls set_index_status('procesando') before index_chunks. (+1 more)
+
 ### Community 74 - "Community 74"
 Cohesion: 0.22
-Nodes (10): call_chat_with_tools(), close_llm_clients(), _mark_tool_use_failed(), Provider-agnostic LLM layer.  Supports any OpenAI-compatible chat/completion a, Call chat/completions with tool_use support (OpenAI-compatible format).      I, Gracefully close HTTP clients. Call during app shutdown., Force recreation of embedding client on next call (after config overlay change)., Raised when the provider returns a tool-specific 400, triggering backoff. (+2 more)
+Nodes (8): close_llm_clients(), _mark_tool_use_failed(), Provider-agnostic LLM layer.  Supports any OpenAI-compatible chat/completion a, Gracefully close HTTP clients. Call during app shutdown., Force recreation of embedding client on next call (after config overlay change)., Raised when the provider returns a tool-specific 400, triggering backoff., reset_embedding_client(), ToolUseNotSupportedError
 
 ### Community 75 - "Community 75"
 Cohesion: 0.15
 Nodes (13): verify_csrf_token, call_chat, extract_json_from_llm_response, ALLOWED_CHUNK_TYPES, classify_chunk_type, generate_answer, generate_doc_structure_summary, _hyde_query (+5 more)
+
+### Community 76 - "Community 76"
+Cohesion: 0.17
+Nodes (7): Test that critical policies are correctly embedded, Lab document must mention formol policy, Lab document must mention full payment upfront, Lab document must mention WhatsApp text-only, Lab document must mention 3-5 day timeline, Lab document must mention frozen cut exception, TestLabDocumentPolicies
 
 ### Community 77 - "Community 77"
 Cohesion: 0.39
 Nodes (3): _error_message(), Convert an LLM/embedding exception into a user-facing RuntimeError message., TestLlmErrorMessage
 
 ### Community 78 - "Community 78"
-Cohesion: 0.39
-Nodes (3): extract_json_from_llm_response(), Extract a JSON object from an LLM response.     Handles:     - Bare JSON: {"in, TestExtractJson
+Cohesion: 0.25
+Nodes (10): AsyncSession, Request, Tenant, FastAPI dependencies — shared across route modules., Resolve X-API-Key header to an active Tenant row., JWT-based portal auth (API consumers). Returns (tenant, tenant_scoped_session)., Portal browser auth. Reads JWT from Authorization header or portal_token cookie., require_portal_auth() (+2 more)
 
 ### Community 79 - "Community 79"
-Cohesion: 0.25
-Nodes (8): _alert_llm_failover(), Send a Telegram alert to the operator when the primary LLM fails over.      De, _alert_llm_failover sends a Telegram message to operator_chat_id., _alert_llm_failover skips sending if alert was sent within the last hour., _alert_llm_failover is a no-op when operator_chat_id is None., test_alert_llm_failover_deduped_within_hour(), test_alert_llm_failover_no_operator_chat_id(), test_alert_llm_failover_sends_message()
+Cohesion: 0.22
+Nodes (9): _alert_llm_failover(), Send a Telegram alert to the operator when the primary LLM fails over.      De, Tenant, _alert_llm_failover sends a Telegram message to operator_chat_id., _alert_llm_failover skips sending if alert was sent within the last hour., _alert_llm_failover is a no-op when operator_chat_id is None., test_alert_llm_failover_deduped_within_hour(), test_alert_llm_failover_no_operator_chat_id() (+1 more)
 
 ### Community 80 - "Community 80"
-Cohesion: 0.25
-Nodes (8): Fetch ALL chunks from the same section as price_row chunks in context.      Wh, retrieve_section_siblings(), Fetches all chunks from same section as price_row chunks., Returns empty when no price_row chunks in context., When metadata.section_name is missing, falls back to content-based section detec, test_retrieve_section_siblings_fetches_by_section_name(), test_retrieve_section_siblings_no_price_rows(), test_retrieve_section_siblings_no_section_name_fallback()
+Cohesion: 0.10
+Nodes (22): AsyncSession, _log_unanswered(), Fetch ALL chunks from the same section as price_row chunks in context.      Wh, When conversation history exceeds SUMMARY_THRESHOLD rows, compact the     oldes, Return one representative chunk per catalog section for broad overview queries., Return ALL catalog-relevant chunks ordered by section for full price-list querie, Convert a raw SQL row to a chunk dict with consistent attribute access.      U, retrieve_catalog_overview() (+14 more)
 
-### Community 83 - "Community 83"
-Cohesion: 0.25
-Nodes (5): Test portal_login_limiter edge cases., P1-5 fix: Blocked requests do NOT consume deque slots.          After the fix, o, Rate limit is per-key — different IPs have separate buckets., sweep() removes entries whose window has expired., TestRateLimiterEdgeCases
-
-### Community 84 - "Community 84"
-Cohesion: 0.25
-Nodes (5): Test that login error messages don't leak information about slug existence., JSON login for non-existent slug returns 'Invalid credentials' (not 'slug not fo, P0-3 fix: JSON login for existing slug with no password returns         'Invalid, Form login returns generic 'Credenciales inválidas' for all failure cases., TestLoginInfoLeakage
+### Community 81 - "Community 81"
+Cohesion: 0.20
+Nodes (10): classify_chunk_type(), classify_chunks_batch(), generate_doc_structure_summary(), generate_section_emoji(), post_index_enrichment(), Classify a single chunk into one of ALLOWED_CHUNK_TYPES using LLM.      Return, Classify a batch of chunks in parallel. Returns a list of chunk_type strings., Generate a single emoji for a section name using LLM.      Returns the emoji c (+2 more)
 
 ### Community 85 - "Community 85"
 Cohesion: 0.36
@@ -568,64 +599,80 @@ Cohesion: 0.50
 Nodes (4): portal_login_limiter, TestPortalLoginFormSuccess, TestPortalLoginLimiter, TestRateLimiterEdgeCases
 
 ### Community 88 - "Community 88"
-Cohesion: 0.14
-Nodes (15): health(), get_setting(), Return DB override if present, else fallback (.env value).      Note: `or` sem, call_embeddings(), _get_embedding_client(), Embed a list of texts via the configured embedding provider.     Returns list o, Get or create the embedding OpenAI client., _add_contextual_summary() (+7 more)
+Cohesion: 0.25
+Nodes (8): call_embeddings(), Embed a list of texts via the configured embedding provider.     Returns list o, test_call_embeddings_api_error_raises_runtime_error(), test_call_embeddings_empty_list_returns_empty(), test_call_embeddings_rate_limit_raises_runtime_error(), test_call_embeddings_timeout_raises_runtime_error(), call_embeddings must always pass dimensions= so MRL truncation and     validate, test_call_embeddings_passes_dimensions_to_api()
 
 ### Community 89 - "Community 89"
-Cohesion: 0.38
-Nodes (3): _faithfulness_check(), Verify that the answer is grounded in the provided context.      Returns the o, TestFaithfulnessCheck
+Cohesion: 0.24
+Nodes (7): extract_service_codes_from_image(), Extract service codes from medical order image via vision model.      Returns:, Test E1: Auto-Quote from medical order image, Vision extraction should return codes with confidence, Vision extraction with low confidence should be flagged, Vision extraction on non-order image should return empty codes, TestVisionExtraction
 
 ### Community 90 - "Community 90"
-Cohesion: 0.29
-Nodes (4): Without cookie or Authorization header, dashboard returns 303 or 401., GET /portal/login should render the login form., POST /portal/login with JSON body returns JWT., TestPortalAuth
+Cohesion: 0.20
+Nodes (10): Classify intent and generate fallback reply when no context found.     Returns, _triage_response(), que planes tienes?' must be classified as ambiguous, not greeting., Pure social 'hi' should stay as greeting intent., test_triage_ambiguous_classified_for_plans_question(), test_triage_greeting_only_for_pure_social(), test_triage_response_invalid_json_returns_fallback(), test_triage_response_network_failure_returns_fallback() (+2 more)
 
 ### Community 91 - "Community 91"
-Cohesion: 0.29
-Nodes (4): GET /portal/dashboard without auth cookie redirects to login., GET /portal/dashboard with valid auth returns HTML with tabs., Dashboard should show usage bars with plan limit values., TestPortalDashboard
+Cohesion: 0.20
+Nodes (9): lab_document_content(), Tests for laboratory customer support RAG (sp-diagnostico-histologico.md), Load lab document for testing, [INTEGRATION] Index lab document and verify retrieval, [INTEGRATION] Query about muestras → response includes formol policy, [INTEGRATION] Upload order image → receive price quote + instructions, test_auto_quote_end_to_end(), test_lab_document_indexing() (+1 more)
 
 ### Community 92 - "Community 92"
-Cohesion: 0.29
-Nodes (4): POST /portal/query returns answer and sources., POST /portal/query returns 429 when monthly query limit is exceeded., POST /portal/query returns 400 when question is empty., TestPortalQuery
+Cohesion: 0.20
+Nodes (6): Physical address must be present, Business hours must be documented, Test contact information accuracy, WhatsApp contact must be present, Email must be present, TestLabContactInfo
 
 ### Community 93 - "Community 93"
-Cohesion: 0.29
-Nodes (5): AsyncOpenAI, main(), Test whether the configured embedding provider supports MRL (Matryoshka) dimensi, get_setting_int(), Return DB override cast to int if present, else fallback.
+Cohesion: 0.33
+Nodes (5): AsyncOpenAI, main(), Test whether the configured embedding provider supports MRL (Matryoshka) dimensi, _get_embedding_client(), Get or create the embedding OpenAI client.
 
 ### Community 94 - "Community 94"
 Cohesion: 0.47
 Nodes (3): Send a pre-approved template message outside the 24h window.      Returns API, send_wa_template(), TestSendWaTemplate
 
 ### Community 95 - "Community 95"
-Cohesion: 0.33
-Nodes (6): Single uvicorn worker — in-memory telegram_apps, rate limits, APScheduler, docker-compose api service — uvicorn single worker + alembic + Traefik, docker-compose postgres service — pgvector/pgvector:0.8.2-pg16, Traefik routing labels — HTTPS, Let's Encrypt, upload router with longer timeout, Single uvicorn worker constraint — deliberate design decision, Redis for multi-worker state — deferred until >10 clients
+Cohesion: 0.40
+Nodes (5): Single uvicorn worker — in-memory telegram_apps, rate limits, APScheduler, docker-compose api service — uvicorn single worker + alembic + Traefik, docker-compose postgres service — pgvector/pgvector:0.8.2-pg16, Traefik routing labels — HTTPS, Let's Encrypt, upload router with longer timeout, Single uvicorn worker constraint — deliberate design decision
+
+### Community 96 - "Community 96"
+Cohesion: 0.20
+Nodes (6): Test price retrieval from lab document, Gastric biopsy code SDG014 should be $80, Appendix biopsy code SDG033 should be $90, Frozen cut (corte congelado) should be $490, Gynecology section should have prices, TestLabPriceLookup
 
 ### Community 97 - "Community 97"
 Cohesion: 0.33
 Nodes (5): cleanup_job(), daily_digest_job(), Background jobs — daily digest and weekly cleanup., Send top unanswered queries to each tenant's operator via Telegram., Weekly: purge old UnansweredQuery rows, stale TenantUsage rows, and sweep rate-l
 
+### Community 98 - "Community 98"
+Cohesion: 0.39
+Nodes (9): handle_voice(), _make_voice_update(), test_handle_voice_blocked_injection(), test_handle_voice_empty_transcript(), test_handle_voice_groq_rate_limit(), test_handle_voice_no_groq_key(), test_handle_voice_success(), test_handle_voice_telegram_error() (+1 more)
+
+### Community 99 - "Community 99"
+Cohesion: 0.25
+Nodes (8): Fetch ALL policy_statement and section_header chunks for a namespace.      The, retrieve_policy_chunks(), retrieve_policy_chunks fetches policy_statement and section_header chunks., When no typed chunks exist, falls back to content patterns for pre-E4 data., No policy chunks for a namespace that has none., test_retrieve_policy_chunks_empty_namespace(), test_retrieve_policy_chunks_null_fallback(), test_retrieve_policy_chunks_returns_typed_chunks()
+
 ### Community 100 - "Community 100"
 Cohesion: 0.33
 Nodes (6): Rewrite a follow-up question into a standalone query using conversation history., _reformulate_query(), _reformulate_query returns the original question when history is empty., _reformulate_query calls the LLM to rewrite follow-up questions., test_reformulate_query_calls_llm_when_history_present(), test_reformulate_query_returns_original_when_no_history()
 
-### Community 102 - "Community 102"
-Cohesion: 0.33
-Nodes (4): Verify that require_tenant_session returns 401 while require_portal_auth returns, API auth (require_tenant_session) returns 401 on missing token., Portal auth (require_portal_auth) raises PortalAuthRedirect on missing token., TestAuthStatusCodeDifference
+### Community 101 - "Community 101"
+Cohesion: 0.25
+Nodes (5): Test sample handling instructions in document, Sample handling must clearly state formol requirements, Document must have sample storage time guidelines, Frozen cuts must be explicitly different from routine samples, TestLabSampleHandling
 
-### Community 104 - "Community 104"
-Cohesion: 0.33
-Nodes (4): Verify that require_portal_auth returns 303 (browser redirect) not 401., Without any auth token, portal routes return 303 redirect to login., With invalid JWT, portal routes return 303 redirect to login., TestPortalAuthStatusCode
+### Community 103 - "Community 103"
+Cohesion: 0.40
+Nodes (5): generate_csrf_token(), JWT authentication + bcrypt password hashing for tenant portal.  Portal sessions, Generate a CSRF token derived from the JWT and signing secret.      Uses HMAC-SH, Verify a CSRF token against the JWT it accompanies.      Returns True if csrf_to, verify_csrf_token()
 
 ### Community 105 - "Community 105"
 Cohesion: 0.33
 Nodes (3): describe_image_for_upload(), process_upload_async(), _upload_executor ThreadPoolExecutor
 
 ### Community 106 - "Community 106"
-Cohesion: 0.33
-Nodes (6): Admin UI health tab — system status data loaded on click, Admin UI settings tab — LLM/embedding/Groq config with test-connection, Admin UI tenants tab — tenant CRUD, document upload, toggle-active, v0.6.0.0 — Self-Service Portal release, PLAN_LIMITS config, TestPlanLimits
+Cohesion: 0.47
+Nodes (3): Send a tiny chat request to verify provider config.     Returns {"ok": True, "m, test_connection(), TestLlmTestConnection
 
 ### Community 107 - "Community 107"
 Cohesion: 0.40
 Nodes (4): _instructions, pairs, threshold, Recall Evaluation Similarity Threshold
+
+### Community 108 - "Community 108"
+Cohesion: 0.50
+Nodes (4): process_uploaded_file(), Parse uploaded file content into chunks.      Returns (chunks, pages_processed, process_uploaded_file must return 3-tuple including full_doc_text., test_process_uploaded_file_returns_full_doc_text()
 
 ### Community 109 - "Community 109"
 Cohesion: 0.40
@@ -649,7 +696,7 @@ Nodes (4): _parse_fallback_chain(), Parse comma-separated model names, stripping
 
 ### Community 115 - "Community 115"
 Cohesion: 0.50
-Nodes (4): _format_catalog_raw(), _format_catalog_with_llm(), Format a complete price list using LLM, with hallucination guard.      Replace, Fallback: list raw chunk content when LLM formatting fails verification.
+Nodes (3): Test that retrieval is strict for prices, Price queries should require high similarity (not 0.20), TestRetrievalScores
 
 ### Community 116 - "Community 116"
 Cohesion: 0.50
@@ -680,24 +727,24 @@ Cohesion: 0.67
 Nodes (3): api_client fixture, _app_client fixture, authed_api_client fixture
 
 ## Knowledge Gaps
-- **48 isolated node(s):** `Connection`, `Response`, `AsyncSession`, `RateLimitExceeded`, `_instructions` (+43 more)
+- **66 isolated node(s):** `Portal Security Hardening (from /ship review)`, `LLM Fallback Chain`, `Localization — Spanish Dialect`, `Tool Use Agent — Feature Backlog (post-v1)`, `Fundaciones (orden CRÍTICO — seguir en este orden)` (+61 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **79 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **111 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `Tenant` connect `Admin Auth & API Routes` to `Rate Limiting & Unanswered Queries`, `Admin UI Routes`, `Telegram Message Handling Tests`, `Document Knowledge Management`, `RAG Chunk Classification`, `Upload & Knowledge Indexing`, `Portal Edge Case Tests`, `WhatsApp Message Processing`, `Community 23`, `Community 25`, `Community 26`, `Community 27`, `Community 30`, `Community 31`, `Community 35`, `Community 40`, `Community 41`, `Community 44`, `Community 52`, `Community 60`, `Community 63`, `Community 64`, `Community 68`, `Community 72`, `Community 73`, `Community 77`, `Community 78`, `Community 82`, `Community 83`, `Community 84`, `Community 89`, `Community 90`, `Community 91`, `Community 92`, `Community 102`, `Community 104`?**
-  _High betweenness centrality (0.215) - this node is a cross-community bridge._
-- **Why does `rag_query()` connect `RAG Query Entry Point` to `RAG Edge Case Tests`, `Answer Generation & Telegram Handlers`, `Telegram Message Handling Tests`, `RAG Pipeline Tests`, `LLM Tool Use`, `RAG Chunk Classification`, `Web Search Fallback`, `Security & Canary Defense`, `WhatsApp Message Processing`, `LLM Chat Layer`, `Community 20`, `Community 36`, `Community 62`, `Community 65`, `Community 74`, `Community 79`, `Community 80`, `Community 88`, `Community 89`, `Community 98`, `Community 99`, `Community 100`, `Community 101`, `Community 115`?**
-  _High betweenness centrality (0.118) - this node is a cross-community bridge._
-- **Why does `WhatsAppAdapter` connect `Community 24` to `Community 32`, `Community 34`, `Admin UI Routes`, `Community 37`, `Community 39`, `Community 77`, `Community 78`, `WhatsApp Adapter Tests`, `WhatsApp Message Processing`, `Community 82`, `Community 20`, `Community 21`, `Community 22`, `Community 23`, `Community 30`, `Community 27`, `Community 60`, `Community 94`?**
-  _High betweenness centrality (0.083) - this node is a cross-community bridge._
-- **Are the 87 inferred relationships involving `Tenant` (e.g. with `DEFAULT_TYPE` and `FastAPI`) actually correct?**
-  _`Tenant` has 87 INFERRED edges - model-reasoned connections that need verification._
+- **Why does `Tenant` connect `Rate Limiting & Unanswered Queries` to `Admin UI Routes`, `Admin Auth & API Routes`, `Upload & Knowledge Indexing`, `Portal Edge Case Tests`, `Community 20`, `Community 23`, `Community 26`, `Community 27`, `Community 30`, `Community 31`, `Community 44`, `Community 52`, `Community 58`, `Community 60`, `Community 62`, `Community 63`, `Community 64`, `Community 69`, `Community 72`, `Community 77`, `Community 78`, `Community 80`, `Community 82`, `Community 106`?**
+  _High betweenness centrality (0.174) - this node is a cross-community bridge._
+- **Why does `rag_query()` connect `RAG Query Entry Point` to `RAG Edge Case Tests`, `Answer Generation & Telegram Handlers`, `RAG Pipeline Tests`, `LLM Tool Use`, `RAG Chunk Classification`, `Web Search Fallback`, `Security & Canary Defense`, `WhatsApp Message Processing`, `LLM Chat Layer`, `Community 20`, `Community 30`, `Community 36`, `Community 58`, `Community 63`, `Community 65`, `Community 79`, `Community 80`, `Community 90`, `Community 99`, `Community 100`?**
+  _High betweenness centrality (0.159) - this node is a cross-community bridge._
+- **Why does `WhatsAppAdapter` connect `Community 24` to `Admin Auth & API Routes`, `Upload & Knowledge Indexing`, `WhatsApp Adapter Tests`, `WhatsApp Message Processing`, `Community 20`, `Community 21`, `Community 22`, `Community 23`, `Community 27`, `Community 30`, `Community 32`, `Community 34`, `Community 37`, `Community 60`, `Community 62`, `Community 63`, `Community 69`, `Community 77`, `Community 80`, `Community 82`, `Community 94`, `Community 106`?**
+  _High betweenness centrality (0.080) - this node is a cross-community bridge._
+- **Are the 85 inferred relationships involving `Tenant` (e.g. with `DEFAULT_TYPE` and `FastAPI`) actually correct?**
+  _`Tenant` has 85 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 43 inferred relationships involving `rag_query()` (e.g. with `handle_wa_message()` and `_wa_process_flushed()`) actually correct?**
   _`rag_query()` has 43 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 45 inferred relationships involving `WhatsAppAdapter` (e.g. with `ChannelButton` and `ChannelMessage`) actually correct?**
   _`WhatsAppAdapter` has 45 INFERRED edges - model-reasoned connections that need verification._
-- **Are the 46 inferred relationships involving `UnansweredQuery` (e.g. with `HTMLResponse` and `HTTPBasicCredentials`) actually correct?**
-  _`UnansweredQuery` has 46 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 36 inferred relationships involving `ChannelSendError` (e.g. with `Any` and `Bot`) actually correct?**
+  _`ChannelSendError` has 36 INFERRED edges - model-reasoned connections that need verification._
