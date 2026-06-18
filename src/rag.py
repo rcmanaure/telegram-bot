@@ -2437,3 +2437,39 @@ async def rag_query(
         logger.warning("canary_redacted user_id=%s context_answer", user_id)
     await save_turn(db, user_id, namespace, question, answer, channel=channel)
     return answer, context, None
+
+
+# ─── Lab Support: Vision Extraction for Auto-Quote (E1) ──────────────────────
+
+async def extract_service_codes_from_image(image_base64: str) -> dict:
+    """Extract service codes from medical order image via vision model.
+
+    Returns: {"codes": ["GIN001", "GMM002"], "confidence": 0.85, "raw_text": "..."}
+    If confidence < 0.70, user should confirm via text input.
+    """
+    try:
+        response = await call_chat(
+            model="gpt-4o-mini",  # or settings.LLM_VISION_MODEL
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Extract all service codes from this medical order image. Return ONLY a JSON with 'codes': [list of codes], 'confidence': 0-1. If no codes found, return empty list."},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}}
+                ]
+            }],
+            temperature=0,
+        )
+
+        extracted = extract_json_from_llm_response(response)
+        codes = extracted.get("codes", [])
+        confidence = extracted.get("confidence", 0.0)
+
+        logger.info("vision_extraction codes=%s confidence=%.2f", codes, confidence)
+        return {
+            "codes": codes,
+            "confidence": confidence,
+            "raw_text": response,
+        }
+    except Exception as e:
+        logger.warning("vision_extraction_failed: %s", e, exc_info=True)
+        return {"codes": [], "confidence": 0.0, "error": str(e)}

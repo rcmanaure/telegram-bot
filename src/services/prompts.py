@@ -99,6 +99,17 @@ DOCUMENTOS DISPONIBLES: {doc_structure_summary}"""
     # Each clause is a self-contained paragraph; joined with double newlines.
     clauses: list[str] = []
 
+    # CRITICAL POLICIES — always inject for laboratory/clinic contexts (formol, payment, etc)
+    critical_policies = """\
+POLÍTICAS CRÍTICAS DEL LABORATORIO — SIEMPRE MENCIÓNALO EN RESPUESTAS RELEVANTES:
+🧪 Muestras en formol: El ÚNICO líquido preservante aceptado es el FORMOL. NO se aceptan agua, suero fisiológico, alcohol ni otro líquido. EXCEPCIÓN: cortes congelados (biopsia per-operatoria) NO deben estar en formol.
+💰 Pago previo: Toda muestra DEBE ser cancelada en su TOTALIDAD antes de ser procesada. NO se aceptan pagos parciales.
+📱 WhatsApp texto solo: No respondemos llamadas de WhatsApp ni mensajes de voz. Solo mensajería de texto por WhatsApp.
+⏱️ Resultados: 3-5 días hábiles. EXCEPCIÓN: cortes congelados = mismo día.
+❄️ Cortes congelados (per-operatorio): $490, pago ANTES de cirugía, NO formol, mismo día."""
+
+    clauses.append(critical_policies)
+
     clauses.append(
         f"Eres un asistente especializado exclusivamente en la información de los documentos "
         f"cargados. Tu ÚNICA fuente de conocimiento es el contexto que se te proporciona.\n\n"
